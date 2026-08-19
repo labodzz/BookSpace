@@ -1,3 +1,14 @@
 <Solution>
-  <Project Path="BookSpace/BookSpace.csproj" />
+  <Folder Name="/src/">
+    <Project Path="src/BookSpace.Api/BookSpace.Api.csproj" />
+    <Project Path="src/BookSpace.Application/BookSpace.Application.csproj" />
+    <Project Path="src/BookSpace.Domain/BookSpace.Domain.csproj" />
+    <Project Path="src/BookSpace.Infrastructure/BookSpace.Infrastructure.csproj" />
+    <Project Path="src/BookSpace.Worker/BookSpace.Worker.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/BookSpace.Application.Tests/BookSpace.Application.Tests.csproj" />
+    <Project Path="tests/BookSpace.Domain.Tests/BookSpace.Domain.Tests.csproj" />
+    <Project Path="tests/BookSpace.IntegrationTests/BookSpace.IntegrationTests.csproj" />
+  </Folder>
 </Solution>

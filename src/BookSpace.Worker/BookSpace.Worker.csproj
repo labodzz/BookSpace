@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>dotnet-BookSpace.Worker-5b7ac55f-a663-4e38-ba81-64859e608db8</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.11" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BookSpace.Application\BookSpace.Application.csproj" />
+    <ProjectReference Include="..\BookSpace.Infrastructure\BookSpace.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>
