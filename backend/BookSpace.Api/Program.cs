@@ -1,5 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
+using BookSpace.Api.Persistence;
 using Microsoft.Data.SqlClient;
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -9,12 +11,21 @@ builder.Services.AddControllers();
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 
+var connectionString = builder.Configuration.GetConnectionString("BookSpace")
+    ?? throw new InvalidOperationException("Connection string 'BookSpace' is not configured.");
+builder.Services.AddDbContext<BookSpaceDbContext>(options => options.UseSqlServer(connectionString));
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
+
+    using var seedScope = app.Services.CreateScope();
+    var dbContext = seedScope.ServiceProvider.GetRequiredService<BookSpaceDbContext>();
+    await dbContext.Database.MigrateAsync();
+    await DevelopmentSeeder.SeedAsync(dbContext);
 }
 
 app.UseHttpsRedirection();
