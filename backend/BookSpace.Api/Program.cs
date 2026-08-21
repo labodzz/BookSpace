@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using Microsoft.Data.SqlClient;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -34,4 +35,5 @@ app.MapGet("/health/db", async (IConfiguration configuration, CancellationToken 
 
 app.Run();
 
+[ExcludeFromCodeCoverage(Justification = "Composition root - wiring is covered by integration tests running against it, not unit-tested directly.")]
 public partial class Program;
