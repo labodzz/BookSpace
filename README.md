@@ -9,7 +9,11 @@ See [AI-USAGE.md](AI-USAGE.md) for how AI assistance was used while building thi
 ## Repository layout
 
 ```
-backend/    .NET Web API (BookSpace.Api)
+backend/
+  BookSpace.Api             presentation - controllers, middleware, composition root
+  BookSpace.Application     use cases - mediator, commands/queries & handlers, pipeline behaviors
+  BookSpace.Domain          entities, enums, tenancy contracts - no framework dependencies
+  BookSpace.Infrastructure  EF Core DbContext, migrations, external service implementations
 frontend/   Angular web client (bookspace-web)
 ```
 
@@ -50,14 +54,13 @@ sqllocaldb info          # confirms an instance (e.g. MSSQLLocalDB) exists
 sqllocaldb start MSSQLLocalDB
 ```
 
-The default connection string points at `(localdb)\MSSQLLocalDB`. To use a containerized SQL Server
-instead, update the connection string to point at your container and confirm connectivity with:
+The default connection string points at `(localdb)\MSSQLLocalDB`. In Development, the API applies
+pending migrations and seeds a sample dataset automatically on startup. To apply migrations manually
+(e.g. against a containerized SQL Server instead), run from `backend/`:
 
 ```bash
-dotnet ef database update --project backend/BookSpace.Api
+dotnet ef database update --project BookSpace.Infrastructure --startup-project BookSpace.Api
 ```
-
-(once the data model and migrations exist).
 
 ## Branching
 

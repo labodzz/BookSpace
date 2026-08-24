@@ -1,7 +1,7 @@
-using BookSpace.Api.Domain.Entities;
+using BookSpace.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 
-namespace BookSpace.Api.Persistence;
+namespace BookSpace.Infrastructure.Persistence;
 
 internal static class BookSpaceModelConfiguration
 {

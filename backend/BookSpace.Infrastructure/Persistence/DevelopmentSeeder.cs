@@ -1,8 +1,8 @@
-using BookSpace.Api.Domain.Entities;
-using BookSpace.Api.Domain.Enums;
+using BookSpace.Domain.Entities;
+using BookSpace.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 
-namespace BookSpace.Api.Persistence;
+namespace BookSpace.Infrastructure.Persistence;
 
 // Seeds a small but realistic multi-tenant dataset for local development and the WP-1 design review -
 // two tenants, roles, resources with availability, a blackout, a two-year weekly recurring series with

@@ -1,6 +1,6 @@
-using BookSpace.Api.Domain.Enums;
+using BookSpace.Domain.Enums;
 
-namespace BookSpace.Api.Domain.Entities;
+namespace BookSpace.Domain.Entities;
 
 public sealed class Tenant
 {

@@ -1,6 +1,6 @@
-using BookSpace.Api.Domain.Common;
+using BookSpace.Domain.Common;
 
-namespace BookSpace.Api.Domain.Entities;
+namespace BookSpace.Domain.Entities;
 
 public sealed class User : ITenantOwned
 {

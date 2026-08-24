@@ -1,6 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
-using BookSpace.Api.Persistence;
-using Microsoft.Data.SqlClient;
+using BookSpace.Infrastructure;
+using BookSpace.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -11,9 +11,7 @@ builder.Services.AddControllers();
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 
-var connectionString = builder.Configuration.GetConnectionString("BookSpace")
-    ?? throw new InvalidOperationException("Connection string 'BookSpace' is not configured.");
-builder.Services.AddDbContext<BookSpaceDbContext>(options => options.UseSqlServer(connectionString));
+builder.Services.AddInfrastructure(builder.Configuration);
 
 var app = builder.Build();
 
@@ -21,11 +19,7 @@ var app = builder.Build();
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
-
-    using var seedScope = app.Services.CreateScope();
-    var dbContext = seedScope.ServiceProvider.GetRequiredService<BookSpaceDbContext>();
-    await dbContext.Database.MigrateAsync();
-    await DevelopmentSeeder.SeedAsync(dbContext);
+    await app.Services.MigrateAndSeedDevelopmentDatabaseAsync();
 }
 
 app.UseHttpsRedirection();
@@ -34,14 +28,10 @@ app.UseAuthorization();
 
 app.MapControllers();
 
-app.MapGet("/health/db", async (IConfiguration configuration, CancellationToken cancellationToken) =>
+app.MapGet("/health/db", async (BookSpaceDbContext dbContext, CancellationToken cancellationToken) =>
 {
-    var connectionString = configuration.GetConnectionString("BookSpace")
-        ?? throw new InvalidOperationException("Connection string 'BookSpace' is not configured.");
-
-    await using var connection = new SqlConnection(connectionString);
-    await connection.OpenAsync(cancellationToken);
-    return Results.Ok(new { database = connection.Database, status = "connected" });
+    var isConnected = await dbContext.Database.CanConnectAsync(cancellationToken);
+    return Results.Ok(new { database = dbContext.Database.GetDbConnection().Database, status = isConnected ? "connected" : "unreachable" });
 });
 
 app.Run();
