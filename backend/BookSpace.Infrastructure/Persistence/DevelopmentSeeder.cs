@@ -1,3 +1,4 @@
+using BookSpace.Application.Security;
 using BookSpace.Domain.Entities;
 using BookSpace.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
@@ -9,12 +10,18 @@ namespace BookSpace.Infrastructure.Persistence;
 // a few materialized occurrences, and one pending approval.
 internal static class DevelopmentSeeder
 {
-    public static async Task SeedAsync(BookSpaceDbContext dbContext, CancellationToken cancellationToken = default)
+    // Every seeded account shares this password so the WP-2 login flow has something real to test
+    // against locally. Dev-only data - never a pattern to repeat for real accounts.
+    private const string SeedPassword = "Passw0rd!";
+
+    public static async Task SeedAsync(BookSpaceDbContext dbContext, IPasswordHasher passwordHasher, CancellationToken cancellationToken = default)
     {
         if (await dbContext.Tenants.AnyAsync(cancellationToken))
         {
             return;
         }
+
+        var passwordHash = passwordHasher.Hash(SeedPassword);
 
         var now = DateTimeOffset.UtcNow;
 
@@ -46,11 +53,11 @@ internal static class DevelopmentSeeder
         };
         dbContext.Tenants.AddRange(acme, globex);
 
-        var acmeAdmin = new User { Id = Guid.NewGuid(), TenantId = acme.Id, FirstName = "Amina", LastName = "Kovač", Email = "admin@acme.test", CreatedAtUtc = now };
-        var acmeApprover = new User { Id = Guid.NewGuid(), TenantId = acme.Id, FirstName = "Emir", LastName = "Hodžić", Email = "approver@acme.test", CreatedAtUtc = now };
-        var acmeMember = new User { Id = Guid.NewGuid(), TenantId = acme.Id, FirstName = "Lamija", LastName = "Bojić", Email = "member@acme.test", CreatedAtUtc = now };
-        var globexAdmin = new User { Id = Guid.NewGuid(), TenantId = globex.Id, FirstName = "John", LastName = "Doe", Email = "admin@globex.test", CreatedAtUtc = now };
-        var globexMember = new User { Id = Guid.NewGuid(), TenantId = globex.Id, FirstName = "Jane", LastName = "Smith", Email = "member@globex.test", CreatedAtUtc = now };
+        var acmeAdmin = new User { Id = Guid.NewGuid(), TenantId = acme.Id, FirstName = "Amina", LastName = "Kovač", Email = "admin@acme.test", PasswordHash = passwordHash, CreatedAtUtc = now };
+        var acmeApprover = new User { Id = Guid.NewGuid(), TenantId = acme.Id, FirstName = "Emir", LastName = "Hodžić", Email = "approver@acme.test", PasswordHash = passwordHash, CreatedAtUtc = now };
+        var acmeMember = new User { Id = Guid.NewGuid(), TenantId = acme.Id, FirstName = "Lamija", LastName = "Bojić", Email = "member@acme.test", PasswordHash = passwordHash, CreatedAtUtc = now };
+        var globexAdmin = new User { Id = Guid.NewGuid(), TenantId = globex.Id, FirstName = "John", LastName = "Doe", Email = "admin@globex.test", PasswordHash = passwordHash, CreatedAtUtc = now };
+        var globexMember = new User { Id = Guid.NewGuid(), TenantId = globex.Id, FirstName = "Jane", LastName = "Smith", Email = "member@globex.test", PasswordHash = passwordHash, CreatedAtUtc = now };
         dbContext.Users.AddRange(acmeAdmin, acmeApprover, acmeMember, globexAdmin, globexMember);
 
         dbContext.UserRoles.AddRange(

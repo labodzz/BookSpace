@@ -47,8 +47,21 @@ internal static class BookSpaceModelConfiguration
             entity.Property(user => user.FirstName).HasMaxLength(100).IsRequired();
             entity.Property(user => user.LastName).HasMaxLength(100).IsRequired();
             entity.Property(user => user.Email).HasMaxLength(320).IsRequired();
-            entity.HasIndex(user => new { user.TenantId, user.Email }).IsUnique();
+            entity.Property(user => user.PasswordHash).HasMaxLength(200).IsRequired();
+            // Global, not per-tenant: login looks a user up by email alone, before any tenant is
+            // known, so two tenants sharing an email would make that lookup ambiguous.
+            entity.HasIndex(user => user.Email).IsUnique();
             entity.HasOne<Tenant>().WithMany().HasForeignKey(user => user.TenantId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<RefreshToken>(entity =>
+        {
+            entity.ToTable("RefreshTokens");
+            entity.HasKey(token => token.Id);
+            entity.Property(token => token.TokenHash).HasMaxLength(200).IsRequired();
+            entity.HasIndex(token => token.TokenHash).IsUnique();
+            entity.HasIndex(token => token.FamilyId);
+            entity.HasOne<User>().WithMany().HasForeignKey(token => token.UserId).OnDelete(DeleteBehavior.Cascade);
         });
 
         builder.Entity<ResourceType>(entity =>

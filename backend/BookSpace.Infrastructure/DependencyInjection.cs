@@ -1,4 +1,7 @@
+using BookSpace.Application.Auth;
+using BookSpace.Application.Security;
 using BookSpace.Infrastructure.Persistence;
+using BookSpace.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -14,6 +17,12 @@ public static class DependencyInjection
 
         services.AddDbContext<BookSpaceDbContext>(options => options.UseSqlServer(connectionString));
 
+        services.Configure<AuthOptions>(configuration.GetSection("Auth"));
+        services.AddSingleton<IPasswordHasher, PasswordHasher>();
+        services.AddSingleton<IJwtTokenGenerator, JwtTokenGenerator>();
+        services.AddScoped<IUserRepository, UserRepository>();
+        services.AddScoped<IRefreshTokenRepository, RefreshTokenRepository>();
+
         return services;
     }
 
@@ -23,8 +32,9 @@ public static class DependencyInjection
     {
         using var scope = services.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<BookSpaceDbContext>();
+        var passwordHasher = scope.ServiceProvider.GetRequiredService<IPasswordHasher>();
 
         await dbContext.Database.MigrateAsync(cancellationToken);
-        await DevelopmentSeeder.SeedAsync(dbContext, cancellationToken);
+        await DevelopmentSeeder.SeedAsync(dbContext, passwordHasher, cancellationToken);
     }
 }
