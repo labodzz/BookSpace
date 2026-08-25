@@ -1,3 +1,6 @@
 <Solution>
   <Project Path="BookSpace.Api/BookSpace.Api.csproj" />
+  <Project Path="BookSpace.Application/BookSpace.Application.csproj" />
+  <Project Path="BookSpace.Domain/BookSpace.Domain.csproj" />
+  <Project Path="BookSpace.Infrastructure/BookSpace.Infrastructure.csproj" />
 </Solution>
