@@ -366,3 +366,6 @@ FodyWeavers.xsd
 dist/
 .angular/
 npm-debug.log*
+
+# Generated code coverage HTML report (regenerate with backend/run-coverage.ps1)
+CoverageReport/

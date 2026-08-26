@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<RunSettings>
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <DataCollector friendlyName="XPlat code coverage">
+        <Configuration>
+          <Format>cobertura</Format>
+
+          <!-- Code we don't own and never write tests against: ASP.NET's own OpenApi source
+               generator output, compiler-generated support types (nullable annotations, init-only
+               setters, etc.), and EF Core's scaffolded migrations. -->
+          <Exclude>[*]Microsoft.AspNetCore.OpenApi.Generated.*,[*]System.Runtime.CompilerServices.*,[BookSpace.Infrastructure]BookSpace.Infrastructure.Migrations.*</Exclude>
+
+          <!-- Belt-and-suspenders: anything else carrying these attributes (source generators,
+               [ExcludeFromCodeCoverage] composition roots like Program.cs) is skipped too.
+               NOTE: deliberately NOT including CompilerGeneratedAttribute here - coverlet's
+               attribute-based exclusion matches it far too broadly (it silently dropped every class
+               in an entire referenced assembly, not just compiler-generated members, when tried). -->
+          <ExcludeByAttribute>GeneratedCodeAttribute,ExcludeFromCodeCoverageAttribute</ExcludeByAttribute>
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+</RunSettings>
