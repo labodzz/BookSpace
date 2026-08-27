@@ -1,4 +1,5 @@
 using BookSpace.Api.ErrorHandling;
+using BookSpace.Api.Logging;
 using BookSpace.Application.Logging;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Http;
@@ -28,6 +29,7 @@ public sealed class GlobalExceptionHandlerTests
         Assert.Equal("correlation-xyz", problemDetails.Extensions["correlationId"]);
         Assert.DoesNotContain(exception.Message, problemDetails.Title);
         Assert.Null(problemDetails.Detail);
+        Assert.Equal("correlation-xyz", httpContext.Response.Headers[CorrelationIdMiddleware.HeaderName]);
     }
 
     [Fact]
@@ -42,6 +44,7 @@ public sealed class GlobalExceptionHandlerTests
 
         var problemDetails = problemDetailsService.CapturedContext!.ProblemDetails;
         Assert.False(problemDetails.Extensions.ContainsKey("correlationId"));
+        Assert.False(httpContext.Response.Headers.ContainsKey(CorrelationIdMiddleware.HeaderName));
     }
 
     [Fact]
