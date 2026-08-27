@@ -17,4 +17,9 @@ internal sealed class UserRepository(BookSpaceDbContext dbContext) : IUserReposi
             .Where(userRole => userRole.UserId == userId)
             .Join(dbContext.Roles, userRole => userRole.RoleId, role => role.Id, (userRole, role) => role.Name)
             .ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<User>> GetAllAsync(CancellationToken cancellationToken) =>
+        await dbContext.Users
+            .OrderBy(user => user.Email)
+            .ToListAsync(cancellationToken);
 }

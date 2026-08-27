@@ -34,6 +34,36 @@ public sealed class AuthEndpointsTests : IClassFixture<CustomWebApplicationFacto
     }
 
     [Fact]
+    public async Task Login_WithMissingEmail_ReturnsBadRequestWithFieldErrors()
+    {
+        using var client = _factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/auth/login", new
+        {
+            email = "",
+            password = TestDataSeeder.Password,
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<ValidationProblemPayload>(JsonOptions);
+        Assert.NotNull(problem);
+        Assert.True(problem!.Errors.ContainsKey("Email"));
+    }
+
+    [Fact]
+    public async Task Refresh_WithMissingToken_ReturnsBadRequestWithFieldErrors()
+    {
+        using var client = _factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/auth/refresh", new { refreshToken = "" });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<ValidationProblemPayload>(JsonOptions);
+        Assert.NotNull(problem);
+        Assert.True(problem!.Errors.ContainsKey("RefreshToken"));
+    }
+
+    [Fact]
     public async Task Login_WithWrongPassword_ReturnsUnauthorized()
     {
         using var client = _factory.CreateClient();
@@ -155,4 +185,6 @@ public sealed class AuthEndpointsTests : IClassFixture<CustomWebApplicationFacto
     }
 
     private sealed record AuthResponse(string AccessToken, DateTimeOffset AccessTokenExpiresAtUtc, string RefreshToken, DateTimeOffset RefreshTokenExpiresAtUtc);
+
+    private sealed record ValidationProblemPayload(string? Title, int? Status, Dictionary<string, string[]> Errors);
 }

@@ -1,4 +1,5 @@
 using BookSpace.Application.Auth;
+using BookSpace.Application.Mediator;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -7,12 +8,12 @@ namespace BookSpace.Api.Controllers;
 [ApiController]
 [Route("auth")]
 [AllowAnonymous]
-public sealed class AuthController(IAuthenticationService authenticationService) : ControllerBase
+public sealed class AuthController(IMediator mediator) : ControllerBase
 {
     [HttpPost("login")]
     public async Task<IActionResult> Login(LoginRequest request, CancellationToken cancellationToken)
     {
-        var result = await authenticationService.LoginAsync(request.Email, request.Password, cancellationToken);
+        var result = await mediator.Send(new LoginCommand(request.Email, request.Password), cancellationToken);
         if (!result.Succeeded)
         {
             return Unauthorized(new { message = "Invalid email or password." });
@@ -24,7 +25,7 @@ public sealed class AuthController(IAuthenticationService authenticationService)
     [HttpPost("refresh")]
     public async Task<IActionResult> Refresh(RefreshRequest request, CancellationToken cancellationToken)
     {
-        var result = await authenticationService.RefreshAsync(request.RefreshToken, cancellationToken);
+        var result = await mediator.Send(new RefreshCommand(request.RefreshToken), cancellationToken);
         if (!result.Succeeded)
         {
             var message = result.ReuseDetected

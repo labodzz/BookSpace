@@ -369,3 +369,6 @@ npm-debug.log*
 
 # Generated code coverage HTML report (regenerate with backend/run-coverage.ps1)
 CoverageReport/
+
+# Stray local Office documents (not project artifacts)
+*.docx
