@@ -16,13 +16,20 @@ using Serilog;
 using Serilog.Events;
 using Serilog.Formatting.Compact;
 
+// UseSerilogRequestLogging() below writes its per-request summary line through this static logger,
+// not through the fully configured one from builder.Host.UseSerilog - so both need the same console
+// template, or the correlation ID vanishes from exactly the line most useful for following a request
+// in the console. {CorrelationId} renders blank when no request is in flight (startup, shutdown).
+const string ConsoleOutputTemplate =
+    "{Timestamp:HH:mm:ss} [{Level:u3}] (cid: {CorrelationId}) {Message:lj}{NewLine}{Exception}";
+
 // Two-stage setup (the pattern Serilog itself recommends): a minimal bootstrap logger captures
 // anything that goes wrong before configuration/DI are even up, then builder.Host.UseSerilog below
 // replaces it with the fully configured logger for the rest of the app's life.
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Information()
     .Enrich.FromLogContext()
-    .WriteTo.Console()
+    .WriteTo.Console(outputTemplate: ConsoleOutputTemplate)
     .CreateBootstrapLogger();
 
 try
@@ -50,7 +57,7 @@ try
             .Enrich.FromLogContext()
             .Enrich.WithProperty("Application", "BookSpace.Api")
             .ReadFrom.Configuration(context.Configuration)
-            .WriteTo.Console();
+            .WriteTo.Console(outputTemplate: ConsoleOutputTemplate);
 
         if (writeStructuredFile)
         {
