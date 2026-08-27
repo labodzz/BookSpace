@@ -19,6 +19,32 @@ session). Fill in as you go — don't backfill from memory at the end.
 
 <!-- Add entries below, most recent first. -->
 
+## 2026-08-27 — Fix: Correlation ID Missing from Console Log Lines
+
+**Tool:** Claude Code
+**What I asked for:** Wanted the correlation ID to actually show up in the terminal next to each log
+line while running the app locally and testing a route in Postman - pointed out that's the whole
+point of correlation-ID logging, not something to leave for later.
+**What the AI produced:** Added an explicit console `outputTemplate` (`... (cid: {CorrelationId}) ...`)
+to the fully configured Serilog logger. Ran the app and hit it with curl to check, and found the
+per-request summary line from `UseSerilogRequestLogging()` (`HTTP GET /health/db responded 200 in
+...ms` - the single most useful line for following a request) still had the old default format with
+no correlation ID at all, while the mediator's own "Handling X" lines showed it correctly. Root cause:
+`UseSerilogRequestLogging()` logs through the static `Serilog.Log.Logger`, not the DI-registered
+logger from `builder.Host.UseSerilog(...)` - a distinction that only exists because of the earlier
+`preserveStaticLogger: true` fix for the WebApplicationFactory test-host issue. Fixed by extracting
+the template into a shared constant and applying it to both the bootstrap logger at the top of
+Program.cs and the fully configured one, so every console line uses the same format regardless of
+which of the two loggers actually writes it.
+**What I changed or rejected:** Didn't stop at "the correlation ID shows up in the first log line I
+checked" - ran a login-validation-failure request too, specifically to see the request-summary line,
+because that failure mode (individual log statements correct, the one summary line silently wrong)
+would have shipped invisibly with an incomplete test.
+**What I understand and could explain without notes:** Why there are two Serilog loggers in this app
+at all (the static bootstrap one for pre-DI startup failures, and the DI-configured one everything
+else uses) - and why `preserveStaticLogger: true`, which fixed a different problem earlier, is
+exactly what makes `UseSerilogRequestLogging()`'s default logger choice diverge from the rest of the
+app's, since without it the two loggers would already be the same object.
 ## 2026-08-27 — Fix: Correlation ID Missing from Error Response Headers
 
 **Tool:** Claude Code
