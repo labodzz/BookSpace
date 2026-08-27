@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using BookSpace.Api.Logging;
 using Xunit;
 
 namespace BookSpace.Api.Tests.Auth;
@@ -48,6 +49,7 @@ public sealed class AuthEndpointsTests : IClassFixture<CustomWebApplicationFacto
         var problem = await response.Content.ReadFromJsonAsync<ValidationProblemPayload>(JsonOptions);
         Assert.NotNull(problem);
         Assert.True(problem!.Errors.ContainsKey("Email"));
+        Assert.True(response.Headers.Contains(CorrelationIdMiddleware.HeaderName));
     }
 
     [Fact]

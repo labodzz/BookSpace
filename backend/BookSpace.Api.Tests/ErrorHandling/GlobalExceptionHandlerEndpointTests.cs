@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using BookSpace.Api.Logging;
 using BookSpace.Application.Security;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
@@ -56,6 +57,8 @@ public sealed class GlobalExceptionHandlerEndpointTests : IClassFixture<CustomWe
         var problem = JsonSerializer.Deserialize<JsonElement>(payload, JsonOptions);
         Assert.True(problem.TryGetProperty("correlationId", out var correlationId));
         Assert.False(string.IsNullOrWhiteSpace(correlationId.GetString()));
+        var headerValue = Assert.Single(response.Headers.GetValues(CorrelationIdMiddleware.HeaderName));
+        Assert.Equal(correlationId.GetString(), headerValue);
     }
 
     // TenantId must stay harmless: BookSpaceDbContext's global tenant query filter reads it on every

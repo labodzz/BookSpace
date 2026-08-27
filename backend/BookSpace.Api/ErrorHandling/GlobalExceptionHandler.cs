@@ -1,3 +1,4 @@
+using BookSpace.Api.Logging;
 using BookSpace.Application.Logging;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
@@ -34,6 +35,10 @@ public sealed class GlobalExceptionHandler(
         if (correlationIdContext.CorrelationId is { } correlationId)
         {
             problemDetails.Extensions["correlationId"] = correlationId;
+            // UseExceptionHandler resets the response (including headers) before an IExceptionHandler
+            // runs, so CorrelationIdMiddleware's header write earlier in the pipeline doesn't survive
+            // an exception - it has to be set again here for the header to reach the client at all.
+            httpContext.Response.Headers[CorrelationIdMiddleware.HeaderName] = correlationId;
         }
 
         return await problemDetailsService.TryWriteAsync(new ProblemDetailsContext
