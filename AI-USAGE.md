@@ -19,6 +19,69 @@ session). Fill in as you go — don't backfill from memory at the end.
 
 <!-- Add entries below, most recent first. -->
 
+## 2026-08-27 — WP-2: Global Exception Handling
+
+**Tool:** Claude Code
+**What I asked for:** A global exception handler (middleware or `IExceptionHandler`) so no
+unhandled exception ever leaks a stack trace to the client; domain/validation errors mapped to
+clean, consistent `ProblemDetails` responses with the correlation ID (from the structured-logging
+entry below) attached; and the full exception logged server-side exactly once, at the boundary,
+not via scattered try/catch that swallows or double-logs.
+**What the AI produced:** `GlobalExceptionHandler` (`IExceptionHandler`), registered after the
+existing `ValidationExceptionHandler` so it only runs as the catch-all fallback (`IExceptionHandler`s
+try in registration order, first `true` wins). It logs the full exception with `ILogger.LogError`
+once, then writes a generic `ProblemDetails` 500 that never includes the exception's message or
+stack trace - only a title and the correlation ID pulled from `ICorrelationIdContext`.
+`ValidationExceptionHandler` got the same correlation ID attached to its `ValidationProblemDetails`,
+plus an `Information`-level structured log line (which fields failed and how many, never the
+submitted values - a validation failure is expected user error, not a bug worth an Error-level log).
+Grepped the whole backend for `catch` first: the only one was the Serilog bootstrap's own top-level
+try/catch from the structured-logging work, confirming there was nothing scattered to consolidate -
+exceptions already propagated cleanly to this one boundary.
+**What I changed or rejected:** My first integration test for `GlobalExceptionHandler` swapped in a
+throwing `ICurrentUserContext` and used it to hit `/users/me` - but it broke `/auth/login` too,
+because `BookSpaceDbContext`'s global tenant query filter reads `ICurrentUserContext.TenantId` on
+every query against a tenant-owned table, including the one login runs to look up a user by email.
+Fixed by having only `UserId` throw in the test double and keeping `TenantId` harmless, rather than
+loosening the assertion or dropping the test.
+**What I understand and could explain without notes:** Why exception-handler registration order
+matters here - `ValidationExceptionHandler` has to run before `GlobalExceptionHandler` so its more
+specific 400 response wins over the generic 500 fallback - and why the generic handler's response
+body is checked against the exception's own message and type name in tests, not just its status
+code: a stack trace can leak through a field that isn't `Detail` (an `Extensions` entry, a `Title`
+built from `exception.Message`) just as easily as through the obvious one.
+
+## 2026-08-27 — WP-2: Structured Logging (Serilog)
+
+**Tool:** Claude Code
+**What I asked for:** Configure Serilog as the logging provider (replacing the default one), log
+structured key/value properties rather than interpolated strings, attach a correlation ID to every
+request and flow it through all logs for that request (with an eye toward background jobs later),
+and set sensible sinks/levels - console in dev, a structured queryable sink otherwise - while never
+logging secrets, tokens, or passwords.
+**What the AI produced:** A two-stage Serilog bootstrap in `Program.cs` (`Log.Logger` as a minimal
+startup logger, then `builder.Host.UseSerilog(...)` for the fully configured one) with `UseSerilogRequestLogging()`
+for a per-request summary line; console sink always, plus a compact-JSON rolling file sink for
+every environment except Development and the test suite's `Testing` environment.
+`ICorrelationIdContext`/`CorrelationIdContext` (`BookSpace.Application/Logging/`) hold the current
+correlation ID on an `AsyncLocal`, not `HttpContext.Items`, specifically so the same mechanism can
+carry a correlation ID through a background job later with no HTTP request involved.
+`CorrelationIdMiddleware` reads `X-Correlation-Id` from the incoming request (or mints one), sets it
+on that context, pushes it onto Serilog's `LogContext` so every log for the rest of the request
+carries it automatically, and echoes it back on the response header.
+**What I changed or rejected:** Hit "the logger is already frozen" from every integration test as
+soon as the two-stage bootstrap went in - `WebApplicationFactory<Program>` builds this host more
+than once per process, which collides with Serilog's default single-use `ReloadableLogger`. Fixed
+by passing `preserveStaticLogger: true` to `UseSerilog` rather than working around it with test-only
+configuration, so the production code path stays correct and the tests exercise the real thing.
+**What I understand and could explain without notes:** Why the file sink is gated on environment
+name rather than always-on - writing it during `dotnet test` runs would leave log files behind on
+every run for a sink nobody's querying - and why the correlation ID has to be pushed onto Serilog's
+`LogContext` rather than passed explicitly to each log call: `LogContext` is itself `AsyncLocal`-backed,
+so once it's pushed at the top of the request every subsequent `ILogger` call for that request -
+including from deep inside the mediator pipeline - picks it up automatically without threading it
+through method signatures.
+
 ## 2026-08-27 — WP-3: Custom Mediator, Pipeline Behaviors & Validation
 
 **Tool:** Claude Code
