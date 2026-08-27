@@ -19,6 +19,39 @@ session). Fill in as you go — don't backfill from memory at the end.
 
 <!-- Add entries below, most recent first. -->
 
+## 2026-08-27 — WP-3: Custom Mediator, Pipeline Behaviors & Validation
+
+**Tool:** Claude Code
+**What I asked for:** A hand-rolled mediator (explicitly not MediatR) mapping requests to
+handlers, with controllers reduced to thin `IMediator.Send(...)` calls and the Application
+layer holding the logic; a pipeline supporting cross-cutting behaviors (logging, validation);
+FluentValidation wired as a pipeline behavior running before the handler; and a validation
+failure short-circuiting to a clean 400 with field errors via the global exception handler,
+never a raw exception.
+**What the AI produced:** `BookSpace.Application/Mediator/` (`IRequest`, `IRequestHandler`,
+`IPipelineBehavior`, `IMediator`, `DefaultMediator` with a cached per-request-type dispatch
+wrapper, `LoggingBehavior`, `ValidationBehavior`); `LoginCommand`/`RefreshCommand` and
+`GetCurrentUserQuery`/`GetUsersQuery` with their handlers, replacing the logic that used to
+live directly in `AuthController`/`UsersController` (including `UsersController` reading
+`BookSpaceDbContext` directly); FluentValidation validators for both commands, auto-registered
+via assembly scan; `ValidationExceptionHandler` (`IExceptionHandler`) mapping
+`FluentValidation.ValidationException` to a `ValidationProblemDetails` 400; a new
+`IUserRepository.GetAllAsync` so the Users query handler stays in the Application layer instead
+of reaching into Infrastructure; unit tests for the mediator dispatch/pipeline ordering, both
+behaviors, both validators, and every handler in isolation; integration tests asserting the
+400/field-error contract end-to-end.
+**What I changed or rejected:** Had it walk back through every touched service/interface
+(`IAuthenticationService`, `ICurrentUserContext`, `IUserRepository`) after the fact to confirm
+nothing was left half-wired or duplicated, and separately asked for the test coverage gaps
+(the logging behavior, the thin command/query handlers, the exception handler) to be filled in
+rather than accepting integration coverage alone as sufficient.
+**What I understand and could explain without notes:** Why `DefaultMediator` needs a
+reflection-based wrapper at all - `Send<TResponse>(IRequest<TResponse>)` only knows the
+concrete request type at runtime, so a generic `IRequestHandler<TRequest,TResponse>` can't be
+resolved from DI without it - and why that reflection cost is paid once per request type
+(cached) rather than per call; and why pipeline behavior registration order is execution order,
+with the first-registered behavior outermost.
+
 ## 2026-08-20 — WP-0: Project Setup & Foundations
 
 **Tool:** Claude Code

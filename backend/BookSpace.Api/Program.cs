@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
+using BookSpace.Api.ErrorHandling;
 using BookSpace.Api.Security;
 using BookSpace.Application;
 using BookSpace.Application.Security;
@@ -17,6 +18,9 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
+
+builder.Services.AddProblemDetails();
+builder.Services.AddExceptionHandler<ValidationExceptionHandler>();
 
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
@@ -63,6 +67,8 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
     await app.Services.MigrateAndSeedDevelopmentDatabaseAsync();
 }
+
+app.UseExceptionHandler();
 
 app.UseHttpsRedirection();
 
