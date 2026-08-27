@@ -19,6 +19,38 @@ session). Fill in as you go — don't backfill from memory at the end.
 
 <!-- Add entries below, most recent first. -->
 
+## 2026-08-27 — WP-2: Global Exception Handling
+
+**Tool:** Claude Code
+**What I asked for:** A global exception handler (middleware or `IExceptionHandler`) so no
+unhandled exception ever leaks a stack trace to the client; domain/validation errors mapped to
+clean, consistent `ProblemDetails` responses with the correlation ID (from the structured-logging
+entry below) attached; and the full exception logged server-side exactly once, at the boundary,
+not via scattered try/catch that swallows or double-logs.
+**What the AI produced:** `GlobalExceptionHandler` (`IExceptionHandler`), registered after the
+existing `ValidationExceptionHandler` so it only runs as the catch-all fallback (`IExceptionHandler`s
+try in registration order, first `true` wins). It logs the full exception with `ILogger.LogError`
+once, then writes a generic `ProblemDetails` 500 that never includes the exception's message or
+stack trace - only a title and the correlation ID pulled from `ICorrelationIdContext`.
+`ValidationExceptionHandler` got the same correlation ID attached to its `ValidationProblemDetails`,
+plus an `Information`-level structured log line (which fields failed and how many, never the
+submitted values - a validation failure is expected user error, not a bug worth an Error-level log).
+Grepped the whole backend for `catch` first: the only one was the Serilog bootstrap's own top-level
+try/catch from the structured-logging work, confirming there was nothing scattered to consolidate -
+exceptions already propagated cleanly to this one boundary.
+**What I changed or rejected:** My first integration test for `GlobalExceptionHandler` swapped in a
+throwing `ICurrentUserContext` and used it to hit `/users/me` - but it broke `/auth/login` too,
+because `BookSpaceDbContext`'s global tenant query filter reads `ICurrentUserContext.TenantId` on
+every query against a tenant-owned table, including the one login runs to look up a user by email.
+Fixed by having only `UserId` throw in the test double and keeping `TenantId` harmless, rather than
+loosening the assertion or dropping the test.
+**What I understand and could explain without notes:** Why exception-handler registration order
+matters here - `ValidationExceptionHandler` has to run before `GlobalExceptionHandler` so its more
+specific 400 response wins over the generic 500 fallback - and why the generic handler's response
+body is checked against the exception's own message and type name in tests, not just its status
+code: a stack trace can leak through a field that isn't `Detail` (an `Extensions` entry, a `Title`
+built from `exception.Message`) just as easily as through the obvious one.
+
 ## 2026-08-27 — WP-2: Structured Logging (Serilog)
 
 **Tool:** Claude Code
