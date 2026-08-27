@@ -1,5 +1,6 @@
 using System.Reflection;
 using BookSpace.Application.Auth;
+using BookSpace.Application.Logging;
 using BookSpace.Application.Mediator;
 using FluentValidation;
 using Microsoft.Extensions.DependencyInjection;
@@ -11,6 +12,7 @@ public static class DependencyInjection
     public static IServiceCollection AddApplication(this IServiceCollection services)
     {
         services.AddScoped<IAuthenticationService, AuthenticationService>();
+        services.AddSingleton<ICorrelationIdContext, CorrelationIdContext>();
 
         var applicationAssembly = typeof(DependencyInjection).Assembly;
 

@@ -19,6 +19,37 @@ session). Fill in as you go — don't backfill from memory at the end.
 
 <!-- Add entries below, most recent first. -->
 
+## 2026-08-27 — WP-2: Structured Logging (Serilog)
+
+**Tool:** Claude Code
+**What I asked for:** Configure Serilog as the logging provider (replacing the default one), log
+structured key/value properties rather than interpolated strings, attach a correlation ID to every
+request and flow it through all logs for that request (with an eye toward background jobs later),
+and set sensible sinks/levels - console in dev, a structured queryable sink otherwise - while never
+logging secrets, tokens, or passwords.
+**What the AI produced:** A two-stage Serilog bootstrap in `Program.cs` (`Log.Logger` as a minimal
+startup logger, then `builder.Host.UseSerilog(...)` for the fully configured one) with `UseSerilogRequestLogging()`
+for a per-request summary line; console sink always, plus a compact-JSON rolling file sink for
+every environment except Development and the test suite's `Testing` environment.
+`ICorrelationIdContext`/`CorrelationIdContext` (`BookSpace.Application/Logging/`) hold the current
+correlation ID on an `AsyncLocal`, not `HttpContext.Items`, specifically so the same mechanism can
+carry a correlation ID through a background job later with no HTTP request involved.
+`CorrelationIdMiddleware` reads `X-Correlation-Id` from the incoming request (or mints one), sets it
+on that context, pushes it onto Serilog's `LogContext` so every log for the rest of the request
+carries it automatically, and echoes it back on the response header.
+**What I changed or rejected:** Hit "the logger is already frozen" from every integration test as
+soon as the two-stage bootstrap went in - `WebApplicationFactory<Program>` builds this host more
+than once per process, which collides with Serilog's default single-use `ReloadableLogger`. Fixed
+by passing `preserveStaticLogger: true` to `UseSerilog` rather than working around it with test-only
+configuration, so the production code path stays correct and the tests exercise the real thing.
+**What I understand and could explain without notes:** Why the file sink is gated on environment
+name rather than always-on - writing it during `dotnet test` runs would leave log files behind on
+every run for a sink nobody's querying - and why the correlation ID has to be pushed onto Serilog's
+`LogContext` rather than passed explicitly to each log call: `LogContext` is itself `AsyncLocal`-backed,
+so once it's pushed at the top of the request every subsequent `ILogger` call for that request -
+including from deep inside the mediator pipeline - picks it up automatically without threading it
+through method signatures.
+
 ## 2026-08-27 — WP-3: Custom Mediator, Pipeline Behaviors & Validation
 
 **Tool:** Claude Code
