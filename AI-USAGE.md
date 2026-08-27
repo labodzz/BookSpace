@@ -45,6 +45,29 @@ at all (the static bootstrap one for pre-DI startup failures, and the DI-configu
 else uses) - and why `preserveStaticLogger: true`, which fixed a different problem earlier, is
 exactly what makes `UseSerilogRequestLogging()`'s default logger choice diverge from the rest of the
 app's, since without it the two loggers would already be the same object.
+## 2026-08-27 — Fix: Correlation ID Missing from Error Response Headers
+
+**Tool:** Claude Code
+**What I asked for:** After the WP-2 logging/exception-handling work was already merged, asked
+where to actually see the logs while testing a route in Postman - which led to running the app for
+real and checking the response headers by hand rather than just trusting the earlier unit tests.
+**What the AI produced:** Ran the API locally and hit it with curl: `X-Correlation-Id` was present
+on a normal 200/401 response but silent on a 400 from `ValidationExceptionHandler` - the
+correlation ID only showed up in the JSON body's `correlationId` field, not the header.
+`UseExceptionHandler` resets the response (including headers) before an `IExceptionHandler` runs, so
+`CorrelationIdMiddleware`'s early header write doesn't survive an exception. Fixed by setting the
+header again inside `ValidationExceptionHandler` and `GlobalExceptionHandler` themselves, alongside
+the `correlationId` extension they already set; added header assertions to the existing unit and
+integration tests so this can't regress silently.
+**What I changed or rejected:** This was found by manually running the app and reading real HTTP
+responses, not by re-reading the code - the existing unit tests for both handlers only checked the
+`ProblemDetails` body, never the response header, so they were green the whole time this was broken.
+**What I understand and could explain without notes:** Why the header genuinely needs to be set from
+inside each `IExceptionHandler` rather than trying to make the middleware's original header
+"survive" some other way - the exception-handling reset is by design (it stops a partially-built
+failed response from leaking headers/content-type into the client-visible error), so anything that
+needs to be on the final response after an exception has to be (re)written after that reset happens,
+not before it.
 
 ## 2026-08-27 — WP-2: Global Exception Handling
 

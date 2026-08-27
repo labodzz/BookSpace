@@ -1,4 +1,5 @@
 using BookSpace.Api.ErrorHandling;
+using BookSpace.Api.Logging;
 using BookSpace.Application.Logging;
 using FluentValidation;
 using FluentValidation.Results;
@@ -35,6 +36,7 @@ public sealed class ValidationExceptionHandlerTests
         Assert.Equal(2, problemDetails.Errors["Email"].Length);
         Assert.Single(problemDetails.Errors["Password"]);
         Assert.Equal("correlation-abc", problemDetails.Extensions["correlationId"]);
+        Assert.Equal("correlation-abc", httpContext.Response.Headers[CorrelationIdMiddleware.HeaderName]);
     }
 
     [Fact]
@@ -50,6 +52,7 @@ public sealed class ValidationExceptionHandlerTests
 
         var problemDetails = Assert.IsType<ValidationProblemDetails>(problemDetailsService.CapturedContext!.ProblemDetails);
         Assert.False(problemDetails.Extensions.ContainsKey("correlationId"));
+        Assert.False(httpContext.Response.Headers.ContainsKey(CorrelationIdMiddleware.HeaderName));
     }
 
     [Fact]
