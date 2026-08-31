@@ -1,4 +1,5 @@
 using BookSpace.Application.Auth;
+using BookSpace.Application.Resources;
 using BookSpace.Application.Security;
 using BookSpace.Infrastructure.Persistence;
 using BookSpace.Infrastructure.Security;
@@ -22,6 +23,7 @@ public static class DependencyInjection
         services.AddSingleton<IJwtTokenGenerator, JwtTokenGenerator>();
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<IRefreshTokenRepository, RefreshTokenRepository>();
+        services.AddScoped<IResourceRepository, ResourceRepository>();
 
         return services;
     }

@@ -75,10 +75,12 @@ try
     builder.Services.AddOpenApi();
 
     builder.Services.AddProblemDetails();
-    // Tried in registration order, first to return true wins: ValidationExceptionHandler maps its
-    // one specific exception type to a 400 with field errors; GlobalExceptionHandler is the
+    // Tried in registration order, first to return true wins: specific exception types are mapped
+    // first (validation -> 400, not found -> 404, conflict -> 409); GlobalExceptionHandler is the
     // catch-all fallback for everything else, so it's registered last.
     builder.Services.AddExceptionHandler<ValidationExceptionHandler>();
+    builder.Services.AddExceptionHandler<NotFoundExceptionHandler>();
+    builder.Services.AddExceptionHandler<ConflictExceptionHandler>();
     builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 
     builder.Services.AddApplication();
