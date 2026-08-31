@@ -33,6 +33,35 @@ public sealed class ConflictExceptionHandlerTests
     }
 
     [Fact]
+    public async Task TryHandleAsync_WithErrorCode_IncludesItInTheExtensions()
+    {
+        var problemDetailsService = new CapturingProblemDetailsService();
+        var sut = new ConflictExceptionHandler(
+            NullLogger<ConflictExceptionHandler>.Instance, problemDetailsService, new FakeCorrelationIdContext(null));
+        var httpContext = new DefaultHttpContext();
+        var exception = new ConflictException("conflict", "Resource.NameConflict");
+
+        await sut.TryHandleAsync(httpContext, exception, CancellationToken.None);
+
+        var problemDetails = problemDetailsService.CapturedContext!.ProblemDetails;
+        Assert.Equal("Resource.NameConflict", problemDetails.Extensions["errorCode"]);
+    }
+
+    [Fact]
+    public async Task TryHandleAsync_WithNoErrorCode_OmitsTheExtension()
+    {
+        var problemDetailsService = new CapturingProblemDetailsService();
+        var sut = new ConflictExceptionHandler(
+            NullLogger<ConflictExceptionHandler>.Instance, problemDetailsService, new FakeCorrelationIdContext(null));
+        var httpContext = new DefaultHttpContext();
+
+        await sut.TryHandleAsync(httpContext, new ConflictException("conflict"), CancellationToken.None);
+
+        var problemDetails = problemDetailsService.CapturedContext!.ProblemDetails;
+        Assert.False(problemDetails.Extensions.ContainsKey("errorCode"));
+    }
+
+    [Fact]
     public async Task TryHandleAsync_WithNoCorrelationIdSet_OmitsTheExtension()
     {
         var problemDetailsService = new CapturingProblemDetailsService();
