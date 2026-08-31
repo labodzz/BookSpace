@@ -53,5 +53,5 @@ internal sealed class ResourceRepository(BookSpaceDbContext dbContext) : IResour
         await dbContext.Resources.AddAsync(resource, cancellationToken);
 
     public Task SaveChangesAsync(CancellationToken cancellationToken) =>
-        dbContext.SaveChangesAsync(cancellationToken);
+        dbContext.SaveChangesHandlingConflictsAsync(cancellationToken);
 }
