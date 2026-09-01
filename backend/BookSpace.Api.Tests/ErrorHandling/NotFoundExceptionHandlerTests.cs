@@ -33,6 +33,35 @@ public sealed class NotFoundExceptionHandlerTests
     }
 
     [Fact]
+    public async Task TryHandleAsync_WithErrorCode_IncludesItInTheExtensions()
+    {
+        var problemDetailsService = new CapturingProblemDetailsService();
+        var sut = new NotFoundExceptionHandler(
+            NullLogger<NotFoundExceptionHandler>.Instance, problemDetailsService, new FakeCorrelationIdContext(null));
+        var httpContext = new DefaultHttpContext();
+        var exception = new NotFoundException("not found", "Resource.NotFound");
+
+        await sut.TryHandleAsync(httpContext, exception, CancellationToken.None);
+
+        var problemDetails = problemDetailsService.CapturedContext!.ProblemDetails;
+        Assert.Equal("Resource.NotFound", problemDetails.Extensions["errorCode"]);
+    }
+
+    [Fact]
+    public async Task TryHandleAsync_WithNoErrorCode_OmitsTheExtension()
+    {
+        var problemDetailsService = new CapturingProblemDetailsService();
+        var sut = new NotFoundExceptionHandler(
+            NullLogger<NotFoundExceptionHandler>.Instance, problemDetailsService, new FakeCorrelationIdContext(null));
+        var httpContext = new DefaultHttpContext();
+
+        await sut.TryHandleAsync(httpContext, new NotFoundException("not found"), CancellationToken.None);
+
+        var problemDetails = problemDetailsService.CapturedContext!.ProblemDetails;
+        Assert.False(problemDetails.Extensions.ContainsKey("errorCode"));
+    }
+
+    [Fact]
     public async Task TryHandleAsync_WithNoCorrelationIdSet_OmitsTheExtension()
     {
         var problemDetailsService = new CapturingProblemDetailsService();

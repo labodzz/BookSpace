@@ -41,6 +41,11 @@ public sealed class NotFoundExceptionHandler(
             httpContext.Response.Headers[CorrelationIdMiddleware.HeaderName] = correlationId;
         }
 
+        if (notFoundException.ErrorCode is { } errorCode)
+        {
+            problemDetails.Extensions["errorCode"] = errorCode;
+        }
+
         return await problemDetailsService.TryWriteAsync(new ProblemDetailsContext
         {
             HttpContext = httpContext,

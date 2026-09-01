@@ -4,4 +4,11 @@ namespace BookSpace.Application.Common;
 // belongs to a different tenant and is therefore invisible, which correctly looks identical to "not
 // found" rather than leaking a 403 that would confirm another tenant's data exists).
 // NotFoundExceptionHandler maps this to a 404 ProblemDetails; the message is written to be client-safe.
-public sealed class NotFoundException(string message) : Exception(message);
+//
+// errorCode is optional and stable (e.g. "Resource.NotFound") so a client can branch on a machine-
+// readable value instead of parsing the human-readable message. It's a later addition - existing
+// throw sites that only pass a message keep compiling and simply omit the field from the response.
+public sealed class NotFoundException(string message, string? errorCode = null) : Exception(message)
+{
+    public string? ErrorCode { get; } = errorCode;
+}
