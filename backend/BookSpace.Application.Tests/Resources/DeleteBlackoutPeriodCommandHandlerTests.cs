@@ -28,7 +28,7 @@ public sealed class DeleteBlackoutPeriodCommandHandlerTests
         _blackoutPeriodRepository.Setup(r => r.FindByIdAsync(period.Id, It.IsAny<CancellationToken>())).ReturnsAsync(period);
         var sut = CreateSut();
 
-        await sut.Handle(new DeleteBlackoutPeriodCommand(resourceId, period.Id), CancellationToken.None);
+        await sut.Handle(new DeleteBlackoutPeriodCommandRequest(resourceId, period.Id), CancellationToken.None);
 
         _blackoutPeriodRepository.Verify(r => r.RemoveAsync(period, It.IsAny<CancellationToken>()), Times.Once);
         _blackoutPeriodRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
@@ -41,7 +41,7 @@ public sealed class DeleteBlackoutPeriodCommandHandlerTests
         var sut = CreateSut();
 
         var exception = await Assert.ThrowsAsync<NotFoundException>(() =>
-            sut.Handle(new DeleteBlackoutPeriodCommand(Guid.NewGuid(), Guid.NewGuid()), CancellationToken.None));
+            sut.Handle(new DeleteBlackoutPeriodCommandRequest(Guid.NewGuid(), Guid.NewGuid()), CancellationToken.None));
 
         Assert.Equal("BlackoutPeriod.NotFound", exception.ErrorCode);
     }

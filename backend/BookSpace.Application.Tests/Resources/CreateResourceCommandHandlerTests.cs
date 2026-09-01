@@ -24,9 +24,9 @@ public sealed class CreateResourceCommandHandlerTests
         _resourceRepository.Setup(r => r.ResourceTypeExistsAsync(resourceTypeId, It.IsAny<CancellationToken>())).ReturnsAsync(true);
         _resourceRepository.Setup(r => r.ExistsByNameAsync("Conference Room A", null, It.IsAny<CancellationToken>())).ReturnsAsync(false);
         var sut = CreateSut();
-        var command = new CreateResourceCommand(resourceTypeId, "Conference Room A", "8-seat room", 8, true, "UTC");
+        var request = new CreateResourceCommandRequest(resourceTypeId, "Conference Room A", "8-seat room", 8, true, "UTC");
 
-        var result = await sut.Handle(command, CancellationToken.None);
+        var result = await sut.Handle(request, CancellationToken.None);
 
         Assert.Equal("Conference Room A", result.Name);
         Assert.Equal(ResourceStatus.Active, result.Status);
@@ -43,9 +43,9 @@ public sealed class CreateResourceCommandHandlerTests
         _currentUserContext.SetupGet(c => c.TenantId).Returns(Guid.NewGuid());
         _resourceRepository.Setup(r => r.ResourceTypeExistsAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync(false);
         var sut = CreateSut();
-        var command = new CreateResourceCommand(Guid.NewGuid(), "Desk 1", null, 1, false, "UTC");
+        var request = new CreateResourceCommandRequest(Guid.NewGuid(), "Desk 1", null, 1, false, "UTC");
 
-        await Assert.ThrowsAsync<NotFoundException>(() => sut.Handle(command, CancellationToken.None));
+        await Assert.ThrowsAsync<NotFoundException>(() => sut.Handle(request, CancellationToken.None));
 
         _resourceRepository.Verify(r => r.AddAsync(It.IsAny<Resource>(), It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -57,9 +57,9 @@ public sealed class CreateResourceCommandHandlerTests
         _resourceRepository.Setup(r => r.ResourceTypeExistsAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync(true);
         _resourceRepository.Setup(r => r.ExistsByNameAsync("Desk 1", null, It.IsAny<CancellationToken>())).ReturnsAsync(true);
         var sut = CreateSut();
-        var command = new CreateResourceCommand(Guid.NewGuid(), "Desk 1", null, 1, false, "UTC");
+        var request = new CreateResourceCommandRequest(Guid.NewGuid(), "Desk 1", null, 1, false, "UTC");
 
-        await Assert.ThrowsAsync<ConflictException>(() => sut.Handle(command, CancellationToken.None));
+        await Assert.ThrowsAsync<ConflictException>(() => sut.Handle(request, CancellationToken.None));
 
         _resourceRepository.Verify(r => r.AddAsync(It.IsAny<Resource>(), It.IsAny<CancellationToken>()), Times.Never);
     }

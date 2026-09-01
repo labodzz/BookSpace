@@ -3,12 +3,12 @@ using BookSpace.Application.Mediator;
 
 namespace BookSpace.Application.Resources;
 
-public sealed record DeleteAvailabilityRuleCommand(Guid ResourceId, Guid RuleId) : IRequest<Unit>;
+public sealed record DeleteAvailabilityRuleCommandRequest(Guid ResourceId, Guid RuleId) : IRequest<Unit>;
 
 public sealed class DeleteAvailabilityRuleCommandHandler(IAvailabilityRuleRepository availabilityRuleRepository)
-    : IRequestHandler<DeleteAvailabilityRuleCommand, Unit>
+    : IRequestHandler<DeleteAvailabilityRuleCommandRequest, Unit>
 {
-    public async Task<Unit> Handle(DeleteAvailabilityRuleCommand request, CancellationToken cancellationToken)
+    public async Task<Unit> Handle(DeleteAvailabilityRuleCommandRequest request, CancellationToken cancellationToken)
     {
         var rule = await availabilityRuleRepository.FindByIdAsync(request.RuleId, cancellationToken);
 

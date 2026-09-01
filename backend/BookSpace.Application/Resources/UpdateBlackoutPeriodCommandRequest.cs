@@ -4,12 +4,14 @@ using FluentValidation;
 
 namespace BookSpace.Application.Resources;
 
-public sealed record UpdateBlackoutPeriodCommand(Guid ResourceId, Guid BlackoutId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, string Reason)
-    : IRequest<BlackoutPeriodResponse>;
+public sealed record UpdateBlackoutPeriodCommandRequest(Guid ResourceId, Guid BlackoutId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, string Reason)
+    : IRequest<UpdateBlackoutPeriodResponse>;
 
-public sealed class UpdateBlackoutPeriodCommandValidator : AbstractValidator<UpdateBlackoutPeriodCommand>
+public sealed record UpdateBlackoutPeriodResponse(Guid Id, Guid ResourceId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, string Reason);
+
+public sealed class UpdateBlackoutPeriodCommandRequestValidator : AbstractValidator<UpdateBlackoutPeriodCommandRequest>
 {
-    public UpdateBlackoutPeriodCommandValidator()
+    public UpdateBlackoutPeriodCommandRequestValidator()
     {
         RuleFor(command => command.ResourceId).NotEmpty();
         RuleFor(command => command.BlackoutId).NotEmpty();
@@ -19,9 +21,9 @@ public sealed class UpdateBlackoutPeriodCommandValidator : AbstractValidator<Upd
 }
 
 public sealed class UpdateBlackoutPeriodCommandHandler(IBlackoutPeriodRepository blackoutPeriodRepository)
-    : IRequestHandler<UpdateBlackoutPeriodCommand, BlackoutPeriodResponse>
+    : IRequestHandler<UpdateBlackoutPeriodCommandRequest, UpdateBlackoutPeriodResponse>
 {
-    public async Task<BlackoutPeriodResponse> Handle(UpdateBlackoutPeriodCommand request, CancellationToken cancellationToken)
+    public async Task<UpdateBlackoutPeriodResponse> Handle(UpdateBlackoutPeriodCommandRequest request, CancellationToken cancellationToken)
     {
         var period = await blackoutPeriodRepository.FindByIdAsync(request.BlackoutId, cancellationToken);
         if (period is null || period.ResourceId != request.ResourceId)
@@ -42,6 +44,6 @@ public sealed class UpdateBlackoutPeriodCommandHandler(IBlackoutPeriodRepository
 
         await blackoutPeriodRepository.SaveChangesAsync(cancellationToken);
 
-        return period.ToResponse();
+        return new UpdateBlackoutPeriodResponse(period.Id, period.ResourceId, period.StartUtc, period.EndUtc, period.Reason);
     }
 }

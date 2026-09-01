@@ -32,7 +32,7 @@ public sealed class GetBlackoutPeriodsQueryHandlerTests
         _blackoutPeriodRepository.Setup(r => r.GetByResourceIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync([period]);
         var sut = CreateSut();
 
-        var result = await sut.Handle(new GetBlackoutPeriodsQuery(resource.Id), CancellationToken.None);
+        var result = await sut.Handle(new GetBlackoutPeriodsQueryRequest(resource.Id), CancellationToken.None);
 
         var item = Assert.Single(result);
         Assert.Equal(period.Id, item.Id);
@@ -44,6 +44,6 @@ public sealed class GetBlackoutPeriodsQueryHandlerTests
         _resourceRepository.Setup(r => r.FindByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync((Resource?)null);
         var sut = CreateSut();
 
-        await Assert.ThrowsAsync<NotFoundException>(() => sut.Handle(new GetBlackoutPeriodsQuery(Guid.NewGuid()), CancellationToken.None));
+        await Assert.ThrowsAsync<NotFoundException>(() => sut.Handle(new GetBlackoutPeriodsQueryRequest(Guid.NewGuid()), CancellationToken.None));
     }
 }

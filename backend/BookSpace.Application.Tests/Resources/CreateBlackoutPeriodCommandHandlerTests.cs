@@ -38,9 +38,9 @@ public sealed class CreateBlackoutPeriodCommandHandlerTests
         _currentUserContext.SetupGet(c => c.TenantId).Returns(tenantId);
         _resourceRepository.Setup(r => r.FindByIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(resource);
         var sut = CreateSut();
-        var command = new CreateBlackoutPeriodCommand(resource.Id, start, end, "Projector maintenance");
+        var request = new CreateBlackoutPeriodCommandRequest(resource.Id, start, end, "Projector maintenance");
 
-        var result = await sut.Handle(command, CancellationToken.None);
+        var result = await sut.Handle(request, CancellationToken.None);
 
         Assert.Equal(resource.Id, result.ResourceId);
         Assert.Equal("Projector maintenance", result.Reason);
@@ -56,9 +56,9 @@ public sealed class CreateBlackoutPeriodCommandHandlerTests
         _resourceRepository.Setup(r => r.FindByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync((Resource?)null);
         var sut = CreateSut();
         var start = DateTimeOffset.UtcNow.AddDays(1);
-        var command = new CreateBlackoutPeriodCommand(Guid.NewGuid(), start, start.AddHours(1), "Maintenance");
+        var request = new CreateBlackoutPeriodCommandRequest(Guid.NewGuid(), start, start.AddHours(1), "Maintenance");
 
-        var exception = await Assert.ThrowsAsync<NotFoundException>(() => sut.Handle(command, CancellationToken.None));
+        var exception = await Assert.ThrowsAsync<NotFoundException>(() => sut.Handle(request, CancellationToken.None));
 
         Assert.Equal("Resource.NotFound", exception.ErrorCode);
         _blackoutPeriodRepository.Verify(r => r.AddAsync(It.IsAny<BlackoutPeriod>(), It.IsAny<CancellationToken>()), Times.Never);

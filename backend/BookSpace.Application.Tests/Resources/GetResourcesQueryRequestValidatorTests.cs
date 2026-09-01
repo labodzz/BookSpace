@@ -3,14 +3,14 @@ using Xunit;
 
 namespace BookSpace.Application.Tests.Resources;
 
-public sealed class GetResourcesQueryValidatorTests
+public sealed class GetResourcesQueryRequestValidatorTests
 {
-    private readonly GetResourcesQueryValidator _sut = new();
+    private readonly GetResourcesQueryRequestValidator _sut = new();
 
     [Fact]
     public void Validate_WithDefaults_HasNoErrors()
     {
-        var result = _sut.Validate(new GetResourcesQuery());
+        var result = _sut.Validate(new GetResourcesQueryRequest());
 
         Assert.True(result.IsValid);
     }
@@ -22,7 +22,7 @@ public sealed class GetResourcesQueryValidatorTests
     [InlineData(1, 101)]
     public void Validate_WithInvalidPaging_HasErrors(int page, int pageSize)
     {
-        var result = _sut.Validate(new GetResourcesQuery(page, pageSize));
+        var result = _sut.Validate(new GetResourcesQueryRequest(page, pageSize));
 
         Assert.False(result.IsValid);
     }

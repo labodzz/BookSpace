@@ -35,9 +35,9 @@ public sealed class UpdateResourceCommandHandlerTests
         _resourceRepository.Setup(r => r.ResourceTypeExistsAsync(newResourceTypeId, It.IsAny<CancellationToken>())).ReturnsAsync(true);
         _resourceRepository.Setup(r => r.ExistsByNameAsync("New Name", resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(false);
         var sut = CreateSut();
-        var command = new UpdateResourceCommand(resource.Id, newResourceTypeId, "New Name", "New description", 10, true, "UTC", ResourceStatus.Maintenance);
+        var request = new UpdateResourceCommandRequest(resource.Id, newResourceTypeId, "New Name", "New description", 10, true, "UTC", ResourceStatus.Maintenance);
 
-        var result = await sut.Handle(command, CancellationToken.None);
+        var result = await sut.Handle(request, CancellationToken.None);
 
         Assert.Equal("New Name", result.Name);
         Assert.Equal(ResourceStatus.Maintenance, result.Status);
@@ -50,9 +50,9 @@ public sealed class UpdateResourceCommandHandlerTests
     {
         _resourceRepository.Setup(r => r.FindByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync((Resource?)null);
         var sut = CreateSut();
-        var command = new UpdateResourceCommand(Guid.NewGuid(), Guid.NewGuid(), "Name", null, 1, false, "UTC", ResourceStatus.Active);
+        var request = new UpdateResourceCommandRequest(Guid.NewGuid(), Guid.NewGuid(), "Name", null, 1, false, "UTC", ResourceStatus.Active);
 
-        await Assert.ThrowsAsync<NotFoundException>(() => sut.Handle(command, CancellationToken.None));
+        await Assert.ThrowsAsync<NotFoundException>(() => sut.Handle(request, CancellationToken.None));
     }
 
     [Fact]
@@ -62,9 +62,9 @@ public sealed class UpdateResourceCommandHandlerTests
         _resourceRepository.Setup(r => r.FindByIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(resource);
         _resourceRepository.Setup(r => r.ResourceTypeExistsAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync(false);
         var sut = CreateSut();
-        var command = new UpdateResourceCommand(resource.Id, Guid.NewGuid(), "Name", null, 1, false, "UTC", ResourceStatus.Active);
+        var request = new UpdateResourceCommandRequest(resource.Id, Guid.NewGuid(), "Name", null, 1, false, "UTC", ResourceStatus.Active);
 
-        await Assert.ThrowsAsync<NotFoundException>(() => sut.Handle(command, CancellationToken.None));
+        await Assert.ThrowsAsync<NotFoundException>(() => sut.Handle(request, CancellationToken.None));
     }
 
     [Fact]
@@ -75,8 +75,8 @@ public sealed class UpdateResourceCommandHandlerTests
         _resourceRepository.Setup(r => r.ResourceTypeExistsAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync(true);
         _resourceRepository.Setup(r => r.ExistsByNameAsync("Taken Name", resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(true);
         var sut = CreateSut();
-        var command = new UpdateResourceCommand(resource.Id, resource.ResourceTypeId, "Taken Name", null, 1, false, "UTC", ResourceStatus.Active);
+        var request = new UpdateResourceCommandRequest(resource.Id, resource.ResourceTypeId, "Taken Name", null, 1, false, "UTC", ResourceStatus.Active);
 
-        await Assert.ThrowsAsync<ConflictException>(() => sut.Handle(command, CancellationToken.None));
+        await Assert.ThrowsAsync<ConflictException>(() => sut.Handle(request, CancellationToken.None));
     }
 }

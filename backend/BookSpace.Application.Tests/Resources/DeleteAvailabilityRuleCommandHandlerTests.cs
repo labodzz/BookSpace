@@ -20,7 +20,7 @@ public sealed class DeleteAvailabilityRuleCommandHandlerTests
         _availabilityRuleRepository.Setup(r => r.FindByIdAsync(rule.Id, It.IsAny<CancellationToken>())).ReturnsAsync(rule);
         var sut = CreateSut();
 
-        await sut.Handle(new DeleteAvailabilityRuleCommand(resourceId, rule.Id), CancellationToken.None);
+        await sut.Handle(new DeleteAvailabilityRuleCommandRequest(resourceId, rule.Id), CancellationToken.None);
 
         _availabilityRuleRepository.Verify(r => r.RemoveAsync(rule, It.IsAny<CancellationToken>()), Times.Once);
         _availabilityRuleRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
@@ -33,7 +33,7 @@ public sealed class DeleteAvailabilityRuleCommandHandlerTests
         var sut = CreateSut();
 
         await Assert.ThrowsAsync<NotFoundException>(() =>
-            sut.Handle(new DeleteAvailabilityRuleCommand(Guid.NewGuid(), Guid.NewGuid()), CancellationToken.None));
+            sut.Handle(new DeleteAvailabilityRuleCommandRequest(Guid.NewGuid(), Guid.NewGuid()), CancellationToken.None));
     }
 
     [Fact]
@@ -44,7 +44,7 @@ public sealed class DeleteAvailabilityRuleCommandHandlerTests
         var sut = CreateSut();
 
         await Assert.ThrowsAsync<NotFoundException>(() =>
-            sut.Handle(new DeleteAvailabilityRuleCommand(Guid.NewGuid(), rule.Id), CancellationToken.None));
+            sut.Handle(new DeleteAvailabilityRuleCommandRequest(Guid.NewGuid(), rule.Id), CancellationToken.None));
 
         _availabilityRuleRepository.Verify(r => r.RemoveAsync(It.IsAny<AvailabilityRule>(), It.IsAny<CancellationToken>()), Times.Never);
     }

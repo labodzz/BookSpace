@@ -39,9 +39,9 @@ public sealed class CreateAvailabilityRuleCommandHandlerTests
             .Setup(r => r.ExistsAsync(resource.Id, DayOfWeek.Monday, new TimeOnly(8, 0), new TimeOnly(18, 0), It.IsAny<CancellationToken>()))
             .ReturnsAsync(false);
         var sut = CreateSut();
-        var command = new CreateAvailabilityRuleCommand(resource.Id, DayOfWeek.Monday, new TimeOnly(8, 0), new TimeOnly(18, 0));
+        var request = new CreateAvailabilityRuleCommandRequest(resource.Id, DayOfWeek.Monday, new TimeOnly(8, 0), new TimeOnly(18, 0));
 
-        var result = await sut.Handle(command, CancellationToken.None);
+        var result = await sut.Handle(request, CancellationToken.None);
 
         Assert.Equal(resource.Id, result.ResourceId);
         Assert.Equal(DayOfWeek.Monday, result.DayOfWeek);
@@ -56,9 +56,9 @@ public sealed class CreateAvailabilityRuleCommandHandlerTests
     {
         _resourceRepository.Setup(r => r.FindByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync((Resource?)null);
         var sut = CreateSut();
-        var command = new CreateAvailabilityRuleCommand(Guid.NewGuid(), DayOfWeek.Monday, new TimeOnly(8, 0), new TimeOnly(18, 0));
+        var request = new CreateAvailabilityRuleCommandRequest(Guid.NewGuid(), DayOfWeek.Monday, new TimeOnly(8, 0), new TimeOnly(18, 0));
 
-        await Assert.ThrowsAsync<NotFoundException>(() => sut.Handle(command, CancellationToken.None));
+        await Assert.ThrowsAsync<NotFoundException>(() => sut.Handle(request, CancellationToken.None));
 
         _availabilityRuleRepository.Verify(r => r.AddAsync(It.IsAny<AvailabilityRule>(), It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -72,9 +72,9 @@ public sealed class CreateAvailabilityRuleCommandHandlerTests
             .Setup(r => r.ExistsAsync(resource.Id, DayOfWeek.Monday, new TimeOnly(8, 0), new TimeOnly(18, 0), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
         var sut = CreateSut();
-        var command = new CreateAvailabilityRuleCommand(resource.Id, DayOfWeek.Monday, new TimeOnly(8, 0), new TimeOnly(18, 0));
+        var request = new CreateAvailabilityRuleCommandRequest(resource.Id, DayOfWeek.Monday, new TimeOnly(8, 0), new TimeOnly(18, 0));
 
-        await Assert.ThrowsAsync<ConflictException>(() => sut.Handle(command, CancellationToken.None));
+        await Assert.ThrowsAsync<ConflictException>(() => sut.Handle(request, CancellationToken.None));
 
         _availabilityRuleRepository.Verify(r => r.AddAsync(It.IsAny<AvailabilityRule>(), It.IsAny<CancellationToken>()), Times.Never);
     }

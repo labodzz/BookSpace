@@ -29,7 +29,7 @@ public sealed class GetResourceQueryHandlerTests
         _resourceRepository.Setup(r => r.FindByIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(resource);
         var sut = CreateSut();
 
-        var result = await sut.Handle(new GetResourceQuery(resource.Id), CancellationToken.None);
+        var result = await sut.Handle(new GetResourceQueryRequest(resource.Id), CancellationToken.None);
 
         Assert.Equal(resource.Id, result.Id);
         Assert.Equal(resource.Name, result.Name);
@@ -41,6 +41,6 @@ public sealed class GetResourceQueryHandlerTests
         _resourceRepository.Setup(r => r.FindByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync((Resource?)null);
         var sut = CreateSut();
 
-        await Assert.ThrowsAsync<NotFoundException>(() => sut.Handle(new GetResourceQuery(Guid.NewGuid()), CancellationToken.None));
+        await Assert.ThrowsAsync<NotFoundException>(() => sut.Handle(new GetResourceQueryRequest(Guid.NewGuid()), CancellationToken.None));
     }
 }

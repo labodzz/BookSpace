@@ -5,7 +5,7 @@ using FluentValidation;
 
 namespace BookSpace.Application.Resources;
 
-public sealed record UpdateResourceCommand(
+public sealed record UpdateResourceCommandRequest(
     Guid Id,
     Guid ResourceTypeId,
     string Name,
@@ -13,11 +13,21 @@ public sealed record UpdateResourceCommand(
     int Capacity,
     bool RequiresApproval,
     string TimeZoneId,
-    ResourceStatus Status) : IRequest<ResourceResponse>;
+    ResourceStatus Status) : IRequest<UpdateResourceResponse>;
 
-public sealed class UpdateResourceCommandValidator : AbstractValidator<UpdateResourceCommand>
+public sealed record UpdateResourceResponse(
+    Guid Id,
+    Guid ResourceTypeId,
+    string Name,
+    string? Description,
+    int Capacity,
+    bool RequiresApproval,
+    ResourceStatus Status,
+    string TimeZoneId);
+
+public sealed class UpdateResourceCommandRequestValidator : AbstractValidator<UpdateResourceCommandRequest>
 {
-    public UpdateResourceCommandValidator()
+    public UpdateResourceCommandRequestValidator()
     {
         RuleFor(command => command.Id).NotEmpty();
         RuleFor(command => command.ResourceTypeId).NotEmpty();
@@ -34,9 +44,9 @@ public sealed class UpdateResourceCommandValidator : AbstractValidator<UpdateRes
 }
 
 public sealed class UpdateResourceCommandHandler(IResourceRepository resourceRepository)
-    : IRequestHandler<UpdateResourceCommand, ResourceResponse>
+    : IRequestHandler<UpdateResourceCommandRequest, UpdateResourceResponse>
 {
-    public async Task<ResourceResponse> Handle(UpdateResourceCommand request, CancellationToken cancellationToken)
+    public async Task<UpdateResourceResponse> Handle(UpdateResourceCommandRequest request, CancellationToken cancellationToken)
     {
         var resource = await resourceRepository.FindByIdAsync(request.Id, cancellationToken)
             ?? throw new NotFoundException($"Resource {request.Id} was not found.");
@@ -61,6 +71,14 @@ public sealed class UpdateResourceCommandHandler(IResourceRepository resourceRep
 
         await resourceRepository.SaveChangesAsync(cancellationToken);
 
-        return resource.ToResponse();
+        return new UpdateResourceResponse(
+            resource.Id,
+            resource.ResourceTypeId,
+            resource.Name,
+            resource.Description,
+            resource.Capacity,
+            resource.RequiresApproval,
+            resource.Status,
+            resource.TimeZoneId);
     }
 }

@@ -6,14 +6,14 @@ using FluentValidation;
 
 namespace BookSpace.Application.Resources;
 
-public sealed record CreateBlackoutPeriodCommand(Guid ResourceId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, string Reason)
-    : IRequest<BlackoutPeriodResponse>;
+public sealed record CreateBlackoutPeriodCommandRequest(Guid ResourceId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, string Reason)
+    : IRequest<CreateBlackoutPeriodResponse>;
 
-public sealed record BlackoutPeriodResponse(Guid Id, Guid ResourceId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, string Reason);
+public sealed record CreateBlackoutPeriodResponse(Guid Id, Guid ResourceId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, string Reason);
 
-public sealed class CreateBlackoutPeriodCommandValidator : AbstractValidator<CreateBlackoutPeriodCommand>
+public sealed class CreateBlackoutPeriodCommandRequestValidator : AbstractValidator<CreateBlackoutPeriodCommandRequest>
 {
-    public CreateBlackoutPeriodCommandValidator()
+    public CreateBlackoutPeriodCommandRequestValidator()
     {
         RuleFor(command => command.ResourceId).NotEmpty();
         RuleFor(command => command.EndUtc).GreaterThan(command => command.StartUtc);
@@ -26,9 +26,9 @@ public sealed class CreateBlackoutPeriodCommandValidator : AbstractValidator<Cre
 public sealed class CreateBlackoutPeriodCommandHandler(
     IBlackoutPeriodRepository blackoutPeriodRepository,
     IResourceRepository resourceRepository,
-    ICurrentUserContext currentUserContext) : IRequestHandler<CreateBlackoutPeriodCommand, BlackoutPeriodResponse>
+    ICurrentUserContext currentUserContext) : IRequestHandler<CreateBlackoutPeriodCommandRequest, CreateBlackoutPeriodResponse>
 {
-    public async Task<BlackoutPeriodResponse> Handle(CreateBlackoutPeriodCommand request, CancellationToken cancellationToken)
+    public async Task<CreateBlackoutPeriodResponse> Handle(CreateBlackoutPeriodCommandRequest request, CancellationToken cancellationToken)
     {
         if (await resourceRepository.FindByIdAsync(request.ResourceId, cancellationToken) is null)
         {
@@ -48,12 +48,6 @@ public sealed class CreateBlackoutPeriodCommandHandler(
         await blackoutPeriodRepository.AddAsync(period, cancellationToken);
         await blackoutPeriodRepository.SaveChangesAsync(cancellationToken);
 
-        return period.ToResponse();
+        return new CreateBlackoutPeriodResponse(period.Id, period.ResourceId, period.StartUtc, period.EndUtc, period.Reason);
     }
-}
-
-internal static class BlackoutPeriodMappingExtensions
-{
-    public static BlackoutPeriodResponse ToResponse(this BlackoutPeriod period) =>
-        new(period.Id, period.ResourceId, period.StartUtc, period.EndUtc, period.Reason);
 }

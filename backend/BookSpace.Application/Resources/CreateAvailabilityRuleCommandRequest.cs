@@ -6,14 +6,14 @@ using FluentValidation;
 
 namespace BookSpace.Application.Resources;
 
-public sealed record CreateAvailabilityRuleCommand(Guid ResourceId, DayOfWeek DayOfWeek, TimeOnly StartTime, TimeOnly EndTime)
-    : IRequest<AvailabilityRuleResponse>;
+public sealed record CreateAvailabilityRuleCommandRequest(Guid ResourceId, DayOfWeek DayOfWeek, TimeOnly StartTime, TimeOnly EndTime)
+    : IRequest<CreateAvailabilityRuleResponse>;
 
-public sealed record AvailabilityRuleResponse(Guid Id, Guid ResourceId, DayOfWeek DayOfWeek, TimeOnly StartTime, TimeOnly EndTime);
+public sealed record CreateAvailabilityRuleResponse(Guid Id, Guid ResourceId, DayOfWeek DayOfWeek, TimeOnly StartTime, TimeOnly EndTime);
 
-public sealed class CreateAvailabilityRuleCommandValidator : AbstractValidator<CreateAvailabilityRuleCommand>
+public sealed class CreateAvailabilityRuleCommandRequestValidator : AbstractValidator<CreateAvailabilityRuleCommandRequest>
 {
-    public CreateAvailabilityRuleCommandValidator()
+    public CreateAvailabilityRuleCommandRequestValidator()
     {
         RuleFor(command => command.ResourceId).NotEmpty();
         RuleFor(command => command.DayOfWeek).IsInEnum();
@@ -27,9 +27,9 @@ public sealed class CreateAvailabilityRuleCommandValidator : AbstractValidator<C
 public sealed class CreateAvailabilityRuleCommandHandler(
     IAvailabilityRuleRepository availabilityRuleRepository,
     IResourceRepository resourceRepository,
-    ICurrentUserContext currentUserContext) : IRequestHandler<CreateAvailabilityRuleCommand, AvailabilityRuleResponse>
+    ICurrentUserContext currentUserContext) : IRequestHandler<CreateAvailabilityRuleCommandRequest, CreateAvailabilityRuleResponse>
 {
-    public async Task<AvailabilityRuleResponse> Handle(CreateAvailabilityRuleCommand request, CancellationToken cancellationToken)
+    public async Task<CreateAvailabilityRuleResponse> Handle(CreateAvailabilityRuleCommandRequest request, CancellationToken cancellationToken)
     {
         if (await resourceRepository.FindByIdAsync(request.ResourceId, cancellationToken) is null)
         {
@@ -55,12 +55,6 @@ public sealed class CreateAvailabilityRuleCommandHandler(
         await availabilityRuleRepository.AddAsync(rule, cancellationToken);
         await availabilityRuleRepository.SaveChangesAsync(cancellationToken);
 
-        return rule.ToResponse();
+        return new CreateAvailabilityRuleResponse(rule.Id, rule.ResourceId, rule.DayOfWeek, rule.StartTime, rule.EndTime);
     }
-}
-
-internal static class AvailabilityRuleMappingExtensions
-{
-    public static AvailabilityRuleResponse ToResponse(this AvailabilityRule rule) =>
-        new(rule.Id, rule.ResourceId, rule.DayOfWeek, rule.StartTime, rule.EndTime);
 }

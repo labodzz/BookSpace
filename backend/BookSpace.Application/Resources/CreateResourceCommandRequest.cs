@@ -7,17 +7,27 @@ using FluentValidation;
 
 namespace BookSpace.Application.Resources;
 
-public sealed record CreateResourceCommand(
+public sealed record CreateResourceCommandRequest(
     Guid ResourceTypeId,
     string Name,
     string? Description,
     int Capacity,
     bool RequiresApproval,
-    string TimeZoneId) : IRequest<ResourceResponse>;
+    string TimeZoneId) : IRequest<CreateResourceResponse>;
 
-public sealed class CreateResourceCommandValidator : AbstractValidator<CreateResourceCommand>
+public sealed record CreateResourceResponse(
+    Guid Id,
+    Guid ResourceTypeId,
+    string Name,
+    string? Description,
+    int Capacity,
+    bool RequiresApproval,
+    ResourceStatus Status,
+    string TimeZoneId);
+
+public sealed class CreateResourceCommandRequestValidator : AbstractValidator<CreateResourceCommandRequest>
 {
-    public CreateResourceCommandValidator()
+    public CreateResourceCommandRequestValidator()
     {
         RuleFor(command => command.ResourceTypeId).NotEmpty();
         RuleFor(command => command.Name).NotEmpty().MaximumLength(200);
@@ -30,9 +40,9 @@ public sealed class CreateResourceCommandValidator : AbstractValidator<CreateRes
 }
 
 public sealed class CreateResourceCommandHandler(IResourceRepository resourceRepository, ICurrentUserContext currentUserContext)
-    : IRequestHandler<CreateResourceCommand, ResourceResponse>
+    : IRequestHandler<CreateResourceCommandRequest, CreateResourceResponse>
 {
-    public async Task<ResourceResponse> Handle(CreateResourceCommand request, CancellationToken cancellationToken)
+    public async Task<CreateResourceResponse> Handle(CreateResourceCommandRequest request, CancellationToken cancellationToken)
     {
         if (!await resourceRepository.ResourceTypeExistsAsync(request.ResourceTypeId, cancellationToken))
         {
@@ -60,6 +70,14 @@ public sealed class CreateResourceCommandHandler(IResourceRepository resourceRep
         await resourceRepository.AddAsync(resource, cancellationToken);
         await resourceRepository.SaveChangesAsync(cancellationToken);
 
-        return resource.ToResponse();
+        return new CreateResourceResponse(
+            resource.Id,
+            resource.ResourceTypeId,
+            resource.Name,
+            resource.Description,
+            resource.Capacity,
+            resource.RequiresApproval,
+            resource.Status,
+            resource.TimeZoneId);
     }
 }

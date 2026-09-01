@@ -3,12 +3,12 @@ using BookSpace.Application.Mediator;
 
 namespace BookSpace.Application.Resources;
 
-public sealed record DeleteBlackoutPeriodCommand(Guid ResourceId, Guid BlackoutId) : IRequest<Unit>;
+public sealed record DeleteBlackoutPeriodCommandRequest(Guid ResourceId, Guid BlackoutId) : IRequest<Unit>;
 
 public sealed class DeleteBlackoutPeriodCommandHandler(IBlackoutPeriodRepository blackoutPeriodRepository)
-    : IRequestHandler<DeleteBlackoutPeriodCommand, Unit>
+    : IRequestHandler<DeleteBlackoutPeriodCommandRequest, Unit>
 {
-    public async Task<Unit> Handle(DeleteBlackoutPeriodCommand request, CancellationToken cancellationToken)
+    public async Task<Unit> Handle(DeleteBlackoutPeriodCommandRequest request, CancellationToken cancellationToken)
     {
         var period = await blackoutPeriodRepository.FindByIdAsync(request.BlackoutId, cancellationToken);
         if (period is null || period.ResourceId != request.ResourceId)

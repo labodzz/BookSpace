@@ -31,7 +31,7 @@ public sealed class GetResourcesQueryHandlerTests
             .ReturnsAsync(new PagedResult<Resource>([resource], 1, 20, 1));
         var sut = CreateSut();
 
-        var result = await sut.Handle(new GetResourcesQuery(), CancellationToken.None);
+        var result = await sut.Handle(new GetResourcesQueryRequest(), CancellationToken.None);
 
         var item = Assert.Single(result.Items);
         Assert.Equal(resource.Id, item.Id);

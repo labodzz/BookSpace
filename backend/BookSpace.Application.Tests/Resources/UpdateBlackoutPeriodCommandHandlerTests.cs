@@ -32,7 +32,7 @@ public sealed class UpdateBlackoutPeriodCommandHandlerTests
         _blackoutPeriodRepository.Setup(r => r.FindByIdAsync(period.Id, It.IsAny<CancellationToken>())).ReturnsAsync(period);
         var sut = CreateSut();
 
-        var result = await sut.Handle(new UpdateBlackoutPeriodCommand(resourceId, period.Id, newStart, newEnd, "New reason"), CancellationToken.None);
+        var result = await sut.Handle(new UpdateBlackoutPeriodCommandRequest(resourceId, period.Id, newStart, newEnd, "New reason"), CancellationToken.None);
 
         Assert.Equal(newStart, result.StartUtc);
         Assert.Equal(newEnd, result.EndUtc);
@@ -48,7 +48,7 @@ public sealed class UpdateBlackoutPeriodCommandHandlerTests
         var start = DateTimeOffset.UtcNow.AddDays(1);
 
         var exception = await Assert.ThrowsAsync<NotFoundException>(() =>
-            sut.Handle(new UpdateBlackoutPeriodCommand(Guid.NewGuid(), Guid.NewGuid(), start, start.AddHours(1), "Reason"), CancellationToken.None));
+            sut.Handle(new UpdateBlackoutPeriodCommandRequest(Guid.NewGuid(), Guid.NewGuid(), start, start.AddHours(1), "Reason"), CancellationToken.None));
 
         Assert.Equal("BlackoutPeriod.NotFound", exception.ErrorCode);
     }
@@ -62,7 +62,7 @@ public sealed class UpdateBlackoutPeriodCommandHandlerTests
         var start = DateTimeOffset.UtcNow.AddDays(1);
 
         await Assert.ThrowsAsync<NotFoundException>(() =>
-            sut.Handle(new UpdateBlackoutPeriodCommand(Guid.NewGuid(), period.Id, start, start.AddHours(1), "Reason"), CancellationToken.None));
+            sut.Handle(new UpdateBlackoutPeriodCommandRequest(Guid.NewGuid(), period.Id, start, start.AddHours(1), "Reason"), CancellationToken.None));
 
         _blackoutPeriodRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
     }

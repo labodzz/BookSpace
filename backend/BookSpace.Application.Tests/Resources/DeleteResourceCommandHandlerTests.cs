@@ -31,7 +31,7 @@ public sealed class DeleteResourceCommandHandlerTests
         _resourceRepository.Setup(r => r.FindByIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(resource);
         var sut = CreateSut();
 
-        var result = await sut.Handle(new DeleteResourceCommand(resource.Id), CancellationToken.None);
+        var result = await sut.Handle(new DeleteResourceCommandRequest(resource.Id), CancellationToken.None);
 
         Assert.Equal(ResourceStatus.Archived, result.Status);
         Assert.Equal(ResourceStatus.Archived, resource.Status);
@@ -45,7 +45,7 @@ public sealed class DeleteResourceCommandHandlerTests
         _resourceRepository.Setup(r => r.FindByIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(resource);
         var sut = CreateSut();
 
-        var result = await sut.Handle(new DeleteResourceCommand(resource.Id), CancellationToken.None);
+        var result = await sut.Handle(new DeleteResourceCommandRequest(resource.Id), CancellationToken.None);
 
         Assert.Equal(ResourceStatus.Archived, result.Status);
         _resourceRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
@@ -57,6 +57,6 @@ public sealed class DeleteResourceCommandHandlerTests
         _resourceRepository.Setup(r => r.FindByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync((Resource?)null);
         var sut = CreateSut();
 
-        await Assert.ThrowsAsync<NotFoundException>(() => sut.Handle(new DeleteResourceCommand(Guid.NewGuid()), CancellationToken.None));
+        await Assert.ThrowsAsync<NotFoundException>(() => sut.Handle(new DeleteResourceCommandRequest(Guid.NewGuid()), CancellationToken.None));
     }
 }
