@@ -26,6 +26,7 @@ public static class DependencyInjection
         services.AddScoped<IResourceRepository, ResourceRepository>();
         services.AddScoped<IAvailabilityRuleRepository, AvailabilityRuleRepository>();
         services.AddScoped<IBlackoutPeriodRepository, BlackoutPeriodRepository>();
+        services.AddScoped<IResourceApproverRepository, ResourceApproverRepository>();
 
         return services;
     }

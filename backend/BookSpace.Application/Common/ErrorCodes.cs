@@ -14,4 +14,9 @@ internal static class ErrorCodes
     public const string AvailabilityRuleConflict = "AvailabilityRule.Conflict";
 
     public const string BlackoutPeriodNotFound = "BlackoutPeriod.NotFound";
+
+    public const string UserNotFound = "User.NotFound";
+
+    public const string ResourceApproverNotFound = "ResourceApprover.NotFound";
+    public const string ResourceApproverConflict = "ResourceApprover.Conflict";
 }
