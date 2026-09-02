@@ -9,7 +9,7 @@ Kodificira POSTOJEĆI obrazac iz `BookSpace.Application.Tests/Resources/` (npr. 
 
 ## 1. Framework i lokacija
 
-xUnit (`[Fact]`) + Moq. Lokacija: `BookSpace.Application.Tests/{Feature}/` — isti naziv foldera kao feature u `BookSpace.Application/{Feature}/`.
+xUnit (`[Fact]`) + Moq. Lokacija: `BookSpace.Application.Tests/{Feature}/{Verb}/` — isti raspored kao produkcijski kod: podfolder po CRUD glagolu (`Create/`, `Update/`, `Delete/`, `Get/`), entiteti feature-a dijele isti glagol-folder (npr. `Resources/Create/` sadrži testove i za Resource i za AvailabilityRule i za BlackoutPeriod create).
 
 ## 2. Handler testovi
 

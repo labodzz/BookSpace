@@ -7,9 +7,11 @@ description: Scaffolduje novu command/query (CQRS) za BookSpace po postojećem o
 
 Kodificira POSTOJEĆI obrazac iz `BookSpace.Application/Resources/` (Resource/AvailabilityRule/BlackoutPeriod CRUD). Ne uvodi novu arhitekturu — samo prati šta ti primjeri već rade.
 
-## 1. Jedan fajl po request-u
+## 1. Jedan fajl po request-u, grupisano po VERB-u
 
-Sve živi u `BookSpace.Application/{Feature}/{UseCase}CommandRequest.cs` (ili `QueryRequest.cs`) — record, validator (ako ima šta validirati) i handler u ISTOM fajlu, ne po sloju i ne u zasebnom podfolderu po use-case-u.
+Unutar `BookSpace.Application/{Feature}/` postoji po jedan podfolder za svaki CRUD glagol — `Create/`, `Update/`, `Delete/`, `Get/` — i SVI entiteti tog feature-a dijele isti glagol-folder. Npr. `Resources/Create/` sadrži `CreateResourceCommandRequest.cs`, `CreateAvailabilityRuleCommandRequest.cs` i `CreateBlackoutPeriodCommandRequest.cs` jedno pored drugog — ne postoji `CreateResource/` folder odvojen od `CreateAvailabilityRule/` foldera. Ovo je namjerno: cilj je da se sve "Create" operacije feature-a nađu na jednom mjestu bez obzira na entitet, ne da se svaki use-case izoluje u svoj mikro-folder. Repozitorij interfejsi (`I{Entity}Repository.cs`) i dijeljeni helperi (npr. `TimeZoneValidation.cs`) ostaju u korijenu `{Feature}/` foldera, van glagol-podfoldera, jer nisu vezani za jednu komandu/upit. Namespace ostaje flat (`BookSpace.Application.Resources`) bez obzira na fizički podfolder — razdvajanje je čisto fizičko/organizaciono, ne mijenja se `using` u drugim fajlovima. Isti raspored (`Create/`, `Update/`, `Delete/`, `Get/`) se ponavlja identično u `BookSpace.Application.Tests/{Feature}/`.
+
+Svaki use-case i dalje ide u JEDAN fajl unutar svog glagol-foldera: record, validator (ako ima šta validirati) i handler u ISTOM fajlu, ne razdvojeno po sloju.
 
 Sam `IRequest<T>` record nosi sufiks **Request** nakon Command/Query (`CreateResourceCommandRequest`, `GetResourcesQueryRequest`) — eksplicitno govori da je ovo ulazni objekat, ne response i ne handler, čim ga neko vidi u kodu. Validator prati isto (`CreateResourceCommandRequestValidator`). Handler NE dobija "Request" — ostaje `{UseCase}CommandHandler`/`{UseCase}QueryHandler`, jer handler nije "the request", on ga obrađuje.
 
