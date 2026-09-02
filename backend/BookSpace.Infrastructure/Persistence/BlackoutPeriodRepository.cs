@@ -9,11 +9,17 @@ internal sealed class BlackoutPeriodRepository(BookSpaceDbContext dbContext) : I
     public Task<BlackoutPeriod?> FindByIdAsync(Guid id, CancellationToken cancellationToken) =>
         dbContext.BlackoutPeriods.FirstOrDefaultAsync(period => period.Id == id, cancellationToken);
 
-    public async Task<IReadOnlyList<BlackoutPeriod>> GetByResourceIdAsync(Guid resourceId, CancellationToken cancellationToken) =>
-        await dbContext.BlackoutPeriods
+    // Sorted client-side after materializing rather than via ORDER BY: SQLite's EF provider can't
+    // translate ORDER BY on a DateTimeOffset column (SQL Server has no such restriction, so this only
+    // surfaces against the SQLite backend the integration test suite uses).
+    public async Task<IReadOnlyList<BlackoutPeriod>> GetByResourceIdAsync(Guid resourceId, CancellationToken cancellationToken)
+    {
+        var periods = await dbContext.BlackoutPeriods
             .Where(period => period.ResourceId == resourceId)
-            .OrderBy(period => period.StartUtc)
             .ToListAsync(cancellationToken);
+
+        return periods.OrderBy(period => period.StartUtc).ToList();
+    }
 
     public async Task AddAsync(BlackoutPeriod period, CancellationToken cancellationToken) =>
         await dbContext.BlackoutPeriods.AddAsync(period, cancellationToken);

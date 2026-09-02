@@ -19,6 +19,55 @@ session). Fill in as you go — don't backfill from memory at the end.
 
 <!-- Add entries below, most recent first. -->
 
+## 2026-09-02 — WP-3: Resources & Availability API
+
+**Tool:** Claude Code
+**What I asked for:** The full Resources & Availability vertical slice on top of the WP-1 domain
+model: CRUD for resources, per-resource weekly availability rules and blackout periods, approver
+assignment, and a query that tells a caller what's actually bookable - all admin-only to write,
+readable by any tenant member. Along the way I also redirected the naming/folder conventions this
+work should follow (every command/query gets its own independent response record and a `Request`
+suffix; files grouped by CRUD verb - `Create/`/`Update/`/`Delete/`/`Get/` - with every entity of the
+feature sharing that folder, not one folder per use case) and made the core design call myself: the
+availability query has to be capacity-aware (an 8-laptop resource with 5 already booked still shows
+3 available), not a simple free/busy flag, since two different tenants can legitimately need
+different quantities of the same shared resource.
+**What the AI produced:** Resource/AvailabilityRule/BlackoutPeriod/ResourceApprover CRUD plus a
+capacity-aware `GetResourceAvailabilityQueryRequest` (sweep-line `IntervalMath.ComputeAvailableCapacity`
+splitting a window at every occupancy boundary and reporting remaining capacity per sub-interval,
+with blackouts consuming a resource's full capacity and bookings only their own `Quantity`),
+`ResourcesController` wiring all of it to HTTP, and three `.claude/skills/` files documenting the
+conventions above so future CRUD work in this repo follows them by default. Closed the work package
+with `ResourcesEndpointsTests.cs` (17 real end-to-end HTTP tests against a SQLite-backed
+`CustomWebApplicationFactory`) plus matching `TestDataSeeder` fixtures, and unit tests for every
+handler/validator and for `IntervalMath` itself.
+**What I changed or rejected:** Rejected the first folder-restructuring attempt outright (one folder
+per exact use case) and corrected it to one folder per CRUD verb shared across entities - re-ran the
+whole reorganization rather than accepting the first pass. Separately, the end-to-end tests caught
+two real bugs neither of the mocked unit tests could have: `BlackoutPeriodRepository` ordered by a
+`DateTimeOffset` column in SQL (untranslatable on the SQLite provider the test suite uses, though
+harmless on the real SQL Server target) and `BookingAvailabilityRepository` filtered by `StartUtc`/
+`EndUtc` with `<`/`>` directly in the SQL query (a genuine SQLite-provider limitation, not a SQL
+Server one) - both fixed by moving that part of the filtering to run in memory after materializing,
+matching a pattern the codebase already used for blackout periods. Also caught my own seeding bug in
+the same pass: `DateTimeOffset.UtcNow.Date` returns a `DateTime` with `Kind=Unspecified`, and
+converting that back to `DateTimeOffset` silently assumes the machine's local offset instead of UTC,
+which had shifted a seeded blackout onto the wrong calendar day.
+**What I understand and could explain without notes:** Why the availability response is layered into
+`OpenPeriods`/`Blackouts`/`BusyPeriods`/`BookableSlots` instead of one flat list, and why blackout
+periods and bookings are treated differently in the capacity math even though both are "occupancies"
+- a blackout means the resource itself is down, so it consumes full capacity regardless of the
+configured `Capacity` value, while a booking only consumes the quantity it actually reserved. Also
+why two EF Core query-translation failures could exist in code that already had full mocked unit-test
+coverage: a `Mock<IRepository>` never touches the real LINQ-to-SQL translator, so a query that's
+syntactically valid C# but untranslatable by a given provider only surfaces the first time it runs
+against a real database - which is exactly why this work package's integration tests hit the real
+(SQLite) provider instead of stopping at mocks.
+**What I understand needs follow-up:** The known future work, already flagged and saved for later:
+Booking-create will need transaction-scoped locking (`UPDLOCK`/`HOLDLOCK` or `SERIALIZABLE`) around a
+re-summed capacity check to avoid two concurrent bookings racing past an application-level check-then-insert
+and jointly overbooking a resource.
+
 ## 2026-08-27 — Fix: Correlation ID Missing from Console Log Lines
 
 **Tool:** Claude Code
