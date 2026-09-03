@@ -372,3 +372,8 @@ CoverageReport/
 
 # Stray local Office documents (not project artifacts)
 *.docx
+
+# Local Postman workspace (Postman for VS Code) - synced via Postman's own cloud
+# workspace, not version control; kept as personal, in-progress API testing setup
+postman/
+.postman/
