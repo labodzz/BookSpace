@@ -115,7 +115,8 @@ public sealed class GetResourceAvailabilityQueryHandler(
     // already stored as absolute UTC. Accepted as a documented v1 simplification.
     private static DateTimeOffset ConvertLocalToUtc(DateOnly date, TimeOnly time, TimeZoneInfo timeZone)
     {
-var local = DateTime.SpecifyKind(date.ToDateTime(time), DateTimeKind.Unspecified);
-var utc = TimeZoneInfo.ConvertTime(local, timeZone, TimeZoneInfo.Utc, TimeZoneInfoOptions.NoThrowOnInvalidTime);
-return new DateTimeOffset(utc, TimeSpan.Zero);
+        var local = DateTime.SpecifyKind(date.ToDateTime(time), DateTimeKind.Unspecified);
+        var utc = TimeZoneInfo.ConvertTimeToUtc(local, timeZone);
+        return new DateTimeOffset(utc, TimeSpan.Zero);
+    }
 }

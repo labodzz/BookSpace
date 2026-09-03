@@ -16,6 +16,9 @@ public sealed class CreateBlackoutPeriodCommandRequestValidator : AbstractValida
     public CreateBlackoutPeriodCommandRequestValidator()
     {
         RuleFor(command => command.ResourceId).NotEmpty();
+        RuleFor(command => command.StartUtc)
+            .Must(startUtc => startUtc >= DateTimeOffset.UtcNow)
+            .WithMessage("Blackout period cannot start in the past.");
         RuleFor(command => command.EndUtc).GreaterThan(command => command.StartUtc);
         RuleFor(command => command.Reason).NotEmpty().MaximumLength(1000);
     }
