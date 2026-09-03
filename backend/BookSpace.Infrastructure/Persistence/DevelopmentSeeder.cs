@@ -31,10 +31,6 @@ internal static class DevelopmentSeeder
         var memberRole = new Role { Id = Guid.NewGuid(), Name = "Member" };
         dbContext.Roles.AddRange(sysAdminRole, tenantAdminRole, approverRole, memberRole);
 
-        var meetingRoomType = new ResourceType { Id = Guid.NewGuid(), Name = "Meeting Room" };
-        var deskType = new ResourceType { Id = Guid.NewGuid(), Name = "Desk" };
-        dbContext.ResourceTypes.AddRange(meetingRoomType, deskType);
-
         var acme = new Tenant
         {
             Id = Guid.NewGuid(),
@@ -53,6 +49,14 @@ internal static class DevelopmentSeeder
         };
         dbContext.Tenants.AddRange(acme, globex);
 
+        // ResourceType is tenant-owned (like everything else here), so each tenant gets its own copy
+        // of the shared "Meeting Room" name rather than sharing one row - a tenant renaming/deleting
+        // its own type must never affect another tenant's resources.
+        var acmeMeetingRoomType = new ResourceType { Id = Guid.NewGuid(), TenantId = acme.Id, Name = "Meeting Room" };
+        var acmeDeskType = new ResourceType { Id = Guid.NewGuid(), TenantId = acme.Id, Name = "Desk" };
+        var globexMeetingRoomType = new ResourceType { Id = Guid.NewGuid(), TenantId = globex.Id, Name = "Meeting Room" };
+        dbContext.ResourceTypes.AddRange(acmeMeetingRoomType, acmeDeskType, globexMeetingRoomType);
+
         var acmeAdmin = new User { Id = Guid.NewGuid(), TenantId = acme.Id, FirstName = "Amina", LastName = "Kovač", Email = "admin@acme.test", PasswordHash = passwordHash, CreatedAtUtc = now };
         var acmeApprover = new User { Id = Guid.NewGuid(), TenantId = acme.Id, FirstName = "Emir", LastName = "Hodžić", Email = "approver@acme.test", PasswordHash = passwordHash, CreatedAtUtc = now };
         var acmeMember = new User { Id = Guid.NewGuid(), TenantId = acme.Id, FirstName = "Lamija", LastName = "Bojić", Email = "member@acme.test", PasswordHash = passwordHash, CreatedAtUtc = now };
@@ -69,19 +73,19 @@ internal static class DevelopmentSeeder
 
         var conferenceRoomA = new Resource
         {
-            Id = Guid.NewGuid(), TenantId = acme.Id, ResourceTypeId = meetingRoomType.Id,
+            Id = Guid.NewGuid(), TenantId = acme.Id, ResourceTypeId = acmeMeetingRoomType.Id,
             Name = "Conference Room A", Description = "8-seat room with a projector", Capacity = 8,
             RequiresApproval = true, Status = ResourceStatus.Active, TimeZoneId = acme.DefaultTimeZoneId,
         };
         var hotDesk1 = new Resource
         {
-            Id = Guid.NewGuid(), TenantId = acme.Id, ResourceTypeId = deskType.Id,
+            Id = Guid.NewGuid(), TenantId = acme.Id, ResourceTypeId = acmeDeskType.Id,
             Name = "Hot Desk 1", Description = null, Capacity = 1,
             RequiresApproval = false, Status = ResourceStatus.Active, TimeZoneId = acme.DefaultTimeZoneId,
         };
         var warRoom = new Resource
         {
-            Id = Guid.NewGuid(), TenantId = globex.Id, ResourceTypeId = meetingRoomType.Id,
+            Id = Guid.NewGuid(), TenantId = globex.Id, ResourceTypeId = globexMeetingRoomType.Id,
             Name = "War Room", Description = "6-seat room", Capacity = 6,
             RequiresApproval = false, Status = ResourceStatus.Active, TimeZoneId = globex.DefaultTimeZoneId,
         };

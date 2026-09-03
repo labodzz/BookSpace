@@ -69,7 +69,8 @@ internal static class BookSpaceModelConfiguration
             entity.ToTable("ResourceTypes");
             entity.HasKey(type => type.Id);
             entity.Property(type => type.Name).HasMaxLength(100).IsRequired();
-            entity.HasIndex(type => type.Name).IsUnique();
+            entity.HasIndex(type => new { type.TenantId, type.Name }).IsUnique();
+            entity.HasOne<Tenant>().WithMany().HasForeignKey(type => type.TenantId).OnDelete(DeleteBehavior.Restrict);
         });
 
         builder.Entity<Resource>(entity =>
@@ -80,7 +81,12 @@ internal static class BookSpaceModelConfiguration
             entity.Property(resource => resource.Description).HasMaxLength(2000);
             entity.Property(resource => resource.TimeZoneId).HasMaxLength(100).IsRequired();
             entity.Property(resource => resource.Status).HasConversion<string>().HasMaxLength(20);
-            entity.HasIndex(resource => new { resource.TenantId, resource.Name }).IsUnique();
+            // Filtered to Active/Inactive/Maintenance only - an Archived resource is effectively
+            // deleted from the caller's point of view, so its name is released for reuse rather than
+            // reserved forever.
+            entity.HasIndex(resource => new { resource.TenantId, resource.Name })
+                .IsUnique()
+                .HasFilter("[Status] <> 'Archived'");
             entity.HasOne<Tenant>().WithMany().HasForeignKey(resource => resource.TenantId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne<ResourceType>().WithMany().HasForeignKey(resource => resource.ResourceTypeId).OnDelete(DeleteBehavior.Restrict);
         });

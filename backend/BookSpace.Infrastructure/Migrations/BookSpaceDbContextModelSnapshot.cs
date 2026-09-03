@@ -340,7 +340,8 @@ namespace BookSpace.Infrastructure.Migrations
                     b.HasIndex("ResourceTypeId");
 
                     b.HasIndex("TenantId", "Name")
-                        .IsUnique();
+                        .IsUnique()
+                        .HasFilter("[Status] <> 'Archived'");
 
                     b.ToTable("Resources", null, t =>
                         {
@@ -386,9 +387,12 @@ namespace BookSpace.Infrastructure.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
 
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.HasKey("Id");
 
-                    b.HasIndex("Name")
+                    b.HasIndex("TenantId", "Name")
                         .IsUnique();
 
                     b.ToTable("ResourceTypes", (string)null);
@@ -673,6 +677,15 @@ namespace BookSpace.Infrastructure.Migrations
                     b.HasOne("BookSpace.Domain.Entities.User", null)
                         .WithMany()
                         .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("BookSpace.Domain.Entities.ResourceType", b =>
+                {
+                    b.HasOne("BookSpace.Domain.Entities.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });

@@ -1,6 +1,7 @@
 using BookSpace.Application.Auth;
 using BookSpace.Application.Security;
 using BookSpace.Domain.Entities;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
 using Xunit;
@@ -27,7 +28,8 @@ public sealed class AuthenticationServiceTests
         _refreshTokenRepository.Object,
         _passwordHasher.Object,
         _jwtTokenGenerator.Object,
-        Options.Create(_authOptions));
+        Options.Create(_authOptions),
+        NullLogger<AuthenticationService>.Instance);
 
     private static User CreateUser(Guid? id = null) => new()
     {

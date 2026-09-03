@@ -19,6 +19,148 @@ session). Fill in as you go — don't backfill from memory at the end.
 
 <!-- Add entries below, most recent first. -->
 
+## 2026-09-03 — Feature: Resource Type Management (Full CRUD)
+
+**Tool:** Claude Code
+**What I asked for:** Noticed `ResourceType` had no Create endpoint at all - it could only be seeded
+directly into the database - and asked why it was a separate table instead of a field on `Resource`,
+then asked for a TenantAdmin-facing way to manage it, unsure whether SysAdmin should also be allowed
+and whether Update/Delete were needed. I gave a recommendation (yes to both, with Delete blocked
+rather than soft-deleted since a type has no history of its own) and got the go-ahead to build it.
+**What the AI produced:** `ResourceType` promoted from a global, unscoped lookup table to a full
+`ITenantOwned` entity (each tenant now owns its own copy of a type name, matching every other entity
+in this feature) - new migration `ResourceTypesAreTenantOwned`, filtered `(TenantId, Name)` unique
+index. Full CQRS vertical in `BookSpace.Application/ResourceTypes/` (Create/Update/Delete/Get,
+following the same file-per-request convention as Resources), `ResourceTypeRepository`, and a new
+`ResourceTypesController` at `/resource-types` with the same `TenantAdmin,SysAdmin`-for-writes /
+any-authenticated-member-for-reads split as `ResourcesController`. Delete is a hard delete (unlike
+`Resource`'s soft-delete) blocked with a 409 if any `Resource` still references the type, since an
+unused taxonomy row has no booking history worth preserving. 17 new Application-layer unit tests, 13
+new integration tests (admin-only writes, member read access, cross-tenant 404, in-use delete
+conflict). Ran the `tenant-isolation-review` checklist manually against the new entity - full pass.
+**What I changed or rejected:** Making `ResourceType` tenant-owned meant the two existing seeded rows
+(shared across both dev tenants) could no longer satisfy a NOT NULL tenant FK - `dotnet ef database
+update` failed the way I expected (a `defaultValue` of `Guid.Empty` doesn't match any real tenant). A
+straight `dotnet ef database drop` to start clean was blocked by the environment's safety classifier
+as a destructive action, so instead I cleared just the dependent tables via direct SQL (keeping
+Tenants/Users intact) and hand-reseeded the resource-side dev data to exactly match what
+`DevelopmentSeeder` now produces, verified by running the full CRUD flow against the real local SQL
+Server afterward (create, rename, delete-when-unused, 409-when-in-use, member forbidden on write,
+cross-tenant 404).
+**What I understand and could explain without notes:** Why `SysAdmin` getting the same
+`TenantAdmin,SysAdmin` role list as every other mutation endpoint here doesn't actually grant any
+cross-tenant reach in this codebase today - `CurrentUserContext.TenantId` reads straight from the
+JWT's `tenant_id` claim, which `JwtTokenGenerator` sets unconditionally from `user.TenantId` for every
+user regardless of role, so a `SysAdmin` account is just as tenant-bound as a `TenantAdmin` one until
+a real cross-tenant bypass is deliberately built.
+
+## 2026-09-03 — Fix: Archived Resource Names Now Release for Reuse
+
+**Tool:** Claude Code
+**What I asked for:** While building a Postman collection for manual WP-3 testing, an unrelated audit
+of the whole work package (see the entry below) surfaced that `Resource.Name`'s uniqueness index was
+never scoped to Active-only - an Archived resource's name stayed reserved forever, with no source
+anywhere stating whether that was intended. I gave my opinion (release it - Archived reads as deleted
+to a caller, so keeping its name locked out forever is surprising) and asked for it to actually be
+implemented once I agreed.
+**What the AI produced:** A filtered unique index on `Resources(TenantId, Name) WHERE [Status] <>
+'Archived'` (a new EF Core migration, `ArchivedResourceNameReleasedForReuse`), the matching change to
+`ResourceRepository.ExistsByNameAsync`'s app-level pre-check so it agrees with the new DB constraint,
+and flipped the one existing test that encoded the old "stays reserved" behavior into two tests -
+reuse-after-archive now succeeds, while two still-Active resources still correctly conflict. Verified
+against the real local SQL Server (not just the SQLite test suite) by creating a resource, archiving
+it, and successfully creating a new one with the identical name, then confirming a second *active*
+duplicate still 409s.
+**What I changed or rejected:** Applied the migration to the local dev database and manually restored
+two things the same testing session had accidentally left in a bad state along the way: the real
+seeded "Conference Room A" had gotten archived (restored to Active, its other fields were untouched),
+and several stray test resources - including a few named literally `{{resourceNameBase}}...` proving a
+Postman environment variable had gone temporarily undefined mid-session - were cleaned out of the dev
+database.
+**What I understand and could explain without notes:** Why this needed a real EF Core migration rather
+than just a code change - a filtered index is a schema object, not an application-level rule - and why
+SQL Server's filtered indexes specifically require `QUOTED_IDENTIFIER ON` for any write to the
+underlying table (ADO.NET/EF Core sets this automatically, `sqlcmd`'s default session does not, which
+is why a manual cleanup query against this table needed the setting spelled out explicitly).
+
+## 2026-09-02 — WP-3: Full Release-Readiness Audit
+
+**Tool:** Claude Code
+**What I asked for:** Adapted a detailed, phase-by-phase senior-engineer audit prompt (written for a
+different, more elaborate project) into one that actually matches this codebase - no NodaTime, no
+category lifecycle, no full-schedule-replacement endpoint, Pending bookings block availability (not
+just Confirmed), a 92-day range cap, no locking infrastructure beyond unique-index conflict detection -
+then had it run end-to-end as a background task: repository inventory, a business-invariant read of
+every WP-3 handler/repository, a security/tenant-isolation review, an error-contract inventory, a
+test-coverage gap analysis (with test-only additions allowed), and a real-SQL-Server persistence check
+on several boundary cases, finishing in a structured 13-section report.
+**What the AI produced:** 15 new passing tests across two files (cross-tenant 404s on every WP-3
+sub-resource route that didn't have one yet, a positive proof that overlapping-but-different
+AvailabilityRules and BlackoutPeriods are actually allowed - not just "not explicitly rejected" -
+correlation-ID presence on bodyless 401/403 responses, and the exact 91-vs-92-day range boundary), plus
+the full audit report identifying one Medium-severity item (a booking-repository fix from earlier this
+session over-fetches on real SQL Server, though it was a correct SQLite-compatibility fix) and the
+archived-resource-name question this then led into (see the entry above).
+**What I changed or rejected:** Independently re-ran all three test projects myself after the audit
+finished rather than trusting its reported counts - confirmed 122+10+61=193 passing, matching exactly.
+Caught the audit's own near-miss where it almost flagged four unused `ErrorCode` constants as a defect,
+before it found `.claude/skills/add-cqrs-feature/SKILL.md` documenting that pre-Group-3 handlers are
+deliberately exempt - a good example of why the skill files exist as a source of truth, not just the code.
+**What I understand and could explain without notes:** Why a background agent was the right way to run
+this rather than doing it inline - the scope (build + three test suites + a line-by-line read of every
+WP-3 handler against real SQL Server) was large enough to risk crowding out the rest of the session's
+context - and why I verified its test-count and diff claims myself afterward instead of relaying them
+as fact: an agent's summary describes what it intended to do, not necessarily what it did.
+
+## 2026-09-02 — WP-3: Resources & Availability API
+
+**Tool:** Claude Code
+**What I asked for:** The full Resources & Availability vertical slice on top of the WP-1 domain
+model: CRUD for resources, per-resource weekly availability rules and blackout periods, approver
+assignment, and a query that tells a caller what's actually bookable - all admin-only to write,
+readable by any tenant member. Along the way I also redirected the naming/folder conventions this
+work should follow (every command/query gets its own independent response record and a `Request`
+suffix; files grouped by CRUD verb - `Create/`/`Update/`/`Delete/`/`Get/` - with every entity of the
+feature sharing that folder, not one folder per use case) and made the core design call myself: the
+availability query has to be capacity-aware (an 8-laptop resource with 5 already booked still shows
+3 available), not a simple free/busy flag, since two different tenants can legitimately need
+different quantities of the same shared resource.
+**What the AI produced:** Resource/AvailabilityRule/BlackoutPeriod/ResourceApprover CRUD plus a
+capacity-aware `GetResourceAvailabilityQueryRequest` (sweep-line `IntervalMath.ComputeAvailableCapacity`
+splitting a window at every occupancy boundary and reporting remaining capacity per sub-interval,
+with blackouts consuming a resource's full capacity and bookings only their own `Quantity`),
+`ResourcesController` wiring all of it to HTTP, and three `.claude/skills/` files documenting the
+conventions above so future CRUD work in this repo follows them by default. Closed the work package
+with `ResourcesEndpointsTests.cs` (17 real end-to-end HTTP tests against a SQLite-backed
+`CustomWebApplicationFactory`) plus matching `TestDataSeeder` fixtures, and unit tests for every
+handler/validator and for `IntervalMath` itself.
+**What I changed or rejected:** Rejected the first folder-restructuring attempt outright (one folder
+per exact use case) and corrected it to one folder per CRUD verb shared across entities - re-ran the
+whole reorganization rather than accepting the first pass. Separately, the end-to-end tests caught
+two real bugs neither of the mocked unit tests could have: `BlackoutPeriodRepository` ordered by a
+`DateTimeOffset` column in SQL (untranslatable on the SQLite provider the test suite uses, though
+harmless on the real SQL Server target) and `BookingAvailabilityRepository` filtered by `StartUtc`/
+`EndUtc` with `<`/`>` directly in the SQL query (a genuine SQLite-provider limitation, not a SQL
+Server one) - both fixed by moving that part of the filtering to run in memory after materializing,
+matching a pattern the codebase already used for blackout periods. Also caught my own seeding bug in
+the same pass: `DateTimeOffset.UtcNow.Date` returns a `DateTime` with `Kind=Unspecified`, and
+converting that back to `DateTimeOffset` silently assumes the machine's local offset instead of UTC,
+which had shifted a seeded blackout onto the wrong calendar day.
+**What I understand and could explain without notes:** Why the availability response is layered into
+`OpenPeriods`/`Blackouts`/`BusyPeriods`/`BookableSlots` instead of one flat list, and why blackout
+periods and bookings are treated differently in the capacity math even though both are "occupancies"
+- a blackout means the resource itself is down, so it consumes full capacity regardless of the
+configured `Capacity` value, while a booking only consumes the quantity it actually reserved. Also
+why two EF Core query-translation failures could exist in code that already had full mocked unit-test
+coverage: a `Mock<IRepository>` never touches the real LINQ-to-SQL translator, so a query that's
+syntactically valid C# but untranslatable by a given provider only surfaces the first time it runs
+against a real database - which is exactly why this work package's integration tests hit the real
+(SQLite) provider instead of stopping at mocks.
+**What I understand needs follow-up:** The known future work, already flagged and saved for later:
+Booking-create will need transaction-scoped locking (`UPDLOCK`/`HOLDLOCK` or `SERIALIZABLE`) around a
+re-summed capacity check to avoid two concurrent bookings racing past an application-level check-then-insert
+and jointly overbooking a resource.
+
 ## 2026-08-27 — Fix: Correlation ID Missing from Console Log Lines
 
 **Tool:** Claude Code
