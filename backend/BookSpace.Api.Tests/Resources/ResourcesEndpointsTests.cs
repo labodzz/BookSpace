@@ -54,6 +54,51 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
+    // ASP.NET Core's built-in Forbid()/Challenge() result has no JSON body at all, so there is no
+    // ProblemDetails.Extensions to attach a correlationId to - but CorrelationIdMiddleware sets the
+    // response header before UseAuthentication/UseAuthorization ever run (it's the outermost
+    // middleware), so the header should still survive on a bare, bodyless 403. Verifies that claim
+    // rather than assuming it from the middleware ordering in Program.cs.
+    [Fact]
+    public async Task CreateResource_AsMember_StillHasCorrelationIdHeaderOnTheBareForbiddenResponse()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+
+        var response = await client.PostAsJsonAsync("/resources", new
+        {
+            resourceTypeId = TestDataSeeder.ResourceTypeId,
+            name = $"New Resource {Guid.NewGuid()}",
+            capacity = 4,
+            requiresApproval = false,
+            timeZoneId = "UTC",
+        });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        var values = Assert.Single(response.Headers.GetValues(BookSpace.Api.Logging.CorrelationIdMiddleware.HeaderName));
+        Assert.False(string.IsNullOrWhiteSpace(values));
+    }
+
+    // Same claim, for the bare 401 an anonymous caller gets from the fallback-auth-policy short circuit
+    // (no exception is thrown here either, so ValidationExceptionHandler/etc. never run).
+    [Fact]
+    public async Task CreateResource_WithoutToken_StillHasCorrelationIdHeaderOnTheBareUnauthorizedResponse()
+    {
+        using var client = _factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/resources", new
+        {
+            resourceTypeId = TestDataSeeder.ResourceTypeId,
+            name = $"New Resource {Guid.NewGuid()}",
+            capacity = 4,
+            requiresApproval = false,
+            timeZoneId = "UTC",
+        });
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        var values = Assert.Single(response.Headers.GetValues(BookSpace.Api.Logging.CorrelationIdMiddleware.HeaderName));
+        Assert.False(string.IsNullOrWhiteSpace(values));
+    }
+
     [Fact]
     public async Task UpdateResource_AsMember_ReturnsForbidden()
     {
@@ -291,6 +336,215 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
+    // Cross-tenant sub-resource access: a Globex resource id used from an Acme-authenticated client
+    // must 404 on every read route, not just the top-level GET /resources/{id} - each handler's own
+    // FindByIdAsync is tenant-filtered via the global query filter, so this exercises that filter on
+    // every distinct code path, not just one of them. (add-cqrs-feature's own tenant-isolation-review
+    // skill flagged this as planned-but-not-yet-written for the Resources feature - it never landed.)
+    [Fact]
+    public async Task GetResource_ForAnotherTenantsResource_ReturnsNotFound()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+
+        var response = await client.GetAsync($"/resources/{TestDataSeeder.GlobexResourceId}");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task GetAvailabilityRules_ForAnotherTenantsResource_ReturnsNotFound()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+
+        var response = await client.GetAsync($"/resources/{TestDataSeeder.GlobexResourceId}/availability-rules");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task GetBlackoutPeriods_ForAnotherTenantsResource_ReturnsNotFound()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+
+        var response = await client.GetAsync($"/resources/{TestDataSeeder.GlobexResourceId}/blackout-periods");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal("Resource.NotFound", await ReadErrorCodeAsync(response));
+    }
+
+    [Fact]
+    public async Task GetResourceApprovers_ForAnotherTenantsResource_ReturnsNotFound()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+
+        var response = await client.GetAsync($"/resources/{TestDataSeeder.GlobexResourceId}/approvers");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal("Resource.NotFound", await ReadErrorCodeAsync(response));
+    }
+
+    [Fact]
+    public async Task GetAvailability_ForAnotherTenantsResource_ReturnsNotFound()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var date = DateOnly.FromDateTime(TestDataSeeder.AvailabilityAnchorUtc.UtcDateTime);
+
+        var response = await client.GetAsync(
+            $"/resources/{TestDataSeeder.GlobexResourceId}/availability?from={date:yyyy-MM-dd}&to={date:yyyy-MM-dd}");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal("Resource.NotFound", await ReadErrorCodeAsync(response));
+    }
+
+    // An Archived resource is effectively deleted from the caller's point of view, so its name is
+    // released for reuse rather than reserved forever - the Resource.Name unique index is filtered
+    // to exclude Archived resources ("[Status] <> 'Archived'").
+    [Fact]
+    public async Task CreateResource_WithNameOfArchivedResource_Succeeds()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var name = $"Archived Reuse {Guid.NewGuid()}";
+        var created = await CreateResourceAsync(client, name);
+        var archiveResponse = await client.DeleteAsync($"/resources/{created.Id}");
+        Assert.Equal(HttpStatusCode.OK, archiveResponse.StatusCode);
+
+        var response = await client.PostAsJsonAsync("/resources", new
+        {
+            resourceTypeId = TestDataSeeder.ResourceTypeId,
+            name,
+            capacity = 4,
+            requiresApproval = false,
+            timeZoneId = "UTC",
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    // The flip side: two Active resources still cannot share a name - only Archived ones release it.
+    [Fact]
+    public async Task CreateResource_WithNameOfAnotherActiveResource_ReturnsConflict()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var name = $"Still Active {Guid.NewGuid()}";
+        await CreateResourceAsync(client, name);
+
+        var response = await client.PostAsJsonAsync("/resources", new
+        {
+            resourceTypeId = TestDataSeeder.ResourceTypeId,
+            name,
+            capacity = 4,
+            requiresApproval = false,
+            timeZoneId = "UTC",
+        });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task CreateAvailabilityRule_WithExactDuplicate_ReturnsConflict()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resource = await CreateResourceAsync(client, $"RuleDup {Guid.NewGuid()}");
+        var rule = new { dayOfWeek = DayOfWeek.Tuesday, startTime = "09:00:00", endTime = "11:00:00" };
+        await client.PostAsJsonAsync($"/resources/{resource.Id}/availability-rules", rule);
+
+        var response = await client.PostAsJsonAsync($"/resources/{resource.Id}/availability-rules", rule);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
+    // Overlapping-but-not-identical rules for the same resource/day are deliberately allowed (merged
+    // later by IntervalMath.Merge in the availability query) - only the exact-duplicate tuple is
+    // rejected. Proves Create doesn't reject the overlap, not just that the merge algorithm handles it.
+    [Fact]
+    public async Task CreateAvailabilityRule_WithOverlappingButDifferentRule_BothSucceed()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resource = await CreateResourceAsync(client, $"RuleOverlap {Guid.NewGuid()}");
+
+        var first = await client.PostAsJsonAsync($"/resources/{resource.Id}/availability-rules",
+            new { dayOfWeek = DayOfWeek.Wednesday, startTime = "08:00:00", endTime = "14:00:00" });
+        var second = await client.PostAsJsonAsync($"/resources/{resource.Id}/availability-rules",
+            new { dayOfWeek = DayOfWeek.Wednesday, startTime = "12:00:00", endTime = "18:00:00" });
+
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+    }
+
+    // Overlapping blackouts on the same resource are deliberately allowed at Create (see the code
+    // comment in CreateBlackoutPeriodCommandRequest.cs) - proves it's actually allowed, not merely untested.
+    [Fact]
+    public async Task CreateBlackoutPeriod_Overlapping_BothSucceed()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resource = await CreateResourceAsync(client, $"BlackoutOverlap {Guid.NewGuid()}");
+        var start = DateTimeOffset.UtcNow.AddDays(10);
+
+        var first = await client.PostAsJsonAsync($"/resources/{resource.Id}/blackout-periods",
+            new { startUtc = start, endUtc = start.AddHours(4), reason = "First" });
+        var second = await client.PostAsJsonAsync($"/resources/{resource.Id}/blackout-periods",
+            new { startUtc = start.AddHours(2), endUtc = start.AddHours(6), reason = "Second" });
+
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+    }
+
+    [Fact]
+    public async Task DeleteAvailabilityRule_ForWrongResourceId_ReturnsNotFound()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resourceA = await CreateResourceAsync(client, $"RuleOwnerA {Guid.NewGuid()}");
+        var resourceB = await CreateResourceAsync(client, $"RuleOwnerB {Guid.NewGuid()}");
+        var createResponse = await client.PostAsJsonAsync($"/resources/{resourceA.Id}/availability-rules",
+            new { dayOfWeek = DayOfWeek.Thursday, startTime = "08:00:00", endTime = "09:00:00" });
+        var rule = await createResponse.Content.ReadFromJsonAsync<AvailabilityRuleResponse>(JsonOptions);
+
+        var response = await client.DeleteAsync($"/resources/{resourceB.Id}/availability-rules/{rule!.Id}");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task UpdateBlackoutPeriod_ForWrongResourceId_ReturnsNotFound()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resourceA = await CreateResourceAsync(client, $"BlackoutOwnerA {Guid.NewGuid()}");
+        var resourceB = await CreateResourceAsync(client, $"BlackoutOwnerB {Guid.NewGuid()}");
+        var start = DateTimeOffset.UtcNow.AddDays(5);
+        var createResponse = await client.PostAsJsonAsync($"/resources/{resourceA.Id}/blackout-periods",
+            new { startUtc = start, endUtc = start.AddHours(1), reason = "Owner-check" });
+        var period = await createResponse.Content.ReadFromJsonAsync<BlackoutPeriodResponse>(JsonOptions);
+
+        var response = await client.PutAsJsonAsync($"/resources/{resourceB.Id}/blackout-periods/{period!.Id}",
+            new { startUtc = start, endUtc = start.AddHours(2), reason = "Changed" });
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal("BlackoutPeriod.NotFound", await ReadErrorCodeAsync(response));
+    }
+
+    [Fact]
+    public async Task DeleteBlackoutPeriod_ForWrongResourceId_ReturnsNotFound()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resourceA = await CreateResourceAsync(client, $"BlackoutDelOwnerA {Guid.NewGuid()}");
+        var resourceB = await CreateResourceAsync(client, $"BlackoutDelOwnerB {Guid.NewGuid()}");
+        var start = DateTimeOffset.UtcNow.AddDays(6);
+        var createResponse = await client.PostAsJsonAsync($"/resources/{resourceA.Id}/blackout-periods",
+            new { startUtc = start, endUtc = start.AddHours(1), reason = "Owner-check" });
+        var period = await createResponse.Content.ReadFromJsonAsync<BlackoutPeriodResponse>(JsonOptions);
+
+        var response = await client.DeleteAsync($"/resources/{resourceB.Id}/blackout-periods/{period!.Id}");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal("BlackoutPeriod.NotFound", await ReadErrorCodeAsync(response));
+    }
+
+    private static async Task<string?> ReadErrorCodeAsync(HttpResponseMessage response)
+    {
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        return document.RootElement.TryGetProperty("errorCode", out var value) ? value.GetString() : null;
+    }
+
     private async Task<ResourceResponse> CreateResourceAsync(HttpClient client, string name)
     {
         var response = await client.PostAsJsonAsync("/resources", new
@@ -322,6 +576,8 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         bool RequiresApproval, ResourceStatus Status, string TimeZoneId);
 
     private sealed record AvailabilityRuleResponse(Guid Id, Guid ResourceId, DayOfWeek DayOfWeek, TimeOnly StartTime, TimeOnly EndTime);
+
+    private sealed record BlackoutPeriodResponse(Guid Id, Guid ResourceId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, string Reason);
 
     private sealed record AvailabilityResponse(
         Guid ResourceId, DateOnly FromDate, DateOnly ToDate, string TimeZoneId, int Capacity,

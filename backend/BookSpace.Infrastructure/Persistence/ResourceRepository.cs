@@ -11,9 +11,11 @@ internal sealed class ResourceRepository(BookSpaceDbContext dbContext) : IResour
     public Task<Resource?> FindByIdAsync(Guid id, CancellationToken cancellationToken) =>
         dbContext.Resources.FirstOrDefaultAsync(resource => resource.Id == id, cancellationToken);
 
+    // Excludes Archived resources, matching the filtered unique index - an archived resource's name
+    // is released for reuse rather than reserved forever.
     public Task<bool> ExistsByNameAsync(string name, Guid? excludingResourceId, CancellationToken cancellationToken)
     {
-        var query = dbContext.Resources.Where(resource => resource.Name == name);
+        var query = dbContext.Resources.Where(resource => resource.Name == name && resource.Status != ResourceStatus.Archived);
         if (excludingResourceId is { } id)
         {
             query = query.Where(resource => resource.Id != id);

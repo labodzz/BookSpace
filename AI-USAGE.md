@@ -19,6 +19,64 @@ session). Fill in as you go — don't backfill from memory at the end.
 
 <!-- Add entries below, most recent first. -->
 
+## 2026-09-03 — Fix: Archived Resource Names Now Release for Reuse
+
+**Tool:** Claude Code
+**What I asked for:** While building a Postman collection for manual WP-3 testing, an unrelated audit
+of the whole work package (see the entry below) surfaced that `Resource.Name`'s uniqueness index was
+never scoped to Active-only - an Archived resource's name stayed reserved forever, with no source
+anywhere stating whether that was intended. I gave my opinion (release it - Archived reads as deleted
+to a caller, so keeping its name locked out forever is surprising) and asked for it to actually be
+implemented once I agreed.
+**What the AI produced:** A filtered unique index on `Resources(TenantId, Name) WHERE [Status] <>
+'Archived'` (a new EF Core migration, `ArchivedResourceNameReleasedForReuse`), the matching change to
+`ResourceRepository.ExistsByNameAsync`'s app-level pre-check so it agrees with the new DB constraint,
+and flipped the one existing test that encoded the old "stays reserved" behavior into two tests -
+reuse-after-archive now succeeds, while two still-Active resources still correctly conflict. Verified
+against the real local SQL Server (not just the SQLite test suite) by creating a resource, archiving
+it, and successfully creating a new one with the identical name, then confirming a second *active*
+duplicate still 409s.
+**What I changed or rejected:** Applied the migration to the local dev database and manually restored
+two things the same testing session had accidentally left in a bad state along the way: the real
+seeded "Conference Room A" had gotten archived (restored to Active, its other fields were untouched),
+and several stray test resources - including a few named literally `{{resourceNameBase}}...` proving a
+Postman environment variable had gone temporarily undefined mid-session - were cleaned out of the dev
+database.
+**What I understand and could explain without notes:** Why this needed a real EF Core migration rather
+than just a code change - a filtered index is a schema object, not an application-level rule - and why
+SQL Server's filtered indexes specifically require `QUOTED_IDENTIFIER ON` for any write to the
+underlying table (ADO.NET/EF Core sets this automatically, `sqlcmd`'s default session does not, which
+is why a manual cleanup query against this table needed the setting spelled out explicitly).
+
+## 2026-09-02 — WP-3: Full Release-Readiness Audit
+
+**Tool:** Claude Code
+**What I asked for:** Adapted a detailed, phase-by-phase senior-engineer audit prompt (written for a
+different, more elaborate project) into one that actually matches this codebase - no NodaTime, no
+category lifecycle, no full-schedule-replacement endpoint, Pending bookings block availability (not
+just Confirmed), a 92-day range cap, no locking infrastructure beyond unique-index conflict detection -
+then had it run end-to-end as a background task: repository inventory, a business-invariant read of
+every WP-3 handler/repository, a security/tenant-isolation review, an error-contract inventory, a
+test-coverage gap analysis (with test-only additions allowed), and a real-SQL-Server persistence check
+on several boundary cases, finishing in a structured 13-section report.
+**What the AI produced:** 15 new passing tests across two files (cross-tenant 404s on every WP-3
+sub-resource route that didn't have one yet, a positive proof that overlapping-but-different
+AvailabilityRules and BlackoutPeriods are actually allowed - not just "not explicitly rejected" -
+correlation-ID presence on bodyless 401/403 responses, and the exact 91-vs-92-day range boundary), plus
+the full audit report identifying one Medium-severity item (a booking-repository fix from earlier this
+session over-fetches on real SQL Server, though it was a correct SQLite-compatibility fix) and the
+archived-resource-name question this then led into (see the entry above).
+**What I changed or rejected:** Independently re-ran all three test projects myself after the audit
+finished rather than trusting its reported counts - confirmed 122+10+61=193 passing, matching exactly.
+Caught the audit's own near-miss where it almost flagged four unused `ErrorCode` constants as a defect,
+before it found `.claude/skills/add-cqrs-feature/SKILL.md` documenting that pre-Group-3 handlers are
+deliberately exempt - a good example of why the skill files exist as a source of truth, not just the code.
+**What I understand and could explain without notes:** Why a background agent was the right way to run
+this rather than doing it inline - the scope (build + three test suites + a line-by-line read of every
+WP-3 handler against real SQL Server) was large enough to risk crowding out the rest of the session's
+context - and why I verified its test-count and diff claims myself afterward instead of relaying them
+as fact: an agent's summary describes what it intended to do, not necessarily what it did.
+
 ## 2026-09-02 — WP-3: Resources & Availability API
 
 **Tool:** Claude Code
