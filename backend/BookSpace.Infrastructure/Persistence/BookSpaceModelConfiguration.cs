@@ -69,7 +69,8 @@ internal static class BookSpaceModelConfiguration
             entity.ToTable("ResourceTypes");
             entity.HasKey(type => type.Id);
             entity.Property(type => type.Name).HasMaxLength(100).IsRequired();
-            entity.HasIndex(type => type.Name).IsUnique();
+            entity.HasIndex(type => new { type.TenantId, type.Name }).IsUnique();
+            entity.HasOne<Tenant>().WithMany().HasForeignKey(type => type.TenantId).OnDelete(DeleteBehavior.Restrict);
         });
 
         builder.Entity<Resource>(entity =>

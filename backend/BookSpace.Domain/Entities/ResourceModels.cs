@@ -3,9 +3,10 @@ using BookSpace.Domain.Enums;
 
 namespace BookSpace.Domain.Entities;
 
-public sealed class ResourceType
+public sealed class ResourceType : ITenantOwned
 {
     public Guid Id { get; set; }
+    public Guid TenantId { get; set; }
     public string Name { get; set; } = string.Empty;
 }
 

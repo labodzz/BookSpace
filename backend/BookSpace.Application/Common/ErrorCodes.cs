@@ -19,4 +19,7 @@ internal static class ErrorCodes
 
     public const string ResourceApproverNotFound = "ResourceApprover.NotFound";
     public const string ResourceApproverConflict = "ResourceApprover.Conflict";
+
+    public const string ResourceTypeNameConflict = "ResourceType.NameConflict";
+    public const string ResourceTypeInUse = "ResourceType.InUse";
 }

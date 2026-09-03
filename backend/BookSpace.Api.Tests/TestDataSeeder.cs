@@ -25,6 +25,7 @@ public static class TestDataSeeder
     public const string AcmeMemberEmail = "member@acme.integration-test";
 
     public static readonly Guid ResourceTypeId = Guid.NewGuid();
+    public static readonly Guid GlobexResourceTypeId = Guid.NewGuid();
 
     public static readonly Guid AcmeResourceId = Guid.NewGuid();
     public static readonly Guid GlobexResourceId = Guid.NewGuid();
@@ -70,7 +71,9 @@ public static class TestDataSeeder
             new UserRole { Id = Guid.NewGuid(), UserId = AcmeMemberUserId, RoleId = memberRole.Id },
             new UserRole { Id = Guid.NewGuid(), UserId = GlobexMemberUserId, RoleId = memberRole.Id });
 
-        dbContext.ResourceTypes.Add(new ResourceType { Id = ResourceTypeId, Name = "Meeting Room" });
+        dbContext.ResourceTypes.AddRange(
+            new ResourceType { Id = ResourceTypeId, TenantId = AcmeTenantId, Name = "Meeting Room" },
+            new ResourceType { Id = GlobexResourceTypeId, TenantId = GlobexTenantId, Name = "Meeting Room" });
 
         dbContext.Resources.AddRange(
             new Resource
@@ -83,7 +86,7 @@ public static class TestDataSeeder
             // Globex-scoped assertions, never in an Acme tenant-isolation assertion.
             new Resource
             {
-                Id = GlobexResourceId, TenantId = GlobexTenantId, ResourceTypeId = ResourceTypeId,
+                Id = GlobexResourceId, TenantId = GlobexTenantId, ResourceTypeId = GlobexResourceTypeId,
                 Name = "Globex Only Room", Capacity = 4, RequiresApproval = false,
                 Status = ResourceStatus.Active, TimeZoneId = "UTC",
             });

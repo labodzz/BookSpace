@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using BookSpace.Application.Security;
 using BookSpace.Domain.Entities;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace BookSpace.Application.Auth;
@@ -11,13 +12,17 @@ public sealed class AuthenticationService(
     IRefreshTokenRepository refreshTokenRepository,
     IPasswordHasher passwordHasher,
     IJwtTokenGenerator jwtTokenGenerator,
-    IOptions<AuthOptions> authOptions) : IAuthenticationService
+    IOptions<AuthOptions> authOptions,
+    ILogger<AuthenticationService> logger) : IAuthenticationService
 {
     public async Task<LoginResult> LoginAsync(string email, string password, CancellationToken cancellationToken)
     {
         var user = await userRepository.FindByEmailAsync(email, cancellationToken);
         if (user is null || !passwordHasher.Verify(user.PasswordHash, password))
         {
+            // Information, not Error - a wrong password is expected user error, same reasoning as
+            // ValidationExceptionHandler. Only the email is logged, never the attempted password.
+            logger.LogInformation("Login failed for {Email}: invalid credentials", email);
             return new LoginResult(false, null);
         }
 
@@ -40,6 +45,12 @@ public sealed class AuthenticationService(
         {
             // This token was already rotated (or explicitly revoked) once - seeing it again means
             // someone other than the legitimate rotation is replaying it. Kill the whole family.
+            // Warning, not Information - unlike a wrong password, this is a concrete signal of likely
+            // refresh token theft, not routine expected user error.
+            logger.LogWarning(
+                "Refresh token reuse detected for user {UserId}; revoking token family {FamilyId}",
+                existing.UserId,
+                existing.FamilyId);
             await refreshTokenRepository.RevokeFamilyAsync(existing.FamilyId, cancellationToken);
             await refreshTokenRepository.SaveChangesAsync(cancellationToken);
             return new RefreshResult(false, null, true);

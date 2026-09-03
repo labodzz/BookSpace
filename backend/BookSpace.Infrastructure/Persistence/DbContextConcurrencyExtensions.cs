@@ -1,6 +1,8 @@
 using BookSpace.Application.Common;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.Extensions.Logging;
 
 namespace BookSpace.Infrastructure.Persistence;
 
@@ -23,8 +25,13 @@ internal static class DbContextConcurrencyExtensions
         catch (DbUpdateException exception) when (exception.InnerException is SqlException
         {
             Number: UniqueIndexViolation or UniqueConstraintViolation,
-        })
+        } sqlException)
         {
+            // The generic ConflictException message below is all the client sees, so the actual SQL
+            // error (which constraint/index fired) would otherwise never reach any log.
+            dbContext.GetService<ILoggerFactory>()
+                .CreateLogger(typeof(DbContextConcurrencyExtensions).FullName!)
+                .LogWarning(exception, "Unique constraint violation (SQL error {SqlErrorNumber}) handled as a conflict", sqlException.Number);
             throw new ConflictException("The request conflicts with existing data.");
         }
     }

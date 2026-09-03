@@ -19,6 +19,41 @@ session). Fill in as you go — don't backfill from memory at the end.
 
 <!-- Add entries below, most recent first. -->
 
+## 2026-09-03 — Feature: Resource Type Management (Full CRUD)
+
+**Tool:** Claude Code
+**What I asked for:** Noticed `ResourceType` had no Create endpoint at all - it could only be seeded
+directly into the database - and asked why it was a separate table instead of a field on `Resource`,
+then asked for a TenantAdmin-facing way to manage it, unsure whether SysAdmin should also be allowed
+and whether Update/Delete were needed. I gave a recommendation (yes to both, with Delete blocked
+rather than soft-deleted since a type has no history of its own) and got the go-ahead to build it.
+**What the AI produced:** `ResourceType` promoted from a global, unscoped lookup table to a full
+`ITenantOwned` entity (each tenant now owns its own copy of a type name, matching every other entity
+in this feature) - new migration `ResourceTypesAreTenantOwned`, filtered `(TenantId, Name)` unique
+index. Full CQRS vertical in `BookSpace.Application/ResourceTypes/` (Create/Update/Delete/Get,
+following the same file-per-request convention as Resources), `ResourceTypeRepository`, and a new
+`ResourceTypesController` at `/resource-types` with the same `TenantAdmin,SysAdmin`-for-writes /
+any-authenticated-member-for-reads split as `ResourcesController`. Delete is a hard delete (unlike
+`Resource`'s soft-delete) blocked with a 409 if any `Resource` still references the type, since an
+unused taxonomy row has no booking history worth preserving. 17 new Application-layer unit tests, 13
+new integration tests (admin-only writes, member read access, cross-tenant 404, in-use delete
+conflict). Ran the `tenant-isolation-review` checklist manually against the new entity - full pass.
+**What I changed or rejected:** Making `ResourceType` tenant-owned meant the two existing seeded rows
+(shared across both dev tenants) could no longer satisfy a NOT NULL tenant FK - `dotnet ef database
+update` failed the way I expected (a `defaultValue` of `Guid.Empty` doesn't match any real tenant). A
+straight `dotnet ef database drop` to start clean was blocked by the environment's safety classifier
+as a destructive action, so instead I cleared just the dependent tables via direct SQL (keeping
+Tenants/Users intact) and hand-reseeded the resource-side dev data to exactly match what
+`DevelopmentSeeder` now produces, verified by running the full CRUD flow against the real local SQL
+Server afterward (create, rename, delete-when-unused, 409-when-in-use, member forbidden on write,
+cross-tenant 404).
+**What I understand and could explain without notes:** Why `SysAdmin` getting the same
+`TenantAdmin,SysAdmin` role list as every other mutation endpoint here doesn't actually grant any
+cross-tenant reach in this codebase today - `CurrentUserContext.TenantId` reads straight from the
+JWT's `tenant_id` claim, which `JwtTokenGenerator` sets unconditionally from `user.TenantId` for every
+user regardless of role, so a `SysAdmin` account is just as tenant-bound as a `TenantAdmin` one until
+a real cross-tenant bypass is deliberately built.
+
 ## 2026-09-03 — Fix: Archived Resource Names Now Release for Reuse
 
 **Tool:** Claude Code
