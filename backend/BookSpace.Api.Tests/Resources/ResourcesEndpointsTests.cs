@@ -37,6 +37,27 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         Assert.Equal(ResourceStatus.Active, body.Status);
     }
 
+    // [Authorize(Roles = "TenantAdmin,SysAdmin")] on every mutation in this controller had never
+    // actually been exercised with a real SysAdmin login before this test - only TenantAdmin's half
+    // of that role list was ever proven to work.
+    [Fact]
+    public async Task CreateResource_AsSysAdmin_ReturnsOkWithCreatedResource()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+
+        var response = await client.PostAsJsonAsync("/resources", new
+        {
+            resourceTypeId = TestDataSeeder.ResourceTypeId,
+            name = $"New Resource {Guid.NewGuid()}",
+            description = (string?)null,
+            capacity = 4,
+            requiresApproval = false,
+            timeZoneId = "UTC",
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
     [Fact]
     public async Task CreateResource_AsMember_ReturnsForbidden()
     {
@@ -206,6 +227,19 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         Assert.DoesNotContain("Globex Only Room", payload);
     }
 
+    // Approver has no special read permissions of its own in WP-3 (that only matters once booking
+    // approval is built) - it should behave like any other authenticated tenant member for GET, not
+    // accidentally get blocked or elevated by [Authorize] resolving an unexpected role.
+    [Fact]
+    public async Task GetResources_AsApprover_ReturnsOk()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
+
+        var response = await client.GetAsync("/resources");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
     [Fact]
     public async Task DeleteResource_ArchivesRatherThanRemoves()
     {
@@ -298,6 +332,41 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
             slot.StartUtc <= TestDataSeeder.AcmeCancelledBookingStartUtc
             && slot.EndUtc >= TestDataSeeder.AcmeCancelledBookingEndUtc
             && slot.AvailableCapacity == 8);
+    }
+
+    // Full 6-value BookingStatus matrix in one place - only Pending and Confirmed are "active" per
+    // BookingAvailabilityRepository.ActiveStatuses; Rejected/Cancelled/Completed/NoShow must all be
+    // fully transparent to availability, exactly like Cancelled already is above.
+    [Fact]
+    public async Task GetAvailability_AcrossAllBookingStatuses_OnlyPendingAndConfirmedBlockCapacity()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var date = DateOnly.FromDateTime(TestDataSeeder.AvailabilityAnchorUtc.UtcDateTime);
+
+        var response = await client.GetAsync(
+            $"/resources/{TestDataSeeder.AcmeResourceId}/availability?from={date:yyyy-MM-dd}&to={date:yyyy-MM-dd}");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<AvailabilityResponse>(JsonOptions);
+
+        // Pending reduces capacity for its window, same as Confirmed.
+        Assert.Contains(body!.BusyPeriods, busy =>
+            busy.StartUtc == TestDataSeeder.AcmePendingBookingStartUtc && busy.Quantity == TestDataSeeder.AcmePendingBookingQuantity);
+        Assert.Contains(body.BookableSlots, slot =>
+            slot.StartUtc == TestDataSeeder.AcmePendingBookingStartUtc && slot.EndUtc == TestDataSeeder.AcmePendingBookingEndUtc
+            && slot.AvailableCapacity == 8 - TestDataSeeder.AcmePendingBookingQuantity);
+
+        // Rejected, Completed, and NoShow must never appear as busy periods or reduce capacity.
+        foreach (var (start, end) in new[]
+        {
+            (TestDataSeeder.AcmeRejectedBookingStartUtc, TestDataSeeder.AcmeRejectedBookingEndUtc),
+            (TestDataSeeder.AcmeCompletedBookingStartUtc, TestDataSeeder.AcmeCompletedBookingEndUtc),
+            (TestDataSeeder.AcmeNoShowBookingStartUtc, TestDataSeeder.AcmeNoShowBookingEndUtc),
+        })
+        {
+            Assert.DoesNotContain(body.BusyPeriods, busy => busy.StartUtc == start);
+            Assert.Contains(body.BookableSlots, slot => slot.StartUtc <= start && slot.EndUtc >= end && slot.AvailableCapacity == 8);
+        }
     }
 
     [Fact]

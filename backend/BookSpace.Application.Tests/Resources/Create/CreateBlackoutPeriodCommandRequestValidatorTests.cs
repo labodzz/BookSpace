@@ -42,4 +42,22 @@ public sealed class CreateBlackoutPeriodCommandRequestValidatorTests
 
         Assert.False(result.IsValid);
     }
+
+    [Fact]
+    public void Validate_WithReasonOfExactly1000Characters_HasNoErrors()
+    {
+        var start = DateTimeOffset.UtcNow.AddDays(1);
+        var result = _sut.Validate(new CreateBlackoutPeriodCommandRequest(Guid.NewGuid(), start, start.AddHours(1), new string('a', 1000)));
+
+        Assert.True(result.IsValid);
+    }
+
+    [Fact]
+    public void Validate_WithReasonOf1001Characters_HasErrors()
+    {
+        var start = DateTimeOffset.UtcNow.AddDays(1);
+        var result = _sut.Validate(new CreateBlackoutPeriodCommandRequest(Guid.NewGuid(), start, start.AddHours(1), new string('a', 1001)));
+
+        Assert.False(result.IsValid);
+    }
 }

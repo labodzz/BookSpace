@@ -35,4 +35,36 @@ public sealed class CreateResourceCommandRequestValidatorTests
 
         Assert.False(result.IsValid);
     }
+
+    [Fact]
+    public void Validate_WithNameOfExactly200Characters_HasNoErrors()
+    {
+        var result = _sut.Validate(new CreateResourceCommandRequest(Guid.NewGuid(), new string('a', 200), null, 8, false, "UTC"));
+
+        Assert.True(result.IsValid);
+    }
+
+    [Fact]
+    public void Validate_WithNameOf201Characters_HasErrors()
+    {
+        var result = _sut.Validate(new CreateResourceCommandRequest(Guid.NewGuid(), new string('a', 201), null, 8, false, "UTC"));
+
+        Assert.False(result.IsValid);
+    }
+
+    [Fact]
+    public void Validate_WithDescriptionOfExactly2000Characters_HasNoErrors()
+    {
+        var result = _sut.Validate(new CreateResourceCommandRequest(Guid.NewGuid(), "Conference Room A", new string('a', 2000), 8, false, "UTC"));
+
+        Assert.True(result.IsValid);
+    }
+
+    [Fact]
+    public void Validate_WithDescriptionOf2001Characters_HasErrors()
+    {
+        var result = _sut.Validate(new CreateResourceCommandRequest(Guid.NewGuid(), "Conference Room A", new string('a', 2001), 8, false, "UTC"));
+
+        Assert.False(result.IsValid);
+    }
 }

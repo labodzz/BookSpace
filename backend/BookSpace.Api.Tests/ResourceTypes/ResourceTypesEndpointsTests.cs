@@ -29,6 +29,16 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
     }
 
     [Fact]
+    public async Task CreateResourceType_AsSysAdmin_ReturnsOkWithCreatedResourceType()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+
+        var response = await client.PostAsJsonAsync("/resource-types", new { name = $"Parking Spot {Guid.NewGuid()}" });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
     public async Task CreateResourceType_AsMember_ReturnsForbidden()
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);

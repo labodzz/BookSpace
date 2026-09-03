@@ -24,6 +24,16 @@ public static class TestDataSeeder
     public static readonly Guid AcmeMemberUserId = Guid.NewGuid();
     public const string AcmeMemberEmail = "member@acme.integration-test";
 
+    // Both roles exist in the domain (Roles table / [Authorize(Roles = "TenantAdmin,SysAdmin")]
+    // everywhere in ResourcesController) but had no seeded user anywhere in this codebase - not in
+    // TestDataSeeder, not even in the Development-only seeder - so neither role's authorization path
+    // was ever actually exercised by a real login before these two were added.
+    public static readonly Guid AcmeApproverUserId = Guid.NewGuid();
+    public const string AcmeApproverEmail = "approver@acme.integration-test";
+
+    public static readonly Guid AcmeSysAdminUserId = Guid.NewGuid();
+    public const string AcmeSysAdminEmail = "sysadmin@acme.integration-test";
+
     public static readonly Guid ResourceTypeId = Guid.NewGuid();
     public static readonly Guid GlobexResourceTypeId = Guid.NewGuid();
 
@@ -48,6 +58,21 @@ public static class TestDataSeeder
     public static readonly DateTimeOffset AcmeCancelledBookingStartUtc = AvailabilityAnchorUtc.AddHours(18);
     public static readonly DateTimeOffset AcmeCancelledBookingEndUtc = AvailabilityAnchorUtc.AddHours(19);
 
+    // The remaining four BookingStatus values, so the full 6-status matrix has a seeded row of each -
+    // only Pending and Confirmed (above) are supposed to block/consume capacity.
+    public static readonly DateTimeOffset AcmePendingBookingStartUtc = AvailabilityAnchorUtc.AddHours(8);
+    public static readonly DateTimeOffset AcmePendingBookingEndUtc = AvailabilityAnchorUtc.AddHours(9);
+    public const int AcmePendingBookingQuantity = 2;
+
+    public static readonly DateTimeOffset AcmeRejectedBookingStartUtc = AvailabilityAnchorUtc.AddHours(9);
+    public static readonly DateTimeOffset AcmeRejectedBookingEndUtc = AvailabilityAnchorUtc.AddHours(10);
+
+    public static readonly DateTimeOffset AcmeCompletedBookingStartUtc = AvailabilityAnchorUtc.AddHours(12);
+    public static readonly DateTimeOffset AcmeCompletedBookingEndUtc = AvailabilityAnchorUtc.AddHours(13);
+
+    public static readonly DateTimeOffset AcmeNoShowBookingStartUtc = AvailabilityAnchorUtc.AddHours(20);
+    public static readonly DateTimeOffset AcmeNoShowBookingEndUtc = AvailabilityAnchorUtc.AddHours(21);
+
     public static async Task SeedAsync(BookSpaceDbContext dbContext, IPasswordHasher passwordHasher)
     {
         var passwordHash = passwordHasher.Hash(Password);
@@ -55,7 +80,9 @@ public static class TestDataSeeder
 
         var tenantAdminRole = new Role { Id = Guid.NewGuid(), Name = "TenantAdmin" };
         var memberRole = new Role { Id = Guid.NewGuid(), Name = "Member" };
-        dbContext.Roles.AddRange(tenantAdminRole, memberRole);
+        var approverRole = new Role { Id = Guid.NewGuid(), Name = "Approver" };
+        var sysAdminRole = new Role { Id = Guid.NewGuid(), Name = "SysAdmin" };
+        dbContext.Roles.AddRange(tenantAdminRole, memberRole, approverRole, sysAdminRole);
 
         dbContext.Tenants.AddRange(
             new Tenant { Id = AcmeTenantId, Name = "Acme Coworking", DefaultTimeZoneId = "UTC", Status = TenantStatus.Active, CreatedAtUtc = now },
@@ -64,11 +91,15 @@ public static class TestDataSeeder
         dbContext.Users.AddRange(
             new User { Id = AcmeAdminUserId, TenantId = AcmeTenantId, FirstName = "Acme", LastName = "Admin", Email = AcmeAdminEmail, PasswordHash = passwordHash, CreatedAtUtc = now },
             new User { Id = AcmeMemberUserId, TenantId = AcmeTenantId, FirstName = "Acme", LastName = "Member", Email = AcmeMemberEmail, PasswordHash = passwordHash, CreatedAtUtc = now },
+            new User { Id = AcmeApproverUserId, TenantId = AcmeTenantId, FirstName = "Acme", LastName = "Approver", Email = AcmeApproverEmail, PasswordHash = passwordHash, CreatedAtUtc = now },
+            new User { Id = AcmeSysAdminUserId, TenantId = AcmeTenantId, FirstName = "Acme", LastName = "SysAdmin", Email = AcmeSysAdminEmail, PasswordHash = passwordHash, CreatedAtUtc = now },
             new User { Id = GlobexMemberUserId, TenantId = GlobexTenantId, FirstName = "Globex", LastName = "Member", Email = GlobexMemberEmail, PasswordHash = passwordHash, CreatedAtUtc = now });
 
         dbContext.UserRoles.AddRange(
             new UserRole { Id = Guid.NewGuid(), UserId = AcmeAdminUserId, RoleId = tenantAdminRole.Id },
             new UserRole { Id = Guid.NewGuid(), UserId = AcmeMemberUserId, RoleId = memberRole.Id },
+            new UserRole { Id = Guid.NewGuid(), UserId = AcmeApproverUserId, RoleId = approverRole.Id },
+            new UserRole { Id = Guid.NewGuid(), UserId = AcmeSysAdminUserId, RoleId = sysAdminRole.Id },
             new UserRole { Id = Guid.NewGuid(), UserId = GlobexMemberUserId, RoleId = memberRole.Id });
 
         dbContext.ResourceTypes.AddRange(
@@ -118,6 +149,33 @@ public static class TestDataSeeder
                 Id = Guid.NewGuid(), TenantId = AcmeTenantId, ResourceId = AcmeResourceId, UserId = AcmeMemberUserId,
                 StartUtc = AcmeCancelledBookingStartUtc, EndUtc = AcmeCancelledBookingEndUtc, Quantity = 2,
                 Status = BookingStatus.Cancelled, CreatedAtUtc = now,
+            },
+            // Pending - blocks capacity, same as Confirmed (both count as "active" per the business rule).
+            new Booking
+            {
+                Id = Guid.NewGuid(), TenantId = AcmeTenantId, ResourceId = AcmeResourceId, UserId = AcmeMemberUserId,
+                StartUtc = AcmePendingBookingStartUtc, EndUtc = AcmePendingBookingEndUtc, Quantity = AcmePendingBookingQuantity,
+                Status = BookingStatus.Pending, CreatedAtUtc = now,
+            },
+            // Rejected/Completed/NoShow - like Cancelled, none of these are "active" and none should
+            // show up as a busy period or reduce available capacity.
+            new Booking
+            {
+                Id = Guid.NewGuid(), TenantId = AcmeTenantId, ResourceId = AcmeResourceId, UserId = AcmeMemberUserId,
+                StartUtc = AcmeRejectedBookingStartUtc, EndUtc = AcmeRejectedBookingEndUtc, Quantity = 1,
+                Status = BookingStatus.Rejected, CreatedAtUtc = now,
+            },
+            new Booking
+            {
+                Id = Guid.NewGuid(), TenantId = AcmeTenantId, ResourceId = AcmeResourceId, UserId = AcmeMemberUserId,
+                StartUtc = AcmeCompletedBookingStartUtc, EndUtc = AcmeCompletedBookingEndUtc, Quantity = 1,
+                Status = BookingStatus.Completed, CreatedAtUtc = now,
+            },
+            new Booking
+            {
+                Id = Guid.NewGuid(), TenantId = AcmeTenantId, ResourceId = AcmeResourceId, UserId = AcmeMemberUserId,
+                StartUtc = AcmeNoShowBookingStartUtc, EndUtc = AcmeNoShowBookingEndUtc, Quantity = 1,
+                Status = BookingStatus.NoShow, CreatedAtUtc = now,
             });
 
         await dbContext.SaveChangesAsync();
