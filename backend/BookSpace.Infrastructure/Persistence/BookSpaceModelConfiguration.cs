@@ -5,7 +5,7 @@ namespace BookSpace.Infrastructure.Persistence;
 
 internal static class BookSpaceModelConfiguration
 {
-    internal static void ConfigureBookSpaceModel(this ModelBuilder builder)
+    internal static void ConfigureBookSpaceModel(this ModelBuilder builder, bool useRowVersionColumns)
     {
         builder.Entity<Tenant>(entity =>
         {
@@ -62,6 +62,10 @@ internal static class BookSpaceModelConfiguration
             entity.HasIndex(token => token.TokenHash).IsUnique();
             entity.HasIndex(token => token.FamilyId);
             entity.HasOne<User>().WithMany().HasForeignKey(token => token.UserId).OnDelete(DeleteBehavior.Cascade);
+            if (useRowVersionColumns)
+            {
+                entity.Property(token => token.RowVersion).IsRowVersion();
+            }
         });
 
         builder.Entity<ResourceType>(entity =>

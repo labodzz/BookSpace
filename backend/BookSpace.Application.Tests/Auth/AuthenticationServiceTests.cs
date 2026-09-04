@@ -1,4 +1,5 @@
 using BookSpace.Application.Auth;
+using BookSpace.Application.Common;
 using BookSpace.Application.Security;
 using BookSpace.Domain.Entities;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -251,6 +252,41 @@ public sealed class AuthenticationServiceTests
         Assert.Null(result.Tokens);
         _refreshTokenRepository.Verify(r => r.RevokeFamilyAsync(familyId, It.IsAny<CancellationToken>()), Times.Once);
         _refreshTokenRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task RefreshAsync_WhenRotationLosesAConcurrencyRace_ReturnsFailureWithoutReuseDetection()
+    {
+        // Simulates a second concurrent refresh request losing the race: IssueTokensAsync's
+        // SaveChangesAsync throws ConflictException (translated from a RowVersion mismatch by
+        // SaveChangesHandlingConflictsAsync) because another request already rotated this exact token
+        // first. The loser must fail cleanly, not be mistaken for a reuse/theft signal.
+        var user = CreateUser();
+        var existingToken = new RefreshToken
+        {
+            Id = Guid.NewGuid(),
+            UserId = user.Id,
+            FamilyId = Guid.NewGuid(),
+            TokenHash = "raced-hash",
+            CreatedAtUtc = DateTimeOffset.UtcNow.AddDays(-1),
+            ExpiresAtUtc = DateTimeOffset.UtcNow.AddDays(13),
+        };
+        _refreshTokenRepository.Setup(r => r.FindByTokenHashAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(existingToken);
+        _userRepository.Setup(r => r.FindByIdForAuthenticationAsync(user.Id, It.IsAny<CancellationToken>())).ReturnsAsync(user);
+        _userRepository.Setup(r => r.GetRolesAsync(user.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<string>)["Member"]);
+        _jwtTokenGenerator.Setup(g => g.GenerateAccessToken(user, It.IsAny<IReadOnlyCollection<string>>()))
+            .Returns(new AccessToken("new-access-token", DateTimeOffset.UtcNow.AddMinutes(15)));
+        _refreshTokenRepository.Setup(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new ConflictException("The record was modified by another request. Reload and try again."));
+
+        var sut = CreateSut();
+        var result = await sut.RefreshAsync("raced-token", CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.False(result.ReuseDetected);
+        Assert.Null(result.Tokens);
     }
 
     [Fact]
