@@ -1,5 +1,6 @@
 using BookSpace.Application.Common;
 using BookSpace.Application.Mediator;
+using BookSpace.Domain.Enums;
 using FluentValidation;
 
 namespace BookSpace.Application.Resources;
@@ -91,11 +92,18 @@ public sealed class GetResourceAvailabilityQueryHandler(
             .Concat(bookings.Select(booking => (booking.StartUtc, booking.EndUtc, Amount: booking.Quantity)))
             .ToList();
 
-        var bookableSlots = openPeriods
-            .SelectMany(window => IntervalMath.ComputeAvailableCapacity(window, resource.Capacity, occupancies))
-            .OrderBy(slot => slot.Start)
-            .Select(slot => new BookableSlotResponse(slot.Start, slot.End, slot.AvailableCapacity))
-            .ToList();
+        // A resource that isn't Active isn't bookable at all, regardless of what its schedule/blackouts/
+        // bookings would otherwise compute - Maintenance and Inactive both mean "not available for use
+        // right now", the same way a blackout means "unavailable" independent of configured capacity.
+        // OpenPeriods/Blackouts/BusyPeriods still reflect the resource's configured schedule and real
+        // occupancy either way, so a caller can see why nothing is bookable.
+        var bookableSlots = resource.Status != ResourceStatus.Active
+            ? []
+            : openPeriods
+                .SelectMany(window => IntervalMath.ComputeAvailableCapacity(window, resource.Capacity, occupancies))
+                .OrderBy(slot => slot.Start)
+                .Select(slot => new BookableSlotResponse(slot.Start, slot.End, slot.AvailableCapacity))
+                .ToList();
 
         return new GetResourceAvailabilityResponse(
             resource.Id,

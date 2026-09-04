@@ -193,4 +193,45 @@ public sealed class GetResourceAvailabilityQueryHandlerTests
         var busyPeriod = Assert.Single(result.BusyPeriods);
         Assert.Equal(5, busyPeriod.Quantity);
     }
+
+    [Fact]
+    public async Task Handle_ForResourceInMaintenance_ReturnsNoBookableSlotsButStillReportsSchedule()
+    {
+        var resource = CreateResource(capacity: 8);
+        resource.Status = ResourceStatus.Maintenance;
+        var rule = new AvailabilityRule
+        {
+            Id = Guid.NewGuid(), TenantId = resource.TenantId, ResourceId = resource.Id,
+            DayOfWeek = Date.DayOfWeek, StartTime = new TimeOnly(8, 0), EndTime = new TimeOnly(18, 0),
+        };
+        _resourceRepository.Setup(r => r.FindByIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(resource);
+        _availabilityRuleRepository.Setup(r => r.GetByResourceIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync([rule]);
+        SetupNoBlackoutsOrBookings(resource);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new GetResourceAvailabilityQueryRequest(resource.Id, Date, Date), CancellationToken.None);
+
+        Assert.Empty(result.BookableSlots);
+        Assert.NotEmpty(result.OpenPeriods);
+    }
+
+    [Fact]
+    public async Task Handle_ForInactiveResource_ReturnsNoBookableSlots()
+    {
+        var resource = CreateResource(capacity: 8);
+        resource.Status = ResourceStatus.Inactive;
+        var rule = new AvailabilityRule
+        {
+            Id = Guid.NewGuid(), TenantId = resource.TenantId, ResourceId = resource.Id,
+            DayOfWeek = Date.DayOfWeek, StartTime = new TimeOnly(8, 0), EndTime = new TimeOnly(18, 0),
+        };
+        _resourceRepository.Setup(r => r.FindByIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(resource);
+        _availabilityRuleRepository.Setup(r => r.GetByResourceIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync([rule]);
+        SetupNoBlackoutsOrBookings(resource);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new GetResourceAvailabilityQueryRequest(resource.Id, Date, Date), CancellationToken.None);
+
+        Assert.Empty(result.BookableSlots);
+    }
 }
