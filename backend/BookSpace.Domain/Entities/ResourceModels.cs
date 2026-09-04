@@ -21,6 +21,11 @@ public sealed class Resource : ITenantOwned
     public bool RequiresApproval { get; set; }
     public ResourceStatus Status { get; set; }
     public string TimeZoneId { get; set; } = string.Empty;
+
+    // SQL Server rowversion, EF-managed - detects two concurrent updates (or an update racing an
+    // archive) loaded from the same starting state, so the loser gets a 409 instead of silently
+    // overwriting the winner's change.
+    public byte[] RowVersion { get; set; } = [];
 }
 
 public sealed class AvailabilityRule : ITenantOwned
@@ -41,6 +46,9 @@ public sealed class BlackoutPeriod : ITenantOwned
     public DateTimeOffset StartUtc { get; set; }
     public DateTimeOffset EndUtc { get; set; }
     public string Reason { get; set; } = string.Empty;
+
+    // SQL Server rowversion, EF-managed - see Resource.RowVersion for why.
+    public byte[] RowVersion { get; set; } = [];
 }
 
 public sealed class ResourceApprover : ITenantOwned

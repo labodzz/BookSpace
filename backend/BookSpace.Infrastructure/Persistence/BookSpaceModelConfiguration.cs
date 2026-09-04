@@ -93,6 +93,10 @@ internal static class BookSpaceModelConfiguration
                 .HasFilter("[Status] <> 'Archived'");
             entity.HasOne<Tenant>().WithMany().HasForeignKey(resource => resource.TenantId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne<ResourceType>().WithMany().HasForeignKey(resource => resource.ResourceTypeId).OnDelete(DeleteBehavior.Restrict);
+            if (useRowVersionColumns)
+            {
+                entity.Property(resource => resource.RowVersion).IsRowVersion();
+            }
         });
 
         builder.Entity<AvailabilityRule>(entity =>
@@ -114,6 +118,10 @@ internal static class BookSpaceModelConfiguration
             entity.HasIndex(period => new { period.ResourceId, period.StartUtc, period.EndUtc });
             entity.HasOne<Tenant>().WithMany().HasForeignKey(period => period.TenantId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne<Resource>().WithMany().HasForeignKey(period => period.ResourceId).OnDelete(DeleteBehavior.Cascade);
+            if (useRowVersionColumns)
+            {
+                entity.Property(period => period.RowVersion).IsRowVersion();
+            }
         });
 
         builder.Entity<ResourceApprover>(entity =>
