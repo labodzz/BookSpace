@@ -43,7 +43,8 @@ public sealed class UpdateResourceCommandRequestValidator : AbstractValidator<Up
     }
 }
 
-public sealed class UpdateResourceCommandHandler(IResourceRepository resourceRepository)
+public sealed class UpdateResourceCommandHandler(
+    IResourceRepository resourceRepository, IBookingAvailabilityRepository bookingAvailabilityRepository)
     : IRequestHandler<UpdateResourceCommandRequest, UpdateResourceResponse>
 {
     public async Task<UpdateResourceResponse> Handle(UpdateResourceCommandRequest request, CancellationToken cancellationToken)
@@ -69,6 +70,11 @@ public sealed class UpdateResourceCommandHandler(IResourceRepository resourceRep
             throw new ConflictException($"A resource named '{request.Name}' already exists.");
         }
 
+        if (request.Capacity < resource.Capacity)
+        {
+            await EnsureCapacityCoversExistingBookingsAsync(resource.Id, request.Capacity, cancellationToken);
+        }
+
         resource.ResourceTypeId = request.ResourceTypeId;
         resource.Name = request.Name;
         resource.Description = request.Description;
@@ -88,5 +94,49 @@ public sealed class UpdateResourceCommandHandler(IResourceRepository resourceRep
             resource.RequiresApproval,
             resource.Status,
             resource.TimeZoneId);
+    }
+
+    // Booking-create doesn't exist yet in this codebase, so this only guards against the one write
+    // path that already exists and could otherwise orphan a commitment: shrinking Capacity below what
+    // active (Pending/Confirmed) bookings already require at some point in time. A sweep-line over
+    // each booking's [Start, +Quantity) / [End, -Quantity) events finds the highest concurrent demand;
+    // IntervalMath.ComputeAvailableCapacity isn't reused here since it answers a different question
+    // (which sub-intervals remain bookable), not "what's the single worst-case peak".
+    private async Task EnsureCapacityCoversExistingBookingsAsync(Guid resourceId, int newCapacity, CancellationToken cancellationToken)
+    {
+        var activeBookings = await bookingAvailabilityRepository.GetActiveBookingsAsync(
+            resourceId, DateTimeOffset.UtcNow, DateTimeOffset.MaxValue, cancellationToken);
+
+        if (activeBookings.Count == 0)
+        {
+            return;
+        }
+
+        // IsStart breaks ties at an identical timestamp: an end event must be applied before a start
+        // event at the same instant, or two back-to-back (non-overlapping) bookings - one ending
+        // exactly when the next begins, entirely legal at full capacity - would be miscounted as
+        // briefly overlapping and inflate the peak. This matches the half-open [Start, End) convention
+        // used everywhere else in this feature (e.g. the availability query's own StartUtc</EndUtc>
+        // overlap checks).
+        var peakDemand = activeBookings
+            .SelectMany(booking => new[]
+            {
+                (Time: booking.StartUtc, IsStart: true, Delta: booking.Quantity),
+                (Time: booking.EndUtc, IsStart: false, Delta: -booking.Quantity),
+            })
+            .OrderBy(change => change.Time)
+            .ThenBy(change => change.IsStart)
+            .Aggregate((Running: 0, Peak: 0), (state, change) =>
+            {
+                var running = state.Running + change.Delta;
+                return (running, Math.Max(state.Peak, running));
+            })
+            .Peak;
+
+        if (peakDemand > newCapacity)
+        {
+            throw new ConflictException(
+                $"Cannot reduce capacity to {newCapacity}: existing bookings require at least {peakDemand} at their peak overlap.");
+        }
     }
 }

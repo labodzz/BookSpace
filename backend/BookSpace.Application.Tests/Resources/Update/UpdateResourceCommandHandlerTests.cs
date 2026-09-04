@@ -10,8 +10,9 @@ namespace BookSpace.Application.Tests.Resources;
 public sealed class UpdateResourceCommandHandlerTests
 {
     private readonly Mock<IResourceRepository> _resourceRepository = new();
+    private readonly Mock<IBookingAvailabilityRepository> _bookingAvailabilityRepository = new();
 
-    private UpdateResourceCommandHandler CreateSut() => new(_resourceRepository.Object);
+    private UpdateResourceCommandHandler CreateSut() => new(_resourceRepository.Object, _bookingAvailabilityRepository.Object);
 
     private static Resource CreateResource(Guid? id = null) => new()
     {
