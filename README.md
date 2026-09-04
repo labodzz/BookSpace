@@ -4,7 +4,9 @@ Multi-tenant resource booking platform. Organizations (tenants) publish bookable
 availability rules, and members create one-off or recurring bookings against live availability with a
 collision-free guarantee.
 
-See [AI-USAGE.md](AI-USAGE.md) for how AI assistance was used while building this project.
+See [docs/](docs/README.md) for architecture, tenant isolation, authentication, resource lifecycle,
+and availability documentation, and [AI-USAGE.md](AI-USAGE.md) for how AI assistance was used while
+building this project.
 
 ## Repository layout
 

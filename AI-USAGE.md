@@ -19,6 +19,119 @@ session). Fill in as you go — don't backfill from memory at the end.
 
 <!-- Add entries below, most recent first. -->
 
+## 2026-09-04 — Git history reorganization and architecture documentation
+
+**Tool:** Claude Code
+**What I asked for:** The remediation pass above was done as uncommitted work directly on `dev`. Asked
+for it to be reorganized into four clean, independently reviewable branches/PRs without losing or
+changing any of it, plus a `/docs` set covering the architecture/tenant-isolation/auth/resource-
+lifecycle/availability decisions made along the way, an audit-remediation summary, genuinely open
+questions, and a handoff note for whichever Work Packet (likely Booking) comes next.
+**What the AI produced:** Confirmed via `git status`/`git log`/`git rev-list` that nothing had been
+committed and `dev` matched `origin/dev` exactly (Scenario A - safest case, no shared history to
+rewrite) before touching anything; stashed everything as a safety backup first. Split the work into
+`fix/tenant-isolation-fail-closed` (3 commits), `fix/auth-refresh-token-security` (3 commits, based on
+the tenancy branch - it needed the new `FindByIdForAuthenticationAsync` method that branch introduces),
+`fix/resource-integrity-and-concurrency` (4 commits, based on the auth branch - it needed the shared
+`DbUpdateConcurrencyException` handling and RowVersion migration infrastructure introduced there), and
+`fix/availability-correctness-and-performance` (4 commits, independent, based on `dev` directly) -
+regenerating the single combined RowVersion migration as two separate ones (RefreshToken alone; then
+Resource+BlackoutPeriod) so each branch carries a real, working migration rather than an artificially
+split one. Verified every branch's diff against its actual base and ran the full build+test suite
+(`--no-incremental`, since a plain solution build silently skipped a stale test project once) after
+every single commit, not just at the end. Wrote nine documents under `docs/` plus a `docs/README.md`
+index, distributed so each fix branch's PR carries only the documentation for what it actually changed
+and the four cross-cutting documents (architecture overview, audit summary, open questions, next-WP
+handoff) live in a fifth `docs/audit-remediation-and-architecture` branch built on top of all four.
+**What I changed or rejected:** Caught my own mistake mid-process: an early commit accidentally
+included more files than intended because `git checkout stash@{0} -- <file>` leaves files staged, which
+I didn't realize until `git show --stat` on the resulting commit; fixed with `git reset --soft` before
+anything was shared. Separately, a `git cherry-pick` conflict resolution silently dropped an
+already-applied change from an earlier commit in the same file (confirmed by grep, not just by trusting
+"Auto-merging" with no conflict marker) - reset that one branch back to its last-known-good commit and
+redid the cherry-picks with an explicit diff-against-source-branch check after each one, rather than
+trusting the absence of a conflict marker to mean a correct merge. That same check then caught a third,
+older gap: two DST regression tests (an ordinary non-UTC-timezone interval, and a multi-day midnight-
+boundary case) had gone missing from an earlier manual reconstruction of the availability branch and
+were absent from every downstream branch built on top of it - fixed at the source commit and every
+branch stacked on it re-verified against the original file content, not just re-tested.
+**What I understand and could explain without notes:** Why the recommended branch order in the request
+(auth, then tenancy) had to be reversed once I traced the actual code dependency -
+`AuthenticationService.RefreshAsync` calls a method that only exists because of the tenancy branch's
+fail-closed fix, so auth cannot compile standalone without it - and why `git diff <base>...<branch>`
+(triple-dot, diff against the merge-base) rather than plain `git diff <base> <branch>` is the right way
+to verify a branch carries only its own intended changes when branches are stacked on top of each other.
+
+## 2026-09-04 — Targeted remediation pass: refresh-token security, tenant isolation, resource lifecycle, DST, concurrency
+
+**Tool:** Claude Code
+**What I asked for:** After fixing the blackout-in-the-past bug, asked for a project-wide hunt for the
+same class of defect ("compiles, passes validation, green tests, but doesn't make real-world sense"),
+run as two parallel audit agents (Auth/Users, Resources/ResourceTypes). Combined their findings with
+several deeper items I'd separately identified (tenant filter fails open on a null tenant context, no
+optimistic concurrency anywhere, a real JWT signing key committed since WP-2) into one remediation
+prompt: verify each against current code first, classify as MUST FIX NOW / FIX NOW IF LOW-RISK / DEFER
+/ NOT REAL, then implement only the approved tiers - explicitly not a blind "fix everything the audit
+said" pass.
+**What the AI produced:**
+- **Refresh token reuse-detection ordering** (`AuthenticationService.RefreshAsync`): revoked/replaced
+  is now checked *before* expiry, not after - a stolen token replayed after its own expiry window used
+  to silently skip family revocation.
+- **Refresh token rotation race**: `RefreshToken` gained a `RowVersion` column; a losing concurrent
+  rotation now gets a clean failed refresh instead of two valid sibling tokens existing at once. Proven
+  against real SQL Server (`RefreshTokenRotationConcurrencyTests`) since SQLite can't raise the same
+  concurrency exception.
+- **Tenant filter fails closed**: `BookSpaceDbContext`'s global query filter no longer treats a null
+  tenant context as "see everything" - it now sees nothing. The one legitimate pre-tenant-context read
+  (looking a user up by email at login, and by id during refresh) now uses an explicit
+  `IgnoreQueryFilters()` path (`IUserRepository.FindByIdForAuthenticationAsync` is new; the existing
+  tenant-filtered `FindByIdAsync` still backs the approver-assignment cross-tenant guard, which must
+  stay filtered). Proven with a new `TenantIsolationFilterTests` suite.
+- **Resource lifecycle**: `Archived` is now enforced as terminal - `UpdateResourceCommand` rejects any
+  edit to an already-archived resource instead of allowing a full field rewrite (including reactivation)
+  to ride along with a status change; `AvailabilityRule`/`BlackoutPeriod`/`ResourceApprover` creation
+  now also rejects an archived parent (Maintenance is deliberately still allowed, since it's temporary).
+- **Availability query respects Status**: a `Maintenance`/`Inactive` resource now reports zero
+  `BookableSlots` (same mechanism as a blackout - full unavailability - while still showing its
+  schedule/occupancy for context) instead of looking identical to `Active`.
+- **Capacity reduction guard**: `UpdateResourceCommand` now rejects shrinking `Capacity` below the
+  peak concurrent demand of existing active bookings, computed via a small sweep-line - reuses the
+  existing read-only `IBookingAvailabilityRepository`, no booking-workflow invented.
+- **Blackout Update backdating rule**: narrower than "must be in the future" (which would break
+  correcting a Reason on an already-elapsed blackout) - rejects only moving `StartUtc` further into the
+  past than it already was.
+- **DST policy**: the spring-forward crash (an invalid local time threw `ArgumentException`) is fixed
+  by normalizing forward past the gap; fall-back ambiguity and DST-crossing intervals were already
+  handled by .NET's own default/the existing documented limitation - both are now explicitly tested
+  against real `Europe/Sarajevo` transition dates instead of being implicit.
+- **Availability query performance**: `BookingAvailabilityRepository` now filters the time range in SQL
+  on real SQL Server (bounded by the existing `Booking` index) instead of always fetching a resource's
+  entire booking history; SQLite (integration tests only) keeps the old fetch-then-filter path since its
+  provider can't translate the comparison - proven correct on SQL Server by a new
+  `BookingAvailabilityRepositoryTests`.
+- **Optimistic concurrency on Resource/BlackoutPeriod**: same `RowVersion` mechanism as the refresh
+  token fix, translated to a 409 via the existing `SaveChangesHandlingConflictsAsync` - no API/DTO
+  contract change, since EF compares against what the same request's own read saw.
+- **JWT signing key**: removed from the tracked `appsettings.Development.json`, a new key generated
+  into local user-secrets (`dotnet user-secrets`).
+- One new migration (`AddOptimisticConcurrencyRowVersions`), 4 new Infrastructure.Tests files (real
+  LocalDB), assorted new Application.Tests coverage for every behavior change above.
+**What I changed or rejected:** Deferred composite tenant-scoped foreign keys (Resource→ResourceType
+etc.) - the schema itself doesn't enforce a child can't reference a different tenant's parent, but
+every write handler already re-validates the parent through a tenant-filtered lookup first, so there's
+no live exploit path today; a migration touching ~8 tables for defense-in-depth beyond that felt like
+the "enormous migration" the remediation brief itself said to avoid without a concrete need. Also
+rejected an early attempt at the DST fix (`TimeZoneInfoOptions.NoThrowOnInvalidTime`, applied via a
+GitHub Copilot suggestion before this session) once it turned out that type isn't part of .NET 10's
+public API surface at all - confirmed by a real, isolated compile check - and had actually left `dev`
+broken; reverted to the original `ConvertTimeToUtc` call as the base for the real fix.
+**What I understand and could explain without notes:** Why `FindByIdAsync` couldn't just be made to
+bypass the tenant filter everywhere - it has two callers with opposite needs (refresh, which has no
+tenant yet, and approver-assignment's cross-tenant existence check, which relies on the filter as a
+security guard) - and why RowVersion needed provider-conditional configuration (`Database.IsSqlServer()`
+gating `.IsRowVersion()`): SQL Server's `rowversion` type is server-generated, SQLite has no equivalent,
+so the same mapping produces a NOT NULL violation on every insert under SQLite.
+
 ## 2026-09-03 — Feature: Resource Type Management (Full CRUD)
 
 **Tool:** Claude Code
