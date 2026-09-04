@@ -223,6 +223,37 @@ public sealed class AuthenticationServiceTests
     }
 
     [Fact]
+    public async Task RefreshAsync_WithAlreadyRotatedTokenThatHasSinceExpired_StillRevokesFamilyAndReportsReuseDetected()
+    {
+        // Reuse detection must fire even when the presented token is ALSO now expired - an attacker
+        // who waits out a stolen token's own expiry window before replaying it must not get a quieter
+        // "just invalid" outcome that skips family revocation. This is the precedence bug fixed this
+        // session: expiry was previously checked before reuse, silently swallowing this exact case.
+        var familyId = Guid.NewGuid();
+        var existingToken = new RefreshToken
+        {
+            Id = Guid.NewGuid(),
+            UserId = Guid.NewGuid(),
+            FamilyId = familyId,
+            TokenHash = "already-rotated-and-expired-hash",
+            CreatedAtUtc = DateTimeOffset.UtcNow.AddDays(-30),
+            ExpiresAtUtc = DateTimeOffset.UtcNow.AddDays(-16),
+            ReplacedByTokenId = Guid.NewGuid(),
+        };
+        _refreshTokenRepository.Setup(r => r.FindByTokenHashAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(existingToken);
+
+        var sut = CreateSut();
+        var result = await sut.RefreshAsync("stolen-and-now-expired-token", CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.True(result.ReuseDetected);
+        Assert.Null(result.Tokens);
+        _refreshTokenRepository.Verify(r => r.RevokeFamilyAsync(familyId, It.IsAny<CancellationToken>()), Times.Once);
+        _refreshTokenRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
     public async Task RefreshAsync_WhenUserNoLongerExists_ReturnsFailure()
     {
         var existingToken = new RefreshToken

@@ -36,11 +36,15 @@ public sealed class AuthenticationService(
         var tokenHash = HashToken(refreshToken);
         var existing = await refreshTokenRepository.FindByTokenHashAsync(tokenHash, cancellationToken);
 
-        if (existing is null || existing.ExpiresAtUtc <= DateTimeOffset.UtcNow)
+        if (existing is null)
         {
             return new RefreshResult(false, null, false);
         }
 
+        // Checked BEFORE expiry, deliberately: a token that was already rotated/revoked is a reuse
+        // signal regardless of whether it has ALSO since expired - an attacker who waits out a stolen
+        // token's own expiry window before replaying it must not get a quieter "just invalid" outcome
+        // that skips family revocation.
         if (existing.RevokedAtUtc is not null || existing.ReplacedByTokenId is not null)
         {
             // This token was already rotated (or explicitly revoked) once - seeing it again means
@@ -54,6 +58,11 @@ public sealed class AuthenticationService(
             await refreshTokenRepository.RevokeFamilyAsync(existing.FamilyId, cancellationToken);
             await refreshTokenRepository.SaveChangesAsync(cancellationToken);
             return new RefreshResult(false, null, true);
+        }
+
+        if (existing.ExpiresAtUtc <= DateTimeOffset.UtcNow)
+        {
+            return new RefreshResult(false, null, false);
         }
 
         var user = await userRepository.FindByIdForAuthenticationAsync(existing.UserId, cancellationToken);
