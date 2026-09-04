@@ -51,6 +51,14 @@ public sealed class UpdateResourceCommandHandler(IResourceRepository resourceRep
         var resource = await resourceRepository.FindByIdAsync(request.Id, cancellationToken)
             ?? throw new NotFoundException($"Resource {request.Id} was not found.");
 
+        // Archived is terminal: DeleteResourceCommand is the only way in, and there is deliberately no
+        // way back out via a general-purpose field edit - a full field rewrite bundled with a status
+        // flip would let Update silently "reactivate" a resource nobody asked to reactivate.
+        if (resource.Status == ResourceStatus.Archived)
+        {
+            throw new ConflictException($"Resource {request.Id} is archived and cannot be updated.");
+        }
+
         if (!await resourceRepository.ResourceTypeExistsAsync(request.ResourceTypeId, cancellationToken))
         {
             throw new NotFoundException($"Resource type {request.ResourceTypeId} was not found.");
