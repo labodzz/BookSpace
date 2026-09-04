@@ -10,7 +10,9 @@ namespace BookSpace.Infrastructure.Persistence;
 // requests but can never close it - the database's unique constraints are the real backstop. This
 // translates a unique-constraint violation surfacing from SaveChangesAsync into the same
 // ConflictException a handler's pre-check throws, so a genuine race still comes back as a clean 409,
-// not a raw 500 from GlobalExceptionHandler.
+// not a raw 500 from GlobalExceptionHandler. It also translates an optimistic-concurrency conflict
+// (a RowVersion mismatch on an entity that was modified since this request loaded it) the same way,
+// so both "two inserts collided" and "two updates collided" reach the client as the same 409 shape.
 internal static class DbContextConcurrencyExtensions
 {
     private const int UniqueIndexViolation = 2601;
@@ -33,6 +35,13 @@ internal static class DbContextConcurrencyExtensions
                 .CreateLogger(typeof(DbContextConcurrencyExtensions).FullName!)
                 .LogWarning(exception, "Unique constraint violation (SQL error {SqlErrorNumber}) handled as a conflict", sqlException.Number);
             throw new ConflictException("The request conflicts with existing data.");
+        }
+        catch (DbUpdateConcurrencyException exception)
+        {
+            dbContext.GetService<ILoggerFactory>()
+                .CreateLogger(typeof(DbContextConcurrencyExtensions).FullName!)
+                .LogWarning(exception, "Optimistic concurrency conflict handled as a conflict");
+            throw new ConflictException("The record was modified by another request. Reload and try again.");
         }
     }
 }

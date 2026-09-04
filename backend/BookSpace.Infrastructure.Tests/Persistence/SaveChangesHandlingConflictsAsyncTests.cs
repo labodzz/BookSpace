@@ -91,15 +91,16 @@ public sealed class SaveChangesHandlingConflictsAsyncTests : IAsyncLifetime
     private BookSpaceDbContext CreateDbContext()
     {
         var options = new DbContextOptionsBuilder<BookSpaceDbContext>().UseSqlServer(_connectionString).Options;
-        return new BookSpaceDbContext(options, new NoOpCurrentUserContext());
+        return new BookSpaceDbContext(options, new FixedCurrentUserContext(_tenantId));
     }
 
-    // TenantId => null bypasses the tenant query filter entirely (see BookSpaceDbContext.ApplyTenantFilter) -
-    // harmless here since this test only exercises inserts, which query filters never touch.
-    private sealed class NoOpCurrentUserContext : ICurrentUserContext
+    // The tenant filter fails closed on a null TenantId (see BookSpaceDbContext.ApplyTenantFilter), so
+    // this test's own verification read needs a real tenant context, not null - inserts wouldn't have
+    // cared (query filters never touch writes), but the CountAsync check below is a read.
+    private sealed class FixedCurrentUserContext(Guid tenantId) : ICurrentUserContext
     {
         public Guid? UserId => null;
-        public Guid? TenantId => null;
+        public Guid? TenantId => tenantId;
         public IReadOnlyCollection<string> Roles => [];
     }
 }

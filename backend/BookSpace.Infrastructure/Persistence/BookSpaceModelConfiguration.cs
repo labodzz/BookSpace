@@ -5,7 +5,7 @@ namespace BookSpace.Infrastructure.Persistence;
 
 internal static class BookSpaceModelConfiguration
 {
-    internal static void ConfigureBookSpaceModel(this ModelBuilder builder)
+    internal static void ConfigureBookSpaceModel(this ModelBuilder builder, bool useRowVersionColumns)
     {
         builder.Entity<Tenant>(entity =>
         {
@@ -62,6 +62,10 @@ internal static class BookSpaceModelConfiguration
             entity.HasIndex(token => token.TokenHash).IsUnique();
             entity.HasIndex(token => token.FamilyId);
             entity.HasOne<User>().WithMany().HasForeignKey(token => token.UserId).OnDelete(DeleteBehavior.Cascade);
+            if (useRowVersionColumns)
+            {
+                entity.Property(token => token.RowVersion).IsRowVersion();
+            }
         });
 
         builder.Entity<ResourceType>(entity =>
@@ -89,6 +93,10 @@ internal static class BookSpaceModelConfiguration
                 .HasFilter("[Status] <> 'Archived'");
             entity.HasOne<Tenant>().WithMany().HasForeignKey(resource => resource.TenantId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne<ResourceType>().WithMany().HasForeignKey(resource => resource.ResourceTypeId).OnDelete(DeleteBehavior.Restrict);
+            if (useRowVersionColumns)
+            {
+                entity.Property(resource => resource.RowVersion).IsRowVersion();
+            }
         });
 
         builder.Entity<AvailabilityRule>(entity =>
@@ -110,6 +118,10 @@ internal static class BookSpaceModelConfiguration
             entity.HasIndex(period => new { period.ResourceId, period.StartUtc, period.EndUtc });
             entity.HasOne<Tenant>().WithMany().HasForeignKey(period => period.TenantId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne<Resource>().WithMany().HasForeignKey(period => period.ResourceId).OnDelete(DeleteBehavior.Cascade);
+            if (useRowVersionColumns)
+            {
+                entity.Property(period => period.RowVersion).IsRowVersion();
+            }
         });
 
         builder.Entity<ResourceApprover>(entity =>

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using BookSpace.Application.Common;
 using BookSpace.Application.Security;
 using BookSpace.Domain.Entities;
 using Microsoft.Extensions.Logging;
@@ -36,11 +37,15 @@ public sealed class AuthenticationService(
         var tokenHash = HashToken(refreshToken);
         var existing = await refreshTokenRepository.FindByTokenHashAsync(tokenHash, cancellationToken);
 
-        if (existing is null || existing.ExpiresAtUtc <= DateTimeOffset.UtcNow)
+        if (existing is null)
         {
             return new RefreshResult(false, null, false);
         }
 
+        // Checked BEFORE expiry, deliberately: a token that was already rotated/revoked is a reuse
+        // signal regardless of whether it has ALSO since expired - an attacker who waits out a stolen
+        // token's own expiry window before replaying it must not get a quieter "just invalid" outcome
+        // that skips family revocation.
         if (existing.RevokedAtUtc is not null || existing.ReplacedByTokenId is not null)
         {
             // This token was already rotated (or explicitly revoked) once - seeing it again means
@@ -56,15 +61,40 @@ public sealed class AuthenticationService(
             return new RefreshResult(false, null, true);
         }
 
-        var user = await userRepository.FindByIdAsync(existing.UserId, cancellationToken);
+        if (existing.ExpiresAtUtc <= DateTimeOffset.UtcNow)
+        {
+            return new RefreshResult(false, null, false);
+        }
+
+        var user = await userRepository.FindByIdForAuthenticationAsync(existing.UserId, cancellationToken);
         if (user is null)
         {
             return new RefreshResult(false, null, false);
         }
 
         var roles = await userRepository.GetRolesAsync(user.Id, cancellationToken);
-        var tokens = await IssueTokensAsync(user, roles, existing.FamilyId, existing, cancellationToken);
-        return new RefreshResult(true, tokens, false);
+
+        try
+        {
+            var tokens = await IssueTokensAsync(user, roles, existing.FamilyId, existing, cancellationToken);
+            return new RefreshResult(true, tokens, false);
+        }
+        catch (ConflictException)
+        {
+            // Another concurrent refresh request already consumed (rotated) this same token first -
+            // the RefreshToken row's RowVersion no longer matches what this request read, so its own
+            // rotation was rolled back entirely (including the new child token it tried to insert).
+            //
+            // Deliberately NOT routed through reuse detection (no RevokeFamilyAsync call here): reuse
+            // detection above is keyed on what THIS request itself read (RevokedAtUtc/ReplacedByTokenId
+            // already set at the moment of the read) - a token presented after it was ALREADY, durably,
+            // known-consumed. This request read a genuinely still-valid token; it only lost a race to
+            // consume it that unfolded entirely after that read. Revoking the whole family here would
+            // also kill the WINNING request's brand-new token, punishing the legitimate caller who
+            // actually won for a race their own losing attempt caused - disproportionate for what is
+            // most plausibly a client-side double-fire (retry, duplicate tab), not token theft.
+            return new RefreshResult(false, null, false);
+        }
     }
 
     private async Task<AuthTokens> IssueTokensAsync(
