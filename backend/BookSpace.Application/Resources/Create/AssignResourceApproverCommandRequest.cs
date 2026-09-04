@@ -3,6 +3,7 @@ using BookSpace.Application.Common;
 using BookSpace.Application.Mediator;
 using BookSpace.Application.Security;
 using BookSpace.Domain.Entities;
+using BookSpace.Domain.Enums;
 using FluentValidation;
 
 namespace BookSpace.Application.Resources;
@@ -30,9 +31,13 @@ public sealed class AssignResourceApproverCommandHandler(
 {
     public async Task<AssignResourceApproverResponse> Handle(AssignResourceApproverCommandRequest request, CancellationToken cancellationToken)
     {
-        if (await resourceRepository.FindByIdAsync(request.ResourceId, cancellationToken) is null)
+        var resource = await resourceRepository.FindByIdAsync(request.ResourceId, cancellationToken)
+            ?? throw new NotFoundException($"Resource {request.ResourceId} was not found.", ErrorCodes.ResourceNotFound);
+
+        // Archived is terminal - see the identical check/reasoning in CreateAvailabilityRuleCommandRequest.cs.
+        if (resource.Status == ResourceStatus.Archived)
         {
-            throw new NotFoundException($"Resource {request.ResourceId} was not found.", ErrorCodes.ResourceNotFound);
+            throw new ConflictException($"Resource {request.ResourceId} is archived and cannot be modified.");
         }
 
         if (await userRepository.FindByIdAsync(request.UserId, cancellationToken) is null)

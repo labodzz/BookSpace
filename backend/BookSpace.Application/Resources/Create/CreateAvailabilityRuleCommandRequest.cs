@@ -2,6 +2,7 @@ using BookSpace.Application.Common;
 using BookSpace.Application.Mediator;
 using BookSpace.Application.Security;
 using BookSpace.Domain.Entities;
+using BookSpace.Domain.Enums;
 using FluentValidation;
 
 namespace BookSpace.Application.Resources;
@@ -31,9 +32,15 @@ public sealed class CreateAvailabilityRuleCommandHandler(
 {
     public async Task<CreateAvailabilityRuleResponse> Handle(CreateAvailabilityRuleCommandRequest request, CancellationToken cancellationToken)
     {
-        if (await resourceRepository.FindByIdAsync(request.ResourceId, cancellationToken) is null)
+        var resource = await resourceRepository.FindByIdAsync(request.ResourceId, cancellationToken)
+            ?? throw new NotFoundException($"Resource {request.ResourceId} was not found.");
+
+        // Archived is terminal - configuring a schedule for a resource that's effectively deleted from
+        // the caller's point of view would silently keep it half-alive. Maintenance is deliberately NOT
+        // blocked here: it's temporary, and an admin may well want to adjust the schedule while it lasts.
+        if (resource.Status == ResourceStatus.Archived)
         {
-            throw new NotFoundException($"Resource {request.ResourceId} was not found.");
+            throw new ConflictException($"Resource {request.ResourceId} is archived and cannot be modified.");
         }
 
         if (await availabilityRuleRepository.ExistsAsync(

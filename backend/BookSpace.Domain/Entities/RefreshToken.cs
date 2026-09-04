@@ -13,4 +13,9 @@ public sealed class RefreshToken
     public DateTimeOffset ExpiresAtUtc { get; set; }
     public DateTimeOffset? RevokedAtUtc { get; set; }
     public Guid? ReplacedByTokenId { get; set; }
+
+    // SQL Server rowversion, EF-managed - lets rotation detect "another request already rotated this
+    // exact row since I read it" instead of two concurrent requests both successfully consuming the
+    // same token.
+    public byte[] RowVersion { get; set; } = [];
 }

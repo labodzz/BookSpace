@@ -26,5 +26,5 @@ internal sealed class RefreshTokenRepository(BookSpaceDbContext dbContext) : IRe
     }
 
     public Task SaveChangesAsync(CancellationToken cancellationToken) =>
-        dbContext.SaveChangesAsync(cancellationToken);
+        dbContext.SaveChangesHandlingConflictsAsync(cancellationToken);
 }

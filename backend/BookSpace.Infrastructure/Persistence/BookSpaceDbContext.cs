@@ -25,7 +25,13 @@ public sealed class BookSpaceDbContext(DbContextOptions<BookSpaceDbContext> opti
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
-        builder.ConfigureBookSpaceModel();
+        // SQL Server's rowversion/timestamp type is server-generated and enforces true optimistic
+        // concurrency; SQLite (used by the integration test suite for speed) has no equivalent, so
+        // IsRowVersion() there produces a NOT NULL column nothing ever populates. Real concurrency-
+        // conflict behavior is instead proven against real SQL Server (see
+        // RefreshTokenRotationConcurrencyTests) - on SQLite the column is just an ordinary,
+        // manually-defaulted byte[] so CRUD keeps working, without pretending to guard anything.
+        builder.ConfigureBookSpaceModel(useRowVersionColumns: Database.IsSqlServer());
         ApplyTenantIsolationFilters(builder);
     }
 

@@ -33,6 +33,17 @@ public sealed class UpdateBlackoutPeriodCommandHandler(IBlackoutPeriodRepository
                 ErrorCodes.BlackoutPeriodNotFound);
         }
 
+        // Deliberately NOT "StartUtc must be >= now" (that would reject a harmless Reason-only edit on
+        // a blackout that has already started or fully elapsed). The actual invariant is narrower: you
+        // may not backdate a blackout further into the past than it already was. Moving StartUtc earlier
+        // is fine as long as the result is still in the future (e.g. starting the block a day sooner),
+        // and leaving StartUtc untouched or moving it later is always fine regardless of how far in the
+        // past it already sits.
+        if (request.StartUtc < period.StartUtc && request.StartUtc < DateTimeOffset.UtcNow)
+        {
+            throw new ConflictException("Cannot move a blackout period's start further into the past.");
+        }
+
         // Plain full replacement - no booking-conflict recheck exists yet, since Booking read access
         // (IBookingAvailabilityRepository) doesn't land until the availability query work. Once it
         // does, this is the natural place for a diff-based recheck: only the newly-exposed time range
