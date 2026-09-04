@@ -9,15 +9,28 @@ internal sealed class BookingAvailabilityRepository(BookSpaceDbContext dbContext
 {
     private static readonly BookingStatus[] ActiveStatuses = [BookingStatus.Pending, BookingStatus.Confirmed];
 
-    // Only ResourceId and Status are filtered in SQL; the time-range overlap check happens
-    // client-side after materializing - EF Core's SQLite provider (used by the integration test
-    // suite) cannot translate DateTimeOffset `<`/`>` comparisons into SQL (SQL Server has no such
-    // restriction), so this can't be a single server-side query. Mirrors BlackoutPeriodRepository/the
-    // availability handler, which already fetch a resource's full set and filter the time range in
-    // memory for the same reason.
+    // On SQL Server, ResourceId, Status, AND the time-range overlap are all filtered in SQL, bounded by
+    // the Booking(TenantId, ResourceId, StartUtc, EndUtc) index - a resource with a long booking
+    // history must not force every availability query to materialize every booking it has ever had
+    // just to answer a query for next week. EF Core's SQLite provider (used by the integration test
+    // suite for speed) cannot translate the DateTimeOffset `<`/`>` comparisons into SQL - proven by
+    // GetAvailability_* tests throwing InvalidOperationException the moment this range filter was
+    // pushed into the query - so it falls back to the previous fetch-then-filter-client-side approach
+    // there; real range-filtering behavior is instead proven against real SQL Server (see
+    // BookingAvailabilityRepositoryTests).
     public async Task<IReadOnlyList<Booking>> GetActiveBookingsAsync(
         Guid resourceId, DateTimeOffset rangeStartUtc, DateTimeOffset rangeEndUtcExclusive, CancellationToken cancellationToken)
     {
+        if (dbContext.Database.IsSqlServer())
+        {
+            return await dbContext.Bookings
+                .Where(booking => booking.ResourceId == resourceId
+                    && ActiveStatuses.Contains(booking.Status)
+                    && booking.StartUtc < rangeEndUtcExclusive
+                    && booking.EndUtc > rangeStartUtc)
+                .ToListAsync(cancellationToken);
+        }
+
         var activeBookings = await dbContext.Bookings
             .Where(booking => booking.ResourceId == resourceId && ActiveStatuses.Contains(booking.Status))
             .ToListAsync(cancellationToken);
