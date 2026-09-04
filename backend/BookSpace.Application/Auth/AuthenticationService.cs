@@ -56,7 +56,7 @@ public sealed class AuthenticationService(
             return new RefreshResult(false, null, true);
         }
 
-        var user = await userRepository.FindByIdAsync(existing.UserId, cancellationToken);
+        var user = await userRepository.FindByIdForAuthenticationAsync(existing.UserId, cancellationToken);
         if (user is null)
         {
             return new RefreshResult(false, null, false);

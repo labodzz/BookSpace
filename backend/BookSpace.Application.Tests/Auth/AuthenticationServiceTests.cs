@@ -116,7 +116,7 @@ public sealed class AuthenticationServiceTests
 
         _refreshTokenRepository.Setup(r => r.FindByTokenHashAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(existingToken);
-        _userRepository.Setup(r => r.FindByIdAsync(user.Id, It.IsAny<CancellationToken>())).ReturnsAsync(user);
+        _userRepository.Setup(r => r.FindByIdForAuthenticationAsync(user.Id, It.IsAny<CancellationToken>())).ReturnsAsync(user);
         _userRepository.Setup(r => r.GetRolesAsync(user.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyList<string>)["Member"]);
         _jwtTokenGenerator.Setup(g => g.GenerateAccessToken(user, It.IsAny<IReadOnlyCollection<string>>()))
@@ -236,7 +236,7 @@ public sealed class AuthenticationServiceTests
         };
         _refreshTokenRepository.Setup(r => r.FindByTokenHashAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(existingToken);
-        _userRepository.Setup(r => r.FindByIdAsync(existingToken.UserId, It.IsAny<CancellationToken>()))
+        _userRepository.Setup(r => r.FindByIdForAuthenticationAsync(existingToken.UserId, It.IsAny<CancellationToken>()))
             .ReturnsAsync((User?)null);
 
         var sut = CreateSut();
