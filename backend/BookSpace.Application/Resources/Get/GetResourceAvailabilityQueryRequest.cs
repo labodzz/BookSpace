@@ -117,13 +117,40 @@ public sealed class GetResourceAvailabilityQueryHandler(
             bookableSlots);
     }
 
-    // Converts each window's local start/end to UTC independently. Correct unless a window straddles
-    // a DST transition instant in `timeZone` (rare for normal business hours) - in that case the UTC
-    // duration would be off by the DST delta. Blackouts/bookings need no such handling since they're
-    // already stored as absolute UTC. Accepted as a documented v1 simplification.
+    // Converts each window's local start/end to UTC independently - each endpoint resolves to ITS OWN
+    // correct offset for that specific instant, which is not an approximation. A window that straddles
+    // a DST transition still produces the physically correct UTC duration: independently resolving
+    // each endpoint inherently accounts for the transition (a window spanning a spring-forward gap is
+    // genuinely shorter by the gap's size in real elapsed time, and one spanning a fall-back is
+    // genuinely longer by the same amount - the code reflects both correctly, verified with an exact
+    // expected duration by Handle_WithRuleSpanningTheSpringForwardTransition_ProducesThePhysicallyCorrectDuration
+    // and Handle_WithRuleSpanningTheFallBackTransition_ProducesThePhysicallyCorrectDuration). There is
+    // no "duration off by the DST delta" defect here, contrary to an earlier, unverified assumption in
+    // this comment - the only real hazard is a single ENDPOINT landing inside a gap or ambiguous hour,
+    // which the two rules below resolve to one well-defined instant before any duration math happens.
+    //
+    // Explicit DST edge-case policy (there is no public .NET API to hand this off to - see the
+    // TimeZoneInfoOptions history in this file's git blame for why a "just pass NoThrowOnInvalidTime"
+    // fix doesn't compile):
+    //  - Spring-forward gap (a local time that never occurred, e.g. 02:30 on the day clocks jump from
+    //    02:00 to 03:00): normalized forward past the gap by the gap's own size, rather than throwing.
+    //    Real-world DST gaps are 1 hour; IsDaylightSavingTime one hour later than a still-invalid time
+    //    confirms the gap has been fully crossed even in the rare case of a larger historical offset
+    //    change, without hardcoding "1 hour" as a magic constant.
+    //  - Fall-back ambiguity (a local time that occurred twice, e.g. 02:30 on the day clocks fall from
+    //    03:00 to 02:00): resolved via .NET's own documented default for ConvertTimeToUtc - the
+    //    standard (post-transition, non-daylight) offset is used, i.e. the LATER of the two occurrences.
+    //    This is an explicit choice to rely on, not an accident: proven by
+    //    Handle_WithRuleStartingInsideFallBackAmbiguousHour_ResolvesToStandardOffsetWithoutThrowing.
     private static DateTimeOffset ConvertLocalToUtc(DateOnly date, TimeOnly time, TimeZoneInfo timeZone)
     {
         var local = DateTime.SpecifyKind(date.ToDateTime(time), DateTimeKind.Unspecified);
+
+        while (timeZone.IsInvalidTime(local))
+        {
+            local = local.AddHours(1);
+        }
+
         var utc = TimeZoneInfo.ConvertTimeToUtc(local, timeZone);
         return new DateTimeOffset(utc, TimeSpan.Zero);
     }

@@ -234,4 +234,179 @@ public sealed class GetResourceAvailabilityQueryHandlerTests
 
         Assert.Empty(result.BookableSlots);
     }
+
+    // DST policy tests below use Europe/Sarajevo (real-world CET/CEST rules: clocks spring forward on
+    // the last Sunday of March, fall back on the last Sunday of October) rather than a hardcoded date,
+    // so the test stays valid regardless of which year it runs in.
+    private static DateOnly LastSundayOfMonth(int year, int month)
+    {
+        var lastDay = new DateOnly(year, month, DateTime.DaysInMonth(year, month));
+        while (lastDay.DayOfWeek != DayOfWeek.Sunday)
+        {
+            lastDay = lastDay.AddDays(-1);
+        }
+
+        return lastDay;
+    }
+
+    [Fact]
+    public async Task Handle_WithRuleStartingInsideSpringForwardGap_NormalizesForwardInsteadOfThrowing()
+    {
+        var resource = CreateResource();
+        resource.TimeZoneId = "Europe/Sarajevo";
+        var springForwardDate = LastSundayOfMonth(DateTime.UtcNow.Year + 1, 3);
+        var rule = new AvailabilityRule
+        {
+            Id = Guid.NewGuid(), TenantId = resource.TenantId, ResourceId = resource.Id,
+            DayOfWeek = springForwardDate.DayOfWeek, StartTime = new TimeOnly(2, 30), EndTime = new TimeOnly(4, 0),
+        };
+        _resourceRepository.Setup(r => r.FindByIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(resource);
+        _availabilityRuleRepository.Setup(r => r.GetByResourceIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync([rule]);
+        SetupNoBlackoutsOrBookings(resource);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(
+            new GetResourceAvailabilityQueryRequest(resource.Id, springForwardDate, springForwardDate), CancellationToken.None);
+
+        // 02:30 never existed that day (clocks jumped 02:00 -> 03:00 CET->CEST); normalized forward to
+        // 03:30 CEST (UTC+2) = 01:30Z. 04:00 was already valid CEST = 02:00Z - the resulting 30-minute
+        // open period (instead of the "requested" 90 minutes) is the documented DST-crossing tradeoff.
+        var period = Assert.Single(result.OpenPeriods);
+        Assert.Equal(new DateTimeOffset(springForwardDate.Year, springForwardDate.Month, springForwardDate.Day, 1, 30, 0, TimeSpan.Zero), period.StartUtc);
+        Assert.Equal(new DateTimeOffset(springForwardDate.Year, springForwardDate.Month, springForwardDate.Day, 2, 0, 0, TimeSpan.Zero), period.EndUtc);
+    }
+
+    [Fact]
+    public async Task Handle_WithRuleStartingInsideFallBackAmbiguousHour_ResolvesToStandardOffsetWithoutThrowing()
+    {
+        var resource = CreateResource();
+        resource.TimeZoneId = "Europe/Sarajevo";
+        var fallBackDate = LastSundayOfMonth(DateTime.UtcNow.Year + 1, 10);
+        var rule = new AvailabilityRule
+        {
+            Id = Guid.NewGuid(), TenantId = resource.TenantId, ResourceId = resource.Id,
+            DayOfWeek = fallBackDate.DayOfWeek, StartTime = new TimeOnly(2, 30), EndTime = new TimeOnly(5, 0),
+        };
+        _resourceRepository.Setup(r => r.FindByIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(resource);
+        _availabilityRuleRepository.Setup(r => r.GetByResourceIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync([rule]);
+        SetupNoBlackoutsOrBookings(resource);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new GetResourceAvailabilityQueryRequest(resource.Id, fallBackDate, fallBackDate), CancellationToken.None);
+
+        // 02:30 occurs twice that day (clocks fall 03:00 -> 02:00 CEST->CET). .NET's documented default
+        // for an ambiguous local time is the standard (post-transition, non-daylight) offset - CET,
+        // UTC+1 - i.e. the LATER of the two occurrences, not the earlier CEST one.
+        var period = Assert.Single(result.OpenPeriods);
+        Assert.Equal(new DateTimeOffset(fallBackDate.Year, fallBackDate.Month, fallBackDate.Day, 1, 30, 0, TimeSpan.Zero), period.StartUtc);
+    }
+
+    [Fact]
+    public async Task Handle_WithRuleSpanningTheSpringForwardTransition_ProducesThePhysicallyCorrectDuration()
+    {
+        // 01:00-05:00 local nominally spans 4 hours, but the 02:00-03:00 hour never happened that day
+        // (clocks jump CET->CEST), so the REAL elapsed time is 3 hours. Each endpoint independently
+        // resolves to its own correct offset (01:00 is still CET/+1, 05:00 is already CEST/+2), which
+        // inherently produces the physically correct 3-hour UTC span - proving the earlier "duration
+        // off by the DST delta" assumption in ConvertLocalToUtc's comment was never actually true.
+        var resource = CreateResource();
+        resource.TimeZoneId = "Europe/Sarajevo";
+        var springForwardDate = LastSundayOfMonth(DateTime.UtcNow.Year + 1, 3);
+        var rule = new AvailabilityRule
+        {
+            Id = Guid.NewGuid(), TenantId = resource.TenantId, ResourceId = resource.Id,
+            DayOfWeek = springForwardDate.DayOfWeek, StartTime = new TimeOnly(1, 0), EndTime = new TimeOnly(5, 0),
+        };
+        _resourceRepository.Setup(r => r.FindByIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(resource);
+        _availabilityRuleRepository.Setup(r => r.GetByResourceIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync([rule]);
+        SetupNoBlackoutsOrBookings(resource);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(
+            new GetResourceAvailabilityQueryRequest(resource.Id, springForwardDate, springForwardDate), CancellationToken.None);
+
+        var period = Assert.Single(result.OpenPeriods);
+        Assert.Equal(new DateTimeOffset(springForwardDate.Year, springForwardDate.Month, springForwardDate.Day, 0, 0, 0, TimeSpan.Zero), period.StartUtc);
+        Assert.Equal(new DateTimeOffset(springForwardDate.Year, springForwardDate.Month, springForwardDate.Day, 3, 0, 0, TimeSpan.Zero), period.EndUtc);
+        Assert.Equal(TimeSpan.FromHours(3), period.EndUtc - period.StartUtc);
+    }
+
+    [Fact]
+    public async Task Handle_WithRuleSpanningTheFallBackTransition_ProducesThePhysicallyCorrectDuration()
+    {
+        // 01:00-04:00 local nominally spans 3 hours, but the 02:00-03:00 hour happens TWICE that day
+        // (clocks fall CEST->CET), so the REAL elapsed time is 4 hours. Symmetric proof to the
+        // spring-forward test above.
+        var resource = CreateResource();
+        resource.TimeZoneId = "Europe/Sarajevo";
+        var fallBackDate = LastSundayOfMonth(DateTime.UtcNow.Year + 1, 10);
+        var rule = new AvailabilityRule
+        {
+            Id = Guid.NewGuid(), TenantId = resource.TenantId, ResourceId = resource.Id,
+            DayOfWeek = fallBackDate.DayOfWeek, StartTime = new TimeOnly(1, 0), EndTime = new TimeOnly(4, 0),
+        };
+        _resourceRepository.Setup(r => r.FindByIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(resource);
+        _availabilityRuleRepository.Setup(r => r.GetByResourceIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync([rule]);
+        SetupNoBlackoutsOrBookings(resource);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new GetResourceAvailabilityQueryRequest(resource.Id, fallBackDate, fallBackDate), CancellationToken.None);
+
+        var period = Assert.Single(result.OpenPeriods);
+        Assert.Equal(new DateTimeOffset(fallBackDate.Year, fallBackDate.Month, fallBackDate.Day - 1, 23, 0, 0, TimeSpan.Zero), period.StartUtc);
+        Assert.Equal(new DateTimeOffset(fallBackDate.Year, fallBackDate.Month, fallBackDate.Day, 3, 0, 0, TimeSpan.Zero), period.EndUtc);
+        Assert.Equal(TimeSpan.FromHours(4), period.EndUtc - period.StartUtc);
+    }
+
+    [Fact]
+    public async Task Handle_WithNonDstIntervalInNonUtcTimeZone_ConvertsUsingThatZonesFixedOffset()
+    {
+        var resource = CreateResource(capacity: 8);
+        resource.TimeZoneId = "Europe/Sarajevo";
+        // Mid-January: unambiguously CET (UTC+1) all day, nowhere near a transition.
+        var winterDate = new DateOnly(DateTime.UtcNow.Year + 1, 1, 15);
+        var rule = new AvailabilityRule
+        {
+            Id = Guid.NewGuid(), TenantId = resource.TenantId, ResourceId = resource.Id,
+            DayOfWeek = winterDate.DayOfWeek, StartTime = new TimeOnly(9, 0), EndTime = new TimeOnly(17, 0),
+        };
+        _resourceRepository.Setup(r => r.FindByIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(resource);
+        _availabilityRuleRepository.Setup(r => r.GetByResourceIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync([rule]);
+        SetupNoBlackoutsOrBookings(resource);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new GetResourceAvailabilityQueryRequest(resource.Id, winterDate, winterDate), CancellationToken.None);
+
+        var period = Assert.Single(result.OpenPeriods);
+        Assert.Equal(new DateTimeOffset(winterDate.Year, winterDate.Month, winterDate.Day, 8, 0, 0, TimeSpan.Zero), period.StartUtc);
+        Assert.Equal(new DateTimeOffset(winterDate.Year, winterDate.Month, winterDate.Day, 16, 0, 0, TimeSpan.Zero), period.EndUtc);
+    }
+
+    [Fact]
+    public async Task Handle_WithRuleActiveEveryDayAcrossAMultiDayRange_ProducesOnePeriodPerDayAtTheCorrectMidnightBoundary()
+    {
+        var resource = CreateResource();
+        var toDate = Date.AddDays(1);
+        var ruleForFirstDay = new AvailabilityRule
+        {
+            Id = Guid.NewGuid(), TenantId = resource.TenantId, ResourceId = resource.Id,
+            DayOfWeek = Date.DayOfWeek, StartTime = new TimeOnly(22, 0), EndTime = TimeOnly.MaxValue,
+        };
+        var ruleForSecondDay = new AvailabilityRule
+        {
+            Id = Guid.NewGuid(), TenantId = resource.TenantId, ResourceId = resource.Id,
+            DayOfWeek = toDate.DayOfWeek, StartTime = TimeOnly.MinValue, EndTime = new TimeOnly(2, 0),
+        };
+        _resourceRepository.Setup(r => r.FindByIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(resource);
+        _availabilityRuleRepository.Setup(r => r.GetByResourceIdAsync(resource.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([ruleForFirstDay, ruleForSecondDay]);
+        SetupNoBlackoutsOrBookings(resource);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new GetResourceAvailabilityQueryRequest(resource.Id, Date, toDate), CancellationToken.None);
+
+        Assert.Equal(2, result.OpenPeriods.Count);
+        Assert.Contains(result.OpenPeriods, period => period.StartUtc == At(22));
+        Assert.Contains(result.OpenPeriods, period => period.StartUtc == At(0).AddDays(1) && period.EndUtc == At(2).AddDays(1));
+    }
 }
