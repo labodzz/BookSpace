@@ -104,4 +104,48 @@ public sealed class IntervalMathTests
         var slot = Assert.Single(result);
         Assert.Equal((At(8), At(18), 8), slot);
     }
+
+    [Fact]
+    public void Covers_WithOnePeriodFullyContainingWindow_ReturnsTrue()
+    {
+        Assert.True(IntervalMath.Covers((At(10), At(12)), [(At(8), At(18))]));
+    }
+
+    [Fact]
+    public void Covers_WithTouchingPeriodsSpanningWindow_ReturnsTrue()
+    {
+        // Two periods that only touch at At(10), not overlap, still bridge the window - the same
+        // adjacency-counts-as-covering semantics as Merge.
+        Assert.True(IntervalMath.Covers((At(8), At(12)), [(At(8), At(10)), (At(10), At(12))]));
+    }
+
+    [Fact]
+    public void Covers_WithGapInTheMiddle_ReturnsFalse()
+    {
+        Assert.False(IntervalMath.Covers((At(8), At(12)), [(At(8), At(9)), (At(10), At(12))]));
+    }
+
+    [Fact]
+    public void Covers_WithNoPeriods_ReturnsFalse()
+    {
+        Assert.False(IntervalMath.Covers((At(8), At(12)), []));
+    }
+
+    [Fact]
+    public void Covers_WithPeriodStartingAfterWindowStart_ReturnsFalse()
+    {
+        Assert.False(IntervalMath.Covers((At(8), At(12)), [(At(9), At(12))]));
+    }
+
+    [Fact]
+    public void Covers_WithPeriodEndingExactlyAtWindowEnd_ReturnsTrue()
+    {
+        Assert.True(IntervalMath.Covers((At(8), At(12)), [(At(8), At(12))]));
+    }
+
+    [Fact]
+    public void Covers_WithPeriodEndingJustBeforeWindowEnd_ReturnsFalse()
+    {
+        Assert.False(IntervalMath.Covers((At(8), At(12)), [(At(8), At(11).AddMinutes(59))]));
+    }
 }
