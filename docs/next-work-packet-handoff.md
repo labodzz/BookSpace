@@ -1,7 +1,14 @@
 # Before Implementing the Next Work Packet
 
-Preparation for evaluating the likely next Work Packet (Booking) against the current architecture -
-**not** an instruction to implement Booking now.
+## Booking Work Packet — completed
+
+This document originally prepped the Booking Work Packet (single-user creation, then concurrency-safe
+capacity enforcement) against the architecture that existed at the time. That work is now done - see
+[bookings-and-concurrency.md](bookings-and-concurrency.md) for what was actually built, and
+[open-questions.md](open-questions.md) for what it deliberately left open (TenantAdmin cancellation of
+another user's booking, `RequiresApproval`/approval-workflow wiring, idempotency keys). The original
+preparation notes are kept below, unedited, as a record of what was checked before implementation began -
+every invariant listed was in fact preserved; see `bookings-and-concurrency.md` §7-§9 for how.
 
 ## What is already stable and should not be unnecessarily rewritten
 
@@ -62,16 +69,22 @@ Preparation for evaluating the likely next Work Packet (Booking) against the cur
   question) - the current codebase has no precedent for an explicit multi-step transaction, since every
   existing write path is a single load-mutate-save sequence.
 
-## Regression protection already in place - keep these green
+## Regression protection - keep these green
 
-- `BookSpace.Application.Tests`: 165 tests, including the full `GetResourceAvailabilityQueryHandlerTests`
-  suite (DST, capacity-aware slots, resource-status gating) and `UpdateResourceCommandHandlerTests`
-  (capacity sweep-line boundary cases) - a Booking-create handler will very likely change behavior these
-  tests currently lock in (e.g. `BookableSlots` shape), so expect to extend them deliberately, not
-  silently break them.
-- `BookSpace.Api.Tests`: 79 tests, SQLite-backed, the fast integration-test net for every existing
-  endpoint including tenant isolation and RBAC.
-- `BookSpace.Infrastructure.Tests`: 21 tests, real-LocalDB-backed, covering exactly the scenarios
-  SQLite cannot: unique-constraint conflicts, tenant-filter fail-closed behavior, refresh-token and
-  Resource/BlackoutPeriod optimistic concurrency, and bounded SQL range filtering. A Booking-concurrency
-  test almost certainly belongs here too, following the same throwaway-LocalDB-database pattern.
+Current counts, after the Booking Work Packet (previously 165/79/21):
+
+- `BookSpace.Application.Tests`: 207 tests. Includes the pre-existing `GetResourceAvailabilityQueryHandlerTests`
+  suite (DST, capacity-aware slots, resource-status gating, unchanged behavior - only its internal
+  DST-conversion logic moved into the new shared `AvailabilityCalculator`, proven by this suite staying
+  green throughout) and `UpdateResourceCommandHandlerTests` (capacity sweep-line boundary cases), plus
+  the new `Bookings/` suite (create/get/cancel handlers and validators) and `IntervalMathTests`' new
+  `Covers` coverage.
+- `BookSpace.Api.Tests`: 92 tests, SQLite-backed. Includes the new `BookingsEndpointsTests` (auth/RBAC,
+  cross-tenant and cross-user 404s, the freed-capacity-after-cancellation proof against the real
+  availability endpoint).
+- `BookSpace.Infrastructure.Tests`: 24 tests, real-LocalDB-backed. Includes the new
+  `BookingConcurrencyTests` - the only place the double-booking-is-impossible guarantee is actually
+  proven, including a reconstructed naive-approach reproduction showing what it prevents.
+
+Any future work packet touching Bookings, Resources, or availability should extend these suites
+deliberately, not silently break them.
