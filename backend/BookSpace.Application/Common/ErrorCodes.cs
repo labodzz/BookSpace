@@ -22,4 +22,11 @@ internal static class ErrorCodes
 
     public const string ResourceTypeNameConflict = "ResourceType.NameConflict";
     public const string ResourceTypeInUse = "ResourceType.InUse";
+
+    public const string BookingNotFound = "Booking.NotFound";
+    public const string BookingResourceUnavailable = "Booking.ResourceUnavailable";
+    public const string BookingOutsideAvailability = "Booking.OutsideAvailability";
+    public const string BookingBlackoutConflict = "Booking.BlackoutConflict";
+    public const string BookingCapacityExceeded = "Booking.CapacityExceeded";
+    public const string BookingCancellationNotAllowed = "Booking.CancellationNotAllowed";
 }

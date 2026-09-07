@@ -70,4 +70,35 @@ internal static class IntervalMath
 
         return slots;
     }
+
+    // True if `periods` (need not be pre-merged, pre-sorted, or non-overlapping) collectively cover the
+    // entire [window.Start, window.End) span with no gap. Used by Booking-create to check "is my
+    // requested window entirely within the resource's open hours" (passing the resource's open periods)
+    // and, separately, "does capacity hold for my full requested duration" (passing only the capacity
+    // sub-intervals that meet the requested quantity) - see CreateBookingCommandHandler.
+    public static bool Covers(
+        (DateTimeOffset Start, DateTimeOffset End) window, IEnumerable<(DateTimeOffset Start, DateTimeOffset End)> periods)
+    {
+        var cursor = window.Start;
+
+        foreach (var period in periods.OrderBy(period => period.Start))
+        {
+            if (period.Start > cursor)
+            {
+                break;
+            }
+
+            if (period.End > cursor)
+            {
+                cursor = period.End;
+            }
+
+            if (cursor >= window.End)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }

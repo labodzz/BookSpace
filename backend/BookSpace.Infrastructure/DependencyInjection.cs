@@ -1,4 +1,5 @@
 using BookSpace.Application.Auth;
+using BookSpace.Application.Bookings;
 using BookSpace.Application.ResourceTypes;
 using BookSpace.Application.Resources;
 using BookSpace.Application.Security;
@@ -30,6 +31,8 @@ public static class DependencyInjection
         services.AddScoped<IBlackoutPeriodRepository, BlackoutPeriodRepository>();
         services.AddScoped<IResourceApproverRepository, ResourceApproverRepository>();
         services.AddScoped<IBookingAvailabilityRepository, BookingAvailabilityRepository>();
+        services.AddScoped<IBookingRepository, BookingRepository>();
+        services.AddScoped<IResourceBookingLock, ResourceBookingLock>();
 
         return services;
     }
