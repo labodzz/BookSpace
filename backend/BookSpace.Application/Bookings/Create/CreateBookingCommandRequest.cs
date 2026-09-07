@@ -31,8 +31,9 @@ public sealed class CreateBookingCommandRequestValidator : AbstractValidator<Cre
 // docs/bookings-and-concurrency.md): everything from the resource-status check through the insert runs
 // inside one transaction, holding an exclusive lock on the resource row for its whole duration, so two
 // concurrent requests for the same resource can never both pass this handler's own capacity re-check.
-// Every check below re-derives its answer from a fresh read taken under that lock - it never trusts a
-// value computed before the lock was acquired.
+// Eligibility (status/availability/blackout/capacity) is delegated to BookingEligibilityChecker, shared
+// with CreateRecurringSeriesCommandHandler and ApproveBookingCommandHandler - see
+// docs/recurring-bookings-and-approvals.md.
 public sealed class CreateBookingCommandHandler(
     IResourceBookingLock resourceBookingLock,
     IResourceRepository resourceRepository,
@@ -40,6 +41,9 @@ public sealed class CreateBookingCommandHandler(
     IBlackoutPeriodRepository blackoutPeriodRepository,
     IBookingAvailabilityRepository bookingAvailabilityRepository,
     IBookingRepository bookingRepository,
+    IResourceApproverRepository resourceApproverRepository,
+    IApprovalRequestRepository approvalRequestRepository,
+    ITenantRepository tenantRepository,
     ICurrentUserContext currentUserContext)
     : IRequestHandler<CreateBookingCommandRequest, CreateBookingResponse>
 {
@@ -51,45 +55,12 @@ public sealed class CreateBookingCommandHandler(
         var resource = await resourceRepository.FindByIdAsync(request.ResourceId, cancellationToken)
             ?? throw new NotFoundException($"Resource {request.ResourceId} was not found.", ErrorCodes.ResourceNotFound);
 
-        // Mirrors the availability query's own gating: a resource that isn't Active has no bookable
-        // slots at all, regardless of what its schedule/blackouts/capacity would otherwise compute.
-        if (resource.Status != ResourceStatus.Active)
-        {
-            throw new ConflictException($"Resource {resource.Id} is not available for booking.", ErrorCodes.BookingResourceUnavailable);
-        }
-
-        var timeZone = TimeZoneInfo.FindSystemTimeZoneById(resource.TimeZoneId);
-        var fromDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(request.StartUtc, timeZone).Date);
-        var toDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(request.EndUtc, timeZone).Date);
-
         var rules = await availabilityRuleRepository.GetByResourceIdAsync(resource.Id, cancellationToken);
-        var openPeriods = AvailabilityCalculator.ComputeOpenPeriodsUtc(rules, fromDate, toDate, timeZone);
-
-        var window = (request.StartUtc, request.EndUtc);
-        if (!IntervalMath.Covers(window, openPeriods))
-        {
-            throw new ConflictException("The requested time is outside the resource's availability.", ErrorCodes.BookingOutsideAvailability);
-        }
-
         var blackouts = await blackoutPeriodRepository.GetByResourceIdAsync(resource.Id, cancellationToken);
-        var hasBlackoutConflict = blackouts.Any(period => period.StartUtc < request.EndUtc && period.EndUtc > request.StartUtc);
-        if (hasBlackoutConflict)
-        {
-            throw new ConflictException("The requested time overlaps a blackout period.", ErrorCodes.BookingBlackoutConflict);
-        }
-
-        var overlappingBookings = await bookingAvailabilityRepository.GetActiveBookingsAsync(
-            resource.Id, request.StartUtc, request.EndUtc, cancellationToken);
-        var occupancies = overlappingBookings.Select(booking => (booking.StartUtc, booking.EndUtc, Amount: booking.Quantity)).ToList();
-        var availableSlots = IntervalMath.ComputeAvailableCapacity(window, resource.Capacity, occupancies);
-        var usableSlots = availableSlots
-            .Where(slot => slot.AvailableCapacity >= request.Quantity)
-            .Select(slot => (slot.Start, slot.End));
-
-        if (!IntervalMath.Covers(window, usableSlots))
-        {
-            throw new ConflictException("The requested time does not have enough remaining capacity.", ErrorCodes.BookingCapacityExceeded);
-        }
+        var eligibility = await BookingEligibilityChecker.CheckAsync(
+            resource, request.StartUtc, request.EndUtc, request.Quantity, excludeBookingId: null,
+            rules, blackouts, bookingAvailabilityRepository, cancellationToken);
+        BookingEligibilityChecker.ThrowIfNotEligible(eligibility, resource.Id);
 
         var booking = new Booking
         {
@@ -104,7 +75,42 @@ public sealed class CreateBookingCommandHandler(
             CreatedAtUtc = DateTimeOffset.UtcNow,
         };
 
-        await bookingRepository.AddAsync(booking, cancellationToken);
+        // A Resource with RequiresApproval never goes straight to Confirmed - it needs at least one
+        // ResourceApprover configured (rejected outright otherwise, rather than silently confirming a
+        // booking that was supposed to require approval, or creating a Pending booking nobody could ever
+        // approve) - see docs/recurring-bookings-and-approvals.md.
+        if (resource.RequiresApproval)
+        {
+            var approvers = await resourceApproverRepository.GetByResourceIdAsync(resource.Id, cancellationToken);
+            if (approvers.Count == 0)
+            {
+                throw new ConflictException(
+                    $"Resource {resource.Id} requires approval but has no approvers configured.", ErrorCodes.BookingNoApproverConfigured);
+            }
+
+            var tenant = await tenantRepository.FindByIdAsync(booking.TenantId, cancellationToken)
+                ?? throw new InvalidOperationException($"Tenant {booking.TenantId} for the current request was not found.");
+            booking.Status = BookingStatus.Pending;
+
+            await bookingRepository.AddAsync(booking, cancellationToken);
+            await approvalRequestRepository.AddAsync(
+                new ApprovalRequest
+                {
+                    Id = Guid.NewGuid(),
+                    TenantId = booking.TenantId,
+                    BookingId = booking.Id,
+                    ApproverId = null,
+                    Status = ApprovalStatus.Pending,
+                    RequestedAtUtc = DateTimeOffset.UtcNow,
+                    ExpiresAtUtc = DateTimeOffset.UtcNow.AddHours(tenant.ApprovalExpiryHours),
+                },
+                cancellationToken);
+        }
+        else
+        {
+            await bookingRepository.AddAsync(booking, cancellationToken);
+        }
+
         await bookingRepository.SaveChangesAsync(cancellationToken);
 
         return new CreateBookingResponse(booking.Id, booking.ResourceId, booking.StartUtc, booking.EndUtc, booking.Quantity, booking.Status);

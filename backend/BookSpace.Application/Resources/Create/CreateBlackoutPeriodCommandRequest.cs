@@ -10,7 +10,13 @@ namespace BookSpace.Application.Resources;
 public sealed record CreateBlackoutPeriodCommandRequest(Guid ResourceId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, string Reason)
     : IRequest<CreateBlackoutPeriodResponse>;
 
-public sealed record CreateBlackoutPeriodResponse(Guid Id, Guid ResourceId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, string Reason);
+// ConflictingBookingIds lists every currently-active (Pending/Confirmed) Booking that overlaps this
+// blackout - creation is never blocked by them (see docs/recurring-bookings-and-approvals.md for why:
+// nothing today can force-cancel another user's booking, so blocking blackout creation on an existing
+// booking would be a dead end), but the caller is always told exactly what it now conflicts with, never
+// left to discover it separately.
+public sealed record CreateBlackoutPeriodResponse(
+    Guid Id, Guid ResourceId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, string Reason, IReadOnlyList<Guid> ConflictingBookingIds);
 
 public sealed class CreateBlackoutPeriodCommandRequestValidator : AbstractValidator<CreateBlackoutPeriodCommandRequest>
 {
@@ -30,6 +36,7 @@ public sealed class CreateBlackoutPeriodCommandRequestValidator : AbstractValida
 public sealed class CreateBlackoutPeriodCommandHandler(
     IBlackoutPeriodRepository blackoutPeriodRepository,
     IResourceRepository resourceRepository,
+    IBookingAvailabilityRepository bookingAvailabilityRepository,
     ICurrentUserContext currentUserContext) : IRequestHandler<CreateBlackoutPeriodCommandRequest, CreateBlackoutPeriodResponse>
 {
     public async Task<CreateBlackoutPeriodResponse> Handle(CreateBlackoutPeriodCommandRequest request, CancellationToken cancellationToken)
@@ -56,6 +63,11 @@ public sealed class CreateBlackoutPeriodCommandHandler(
         await blackoutPeriodRepository.AddAsync(period, cancellationToken);
         await blackoutPeriodRepository.SaveChangesAsync(cancellationToken);
 
-        return new CreateBlackoutPeriodResponse(period.Id, period.ResourceId, period.StartUtc, period.EndUtc, period.Reason);
+        var conflictingBookings = await bookingAvailabilityRepository.GetActiveBookingsAsync(
+            request.ResourceId, request.StartUtc, request.EndUtc, cancellationToken);
+
+        return new CreateBlackoutPeriodResponse(
+            period.Id, period.ResourceId, period.StartUtc, period.EndUtc, period.Reason,
+            conflictingBookings.Select(booking => booking.Id).ToList());
     }
 }

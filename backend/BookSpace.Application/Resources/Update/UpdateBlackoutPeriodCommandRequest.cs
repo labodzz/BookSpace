@@ -7,7 +7,10 @@ namespace BookSpace.Application.Resources;
 public sealed record UpdateBlackoutPeriodCommandRequest(Guid ResourceId, Guid BlackoutId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, string Reason)
     : IRequest<UpdateBlackoutPeriodResponse>;
 
-public sealed record UpdateBlackoutPeriodResponse(Guid Id, Guid ResourceId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, string Reason);
+// ConflictingBookingIds - see CreateBlackoutPeriodResponse's identical field for why (surfaced, never
+// blocking, never silently dropped).
+public sealed record UpdateBlackoutPeriodResponse(
+    Guid Id, Guid ResourceId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, string Reason, IReadOnlyList<Guid> ConflictingBookingIds);
 
 public sealed class UpdateBlackoutPeriodCommandRequestValidator : AbstractValidator<UpdateBlackoutPeriodCommandRequest>
 {
@@ -20,7 +23,8 @@ public sealed class UpdateBlackoutPeriodCommandRequestValidator : AbstractValida
     }
 }
 
-public sealed class UpdateBlackoutPeriodCommandHandler(IBlackoutPeriodRepository blackoutPeriodRepository)
+public sealed class UpdateBlackoutPeriodCommandHandler(
+    IBlackoutPeriodRepository blackoutPeriodRepository, IBookingAvailabilityRepository bookingAvailabilityRepository)
     : IRequestHandler<UpdateBlackoutPeriodCommandRequest, UpdateBlackoutPeriodResponse>
 {
     public async Task<UpdateBlackoutPeriodResponse> Handle(UpdateBlackoutPeriodCommandRequest request, CancellationToken cancellationToken)
@@ -44,17 +48,21 @@ public sealed class UpdateBlackoutPeriodCommandHandler(IBlackoutPeriodRepository
             throw new ConflictException("Cannot move a blackout period's start further into the past.");
         }
 
-        // Plain full replacement - no booking-conflict recheck exists yet, since Booking read access
-        // (IBookingAvailabilityRepository) doesn't land until the availability query work. Once it
-        // does, this is the natural place for a diff-based recheck: only the newly-exposed time range
-        // (new interval minus old interval) needs to be checked against future Confirmed bookings,
-        // not the whole interval - shortening a blackout never needs a recheck, only widening it does.
+        // Plain full replacement, then re-check the NEW window against active bookings (not a
+        // diff-based recheck of only the newly-exposed range - simpler, and correct either way, since
+        // the check is read-only and non-blocking; see CreateBlackoutPeriodCommandHandler for why this
+        // never blocks the edit, only reports what it now conflicts with).
         period.StartUtc = request.StartUtc;
         period.EndUtc = request.EndUtc;
         period.Reason = request.Reason;
 
         await blackoutPeriodRepository.SaveChangesAsync(cancellationToken);
 
-        return new UpdateBlackoutPeriodResponse(period.Id, period.ResourceId, period.StartUtc, period.EndUtc, period.Reason);
+        var conflictingBookings = await bookingAvailabilityRepository.GetActiveBookingsAsync(
+            period.ResourceId, period.StartUtc, period.EndUtc, cancellationToken);
+
+        return new UpdateBlackoutPeriodResponse(
+            period.Id, period.ResourceId, period.StartUtc, period.EndUtc, period.Reason,
+            conflictingBookings.Select(booking => booking.Id).ToList());
     }
 }

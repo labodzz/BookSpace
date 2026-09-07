@@ -29,4 +29,10 @@ internal static class ErrorCodes
     public const string BookingBlackoutConflict = "Booking.BlackoutConflict";
     public const string BookingCapacityExceeded = "Booking.CapacityExceeded";
     public const string BookingCancellationNotAllowed = "Booking.CancellationNotAllowed";
+    public const string BookingNoApproverConfigured = "Booking.NoApproverConfigured";
+    public const string BookingApprovalNotAllowed = "Booking.ApprovalNotAllowed";
+    public const string BookingApprovalForbidden = "Booking.ApprovalForbidden";
+
+    public const string RecurringSeriesNotFound = "RecurringSeries.NotFound";
+    public const string RecurringSeriesNoValidOccurrences = "RecurringSeries.NoValidOccurrences";
 }

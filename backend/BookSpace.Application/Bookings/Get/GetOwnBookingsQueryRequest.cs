@@ -6,7 +6,8 @@ using FluentValidation;
 
 namespace BookSpace.Application.Bookings;
 
-public sealed record GetOwnBookingsQueryRequest(int Page = 1, int PageSize = 20) : IRequest<PagedResult<GetOwnBookingsResponseItem>>;
+// SeriesId, when given, narrows to that recurring series' own occurrences only.
+public sealed record GetOwnBookingsQueryRequest(int Page = 1, int PageSize = 20, Guid? SeriesId = null) : IRequest<PagedResult<GetOwnBookingsResponseItem>>;
 
 public sealed record GetOwnBookingsResponseItem(
     Guid Id, Guid ResourceId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, int Quantity, BookingStatus Status);
@@ -29,7 +30,7 @@ public sealed class GetOwnBookingsQueryHandler(IBookingRepository bookingReposit
     public async Task<PagedResult<GetOwnBookingsResponseItem>> Handle(GetOwnBookingsQueryRequest request, CancellationToken cancellationToken)
     {
         var paged = await bookingRepository.GetOwnBookingsAsync(
-            currentUserContext.UserId!.Value, request.Page, request.PageSize, cancellationToken);
+            currentUserContext.UserId!.Value, request.SeriesId, request.Page, request.PageSize, cancellationToken);
 
         return new PagedResult<GetOwnBookingsResponseItem>(
             paged.Items.Select(booking => new GetOwnBookingsResponseItem(

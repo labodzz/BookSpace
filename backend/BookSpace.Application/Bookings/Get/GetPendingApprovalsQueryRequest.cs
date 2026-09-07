@@ -1,0 +1,44 @@
+using BookSpace.Application.Mediator;
+using BookSpace.Application.Resources;
+using BookSpace.Application.Security;
+
+namespace BookSpace.Application.Bookings;
+
+public sealed record GetPendingApprovalsQueryRequest : IRequest<IReadOnlyList<GetPendingApprovalsResponseItem>>;
+
+public sealed record GetPendingApprovalsResponseItem(
+    Guid BookingId, Guid ResourceId, Guid UserId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, int Quantity, DateTimeOffset ExpiresAtUtc);
+
+// The approver's own queue: TenantAdmin/SysAdmin see every Pending booking in the tenant; a plain
+// Approver sees only bookings for resources they're a ResourceApprover for - never another approver's
+// resources, and never another tenant's bookings at all (the global query filter already guarantees that).
+public sealed class GetPendingApprovalsQueryHandler(
+    IBookingRepository bookingRepository, IApprovalRequestRepository approvalRequestRepository,
+    IResourceApproverRepository resourceApproverRepository, ICurrentUserContext currentUserContext)
+    : IRequestHandler<GetPendingApprovalsQueryRequest, IReadOnlyList<GetPendingApprovalsResponseItem>>
+{
+    public async Task<IReadOnlyList<GetPendingApprovalsResponseItem>> Handle(GetPendingApprovalsQueryRequest request, CancellationToken cancellationToken)
+    {
+        IReadOnlyList<Guid>? resourceIds = null;
+        if (!currentUserContext.Roles.Contains("TenantAdmin") && !currentUserContext.Roles.Contains("SysAdmin"))
+        {
+            resourceIds = await resourceApproverRepository.GetResourceIdsByUserAsync(currentUserContext.UserId!.Value, cancellationToken);
+        }
+
+        var bookings = await bookingRepository.GetPendingApprovalAsync(resourceIds, cancellationToken);
+        if (bookings.Count == 0)
+        {
+            return [];
+        }
+
+        var approvalRequests = await approvalRequestRepository.GetByBookingIdsAsync(bookings.Select(booking => booking.Id).ToList(), cancellationToken);
+        var expiryByBookingId = approvalRequests.ToDictionary(approvalRequest => approvalRequest.BookingId, approvalRequest => approvalRequest.ExpiresAtUtc);
+
+        return bookings
+            .Select(booking => new GetPendingApprovalsResponseItem(
+                booking.Id, booking.ResourceId, booking.UserId, booking.StartUtc, booking.EndUtc, booking.Quantity,
+                expiryByBookingId.GetValueOrDefault(booking.Id)))
+            .OrderBy(item => item.StartUtc)
+            .ToList();
+    }
+}
