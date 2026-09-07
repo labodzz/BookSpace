@@ -105,6 +105,9 @@ public sealed class UpdateResourceCapacityConcurrencyTests : IAsyncLifetime
                 new BlackoutPeriodRepository(dbContext),
                 new BookingAvailabilityRepository(dbContext),
                 new BookingRepository(dbContext),
+                new ResourceApproverRepository(dbContext),
+                new ApprovalRequestRepository(dbContext),
+                new TenantRepository(dbContext),
                 new FixedCurrentUserContext(_tenantId, _newBookingOwnerId));
             try
             {
@@ -170,6 +173,9 @@ public sealed class UpdateResourceCapacityConcurrencyTests : IAsyncLifetime
             new BlackoutPeriodRepository(dbContext),
             new BookingAvailabilityRepository(dbContext),
             new BookingRepository(dbContext),
+            new ResourceApproverRepository(dbContext),
+            new ApprovalRequestRepository(dbContext),
+            new TenantRepository(dbContext),
             new FixedCurrentUserContext(_tenantId, _newBookingOwnerId));
 
         var response = await handler.Handle(new CreateBookingCommandRequest(resourceId, start, start.AddHours(1), Quantity: 2), CancellationToken.None);

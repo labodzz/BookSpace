@@ -238,6 +238,9 @@ public sealed class BookingConcurrencyTests : IAsyncLifetime
             new BlackoutPeriodRepository(dbContext),
             new BookingAvailabilityRepository(dbContext),
             new BookingRepository(dbContext),
+            new ResourceApproverRepository(dbContext),
+            new ApprovalRequestRepository(dbContext),
+            new TenantRepository(dbContext),
             new FixedCurrentUserContext(_tenantId, userId));
     }
 

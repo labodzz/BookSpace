@@ -22,13 +22,28 @@ public sealed class GetOwnBookingsQueryHandlerTests
     {
         _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
         _bookingRepository
-            .Setup(r => r.GetOwnBookingsAsync(UserId, 1, 20, It.IsAny<CancellationToken>()))
+            .Setup(r => r.GetOwnBookingsAsync(UserId, null, 1, 20, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PagedResult<Booking>([], 1, 20, 0));
         var sut = CreateSut();
 
         await sut.Handle(new GetOwnBookingsQueryRequest(), CancellationToken.None);
 
-        _bookingRepository.Verify(r => r.GetOwnBookingsAsync(UserId, 1, 20, It.IsAny<CancellationToken>()), Times.Once);
+        _bookingRepository.Verify(r => r.GetOwnBookingsAsync(UserId, null, 1, 20, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Handle_WithSeriesIdFilter_PassesItThrough()
+    {
+        var seriesId = Guid.NewGuid();
+        _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
+        _bookingRepository
+            .Setup(r => r.GetOwnBookingsAsync(UserId, seriesId, 1, 20, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedResult<Booking>([], 1, 20, 0));
+        var sut = CreateSut();
+
+        await sut.Handle(new GetOwnBookingsQueryRequest(SeriesId: seriesId), CancellationToken.None);
+
+        _bookingRepository.Verify(r => r.GetOwnBookingsAsync(UserId, seriesId, 1, 20, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -42,7 +57,7 @@ public sealed class GetOwnBookingsQueryHandlerTests
         };
         _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
         _bookingRepository
-            .Setup(r => r.GetOwnBookingsAsync(UserId, 2, 10, It.IsAny<CancellationToken>()))
+            .Setup(r => r.GetOwnBookingsAsync(UserId, null, 2, 10, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PagedResult<Booking>([booking], 2, 10, 1));
         var sut = CreateSut();
 

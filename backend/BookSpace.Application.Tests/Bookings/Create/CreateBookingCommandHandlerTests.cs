@@ -16,6 +16,9 @@ public sealed class CreateBookingCommandHandlerTests
     private readonly Mock<IBlackoutPeriodRepository> _blackoutPeriodRepository = new();
     private readonly Mock<IBookingAvailabilityRepository> _bookingAvailabilityRepository = new();
     private readonly Mock<IBookingRepository> _bookingRepository = new();
+    private readonly Mock<IResourceApproverRepository> _resourceApproverRepository = new();
+    private readonly Mock<IApprovalRequestRepository> _approvalRequestRepository = new();
+    private readonly Mock<ITenantRepository> _tenantRepository = new();
     private readonly Mock<ICurrentUserContext> _currentUserContext = new();
 
     private static readonly DateOnly Date = new(2026, 9, 7);
@@ -31,14 +34,17 @@ public sealed class CreateBookingCommandHandlerTests
         _blackoutPeriodRepository.Object,
         _bookingAvailabilityRepository.Object,
         _bookingRepository.Object,
+        _resourceApproverRepository.Object,
+        _approvalRequestRepository.Object,
+        _tenantRepository.Object,
         _currentUserContext.Object);
 
     private static DateTimeOffset At(int hour, int minute = 0) => new(Date.Year, Date.Month, Date.Day, hour, minute, 0, TimeSpan.Zero);
 
-    private static Resource CreateResource(int capacity = 8) => new()
+    private static Resource CreateResource(int capacity = 8, bool requiresApproval = false) => new()
     {
         Id = Guid.NewGuid(), TenantId = TenantId, ResourceTypeId = Guid.NewGuid(), Name = "Laptop Cart",
-        Capacity = capacity, Status = ResourceStatus.Active, TimeZoneId = "UTC",
+        Capacity = capacity, Status = ResourceStatus.Active, TimeZoneId = "UTC", RequiresApproval = requiresApproval,
     };
 
     private static AvailabilityRule OpenAllDay(Resource resource) => new()
@@ -262,5 +268,44 @@ public sealed class CreateBookingCommandHandlerTests
         var result = await sut.Handle(new CreateBookingCommandRequest(resource.Id, At(10), At(11), Quantity: 1), CancellationToken.None);
 
         Assert.Equal(BookingStatus.Confirmed, result.Status);
+    }
+
+    [Fact]
+    public async Task Handle_ForResourceRequiringApproval_CreatesPendingBookingWithApprovalRequest()
+    {
+        var resource = CreateResource(requiresApproval: true);
+        SetupResource(resource, OpenAllDay(resource));
+        _resourceApproverRepository
+            .Setup(r => r.GetByResourceIdAsync(resource.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new ResourceApprover { Id = Guid.NewGuid(), TenantId = TenantId, ResourceId = resource.Id, UserId = Guid.NewGuid() }]);
+        _tenantRepository
+            .Setup(r => r.FindByIdAsync(TenantId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Tenant { Id = TenantId, Name = "Tenant", DefaultTimeZoneId = "UTC", ApprovalExpiryHours = 48, CreatedAtUtc = At(0) });
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new CreateBookingCommandRequest(resource.Id, At(10), At(11)), CancellationToken.None);
+
+        Assert.Equal(BookingStatus.Pending, result.Status);
+        _approvalRequestRepository.Verify(r => r.AddAsync(
+            It.Is<ApprovalRequest>(a => a.BookingId == result.Id && a.Status == ApprovalStatus.Pending && a.ApproverId == null),
+            It.IsAny<CancellationToken>()), Times.Once);
+        _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Handle_ForResourceRequiringApprovalWithNoConfiguredApprover_ThrowsConflictExceptionWithNoApproverConfiguredCode()
+    {
+        var resource = CreateResource(requiresApproval: true);
+        SetupResource(resource, OpenAllDay(resource));
+        _resourceApproverRepository
+            .Setup(r => r.GetByResourceIdAsync(resource.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<ResourceApprover>)[]);
+        var sut = CreateSut();
+
+        var exception = await Assert.ThrowsAsync<ConflictException>(() =>
+            sut.Handle(new CreateBookingCommandRequest(resource.Id, At(10), At(11)), CancellationToken.None));
+
+        Assert.Equal(ErrorCodes.BookingNoApproverConfigured, exception.ErrorCode);
+        _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 }

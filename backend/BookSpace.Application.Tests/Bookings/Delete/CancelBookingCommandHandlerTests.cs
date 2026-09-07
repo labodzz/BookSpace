@@ -105,4 +105,82 @@ public sealed class CancelBookingCommandHandlerTests
         Assert.Equal(ErrorCodes.BookingCancellationNotAllowed, exception.ErrorCode);
         _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
+
+    [Fact]
+    public async Task Handle_CancelRemainingSeriesFalse_OnlyCancelsThisOneOccurrenceLeavingOthersUntouched()
+    {
+        var seriesId = Guid.NewGuid();
+        var booking = CreateBooking();
+        booking.SeriesId = seriesId;
+        _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
+        _bookingRepository.Setup(r => r.FindByIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new CancelBookingCommandRequest(booking.Id, CancelRemainingSeries: false), CancellationToken.None);
+
+        Assert.Equal(BookingStatus.Cancelled, result.Status);
+        Assert.Empty(result.CascadedOccurrenceIds);
+        _bookingRepository.Verify(r => r.GetBySeriesIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Handle_CancelRemainingSeriesTrue_CancelsThisAndLaterOccurrencesButNotEarlierOnes()
+    {
+        var seriesId = Guid.NewGuid();
+        var anchor = DateTimeOffset.UtcNow.AddDays(5);
+        var booking = CreateBooking();
+        booking.SeriesId = seriesId;
+        booking.StartUtc = anchor;
+        booking.EndUtc = anchor.AddHours(1);
+
+        var earlierOccurrence = new Booking
+        {
+            Id = Guid.NewGuid(), TenantId = TenantId, ResourceId = booking.ResourceId, UserId = UserId, SeriesId = seriesId,
+            StartUtc = anchor.AddDays(-1), EndUtc = anchor.AddDays(-1).AddHours(1), Quantity = 1, Status = BookingStatus.Confirmed, CreatedAtUtc = anchor,
+        };
+        var laterOccurrence = new Booking
+        {
+            Id = Guid.NewGuid(), TenantId = TenantId, ResourceId = booking.ResourceId, UserId = UserId, SeriesId = seriesId,
+            StartUtc = anchor.AddDays(1), EndUtc = anchor.AddDays(1).AddHours(1), Quantity = 1, Status = BookingStatus.Confirmed, CreatedAtUtc = anchor,
+        };
+        var alreadyCompletedLaterOccurrence = new Booking
+        {
+            Id = Guid.NewGuid(), TenantId = TenantId, ResourceId = booking.ResourceId, UserId = UserId, SeriesId = seriesId,
+            StartUtc = anchor.AddDays(2), EndUtc = anchor.AddDays(2).AddHours(1), Quantity = 1, Status = BookingStatus.Completed, CreatedAtUtc = anchor,
+        };
+
+        _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
+        _bookingRepository.Setup(r => r.FindByIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking);
+        _bookingRepository
+            .Setup(r => r.GetBySeriesIdAsync(seriesId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([earlierOccurrence, booking, laterOccurrence, alreadyCompletedLaterOccurrence]);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new CancelBookingCommandRequest(booking.Id, CancelRemainingSeries: true), CancellationToken.None);
+
+        Assert.Equal(BookingStatus.Cancelled, booking.Status);
+        Assert.Equal(BookingStatus.Cancelled, laterOccurrence.Status);
+        Assert.Contains(laterOccurrence.Id, result.CascadedOccurrenceIds);
+        // Never touched: an earlier occurrence, and a later one that already ran its course (Completed).
+        Assert.Equal(BookingStatus.Confirmed, earlierOccurrence.Status);
+        Assert.Equal(BookingStatus.Completed, alreadyCompletedLaterOccurrence.Status);
+        Assert.DoesNotContain(earlierOccurrence.Id, result.CascadedOccurrenceIds);
+        Assert.DoesNotContain(alreadyCompletedLaterOccurrence.Id, result.CascadedOccurrenceIds);
+        Assert.DoesNotContain(booking.Id, result.CascadedOccurrenceIds); // the anchor itself is Id, not a "cascaded" extra
+    }
+
+    [Fact]
+    public async Task Handle_CancelRemainingSeriesTrueOnAOneOffBooking_IsIgnoredAndOnlyCancelsTheOneBooking()
+    {
+        var booking = CreateBooking(); // SeriesId is null - a one-off booking
+        _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
+        _bookingRepository.Setup(r => r.FindByIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new CancelBookingCommandRequest(booking.Id, CancelRemainingSeries: true), CancellationToken.None);
+
+        Assert.Equal(BookingStatus.Cancelled, result.Status);
+        Assert.Empty(result.CascadedOccurrenceIds);
+        _bookingRepository.Verify(r => r.GetBySeriesIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
 }
