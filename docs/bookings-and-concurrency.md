@@ -198,6 +198,36 @@ has.
 demand, which can never turn a valid capacity state into an invalid one. `CancelBookingCommandHandler` is
 an ordinary load-mutate-save, with no interaction with `IResourceBookingLock`.
 
+**Reducing `Resource.Capacity` DOES need this lock, and originally didn't have it.**
+`UpdateResourceCommandHandler.EnsureCapacityCoversExistingBookingsAsync` re-validates that a proposed
+capacity reduction still covers existing bookings' peak demand (see
+[resource-lifecycle-and-capacity.md](resource-lifecycle-and-capacity.md)) - but until this was fixed, it
+did so with a plain, unlocked read, then saved relying solely on `Resource.RowVersion` for conflict
+detection. That's not sufficient: `RowVersion` only detects a competing *write to the `Resources` row
+itself*, and booking creation never writes to `Resources` at all (only `Bookings`), so this race was
+real:
+
+1. `Resource.Capacity = 10`, one Confirmed booking already uses 5.
+2. Request A (reduce capacity to 6) reads demand = 5, validates `5 <= 6`, but hasn't saved yet.
+3. Request B (`CreateBookingCommandHandler`, quantity 3) acquires the resource lock, reads
+   `Capacity = 10` (A's change isn't saved yet), demand = 5, validates `5 + 3 = 8 <= 10`, inserts, commits.
+4. Request A saves `Capacity = 6`. Its `Resource` row's `RowVersion` is still the one it read in step 2 -
+   nothing touched the `Resources` row between steps 2 and 4, so the save succeeds with no conflict.
+5. Final state: `Capacity = 6`, committed demand = 8. Invariant violated, with no exception raised
+   anywhere.
+
+The fix: `UpdateResourceCommandHandler.Handle` now wraps its entire body in the same
+`resourceBookingLock.RunExclusiveAsync(request.Id, ...)` boundary `CreateBookingCommandHandler` uses, and
+the `Resource` read plus the demand recheck both happen *after* the lock is acquired - never reusing a
+value read before it. This makes step 3 and step 2-4 mutually exclusive: whichever request acquires the
+lock first runs to completion (commit or rollback) before the other even starts its read, so the other
+always re-validates against the true, current state. Proven by
+`BookSpace.Infrastructure.Tests.Persistence.UpdateResourceCapacityConcurrencyTests` - including a test
+that runs the two requests above concurrently via a shared start gate and asserts the database never ends
+up with `Capacity` below actual committed demand, regardless of which request happens to win the race
+(either resolution - the reduction rejected, or the new booking rejected - is correct; what must never
+happen is both succeeding).
+
 **Deadlocks**: every booking-create transaction acquires exactly one lock (one resource, one row, always
 first), so no lock-ordering cycle is possible between two such transactions. The remaining transient
 failure mode is a genuine SQL Server deadlock victim or lock-wait timeout (error 1205 / 1222) - caught

@@ -64,13 +64,16 @@ sweep would sum both bookings' quantities for an instant and could reject a perf
 capacity reduction; this exact scenario is covered by
 `Handle_DecreasingCapacityWithBackToBackNonOverlappingBookings_TreatsThemAsNonOverlapping`.
 
-### This is not a booking-creation guarantee
+### Concurrency: shares the same resource-row lock as booking creation
 
-**Availability is currently a read model/calculation, not a transactional guarantee.** There is no
-locking, no `SERIALIZABLE` isolation, and no `UPDLOCK`/`HOLDLOCK` anywhere in this feature - the
-capacity-reduction check above is the only concurrency-relevant guard that exists today, and it only
-protects the *Update-Resource* write path, because Booking-create does not exist yet in this codebase.
-**When the Booking-create Work Packet is implemented, it must not assume the availability query itself
-prevents overbooking under concurrent requests** - see
-[next-work-packet-handoff.md](next-work-packet-handoff.md) and the open "Booking Concurrency" question
-in [open-questions.md](open-questions.md).
+**This check now runs inside the same `IResourceBookingLock` boundary `CreateBookingCommandHandler`
+uses**, keyed by the same `Resources.Id` - see [bookings-and-concurrency.md](bookings-and-concurrency.md)
+for the full mechanism. This closed a real race: a capacity reduction and a concurrent booking creation
+for the same resource used to be able to interleave, because `Resource.RowVersion` only detects a
+competing write to the `Resources` row itself, and booking creation never writes to `Resources` at all
+(only `Bookings`) - so a capacity reduction validated against a stale (too-low) demand snapshot could
+commit successfully with no RowVersion conflict, even though a booking committed in between made the new
+capacity invalid. `UpdateResourceCommandHandler.EnsureCapacityCoversExistingBookingsAsync` now always
+re-reads active bookings *after* the lock is acquired, never reusing a value read before it. Proven by
+`BookSpace.Infrastructure.Tests.Persistence.UpdateResourceCapacityConcurrencyTests` (real SQL Server
+LocalDB - required, since SQLite has no `UPDLOCK`/`HOLDLOCK` support and the lock is a no-op there).

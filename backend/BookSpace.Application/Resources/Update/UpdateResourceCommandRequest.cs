@@ -1,3 +1,4 @@
+using BookSpace.Application.Bookings;
 using BookSpace.Application.Common;
 using BookSpace.Application.Mediator;
 using BookSpace.Domain.Enums;
@@ -43,12 +44,26 @@ public sealed class UpdateResourceCommandRequestValidator : AbstractValidator<Up
     }
 }
 
+// Wrapped in the same IResourceBookingLock boundary CreateBookingCommandHandler uses, keyed by the same
+// Resources.Id - a capacity reduction and a concurrent booking creation for the same resource can now
+// never interleave: whichever gets the lock first commits (or rolls back) completely before the other
+// re-reads and re-validates against the now-current state. A plain read here (as this used to be) is not
+// enough - Resource.RowVersion only detects a competing WRITE to the Resources row itself, and
+// CreateBookingCommandHandler's insert never touches Resources at all (only Bookings), so a stale
+// capacity reduction could previously commit successfully with no RowVersion conflict even though a
+// booking committed in between made it invalid - see docs/bookings-and-concurrency.md.
 public sealed class UpdateResourceCommandHandler(
-    IResourceRepository resourceRepository, IBookingAvailabilityRepository bookingAvailabilityRepository)
+    IResourceBookingLock resourceBookingLock,
+    IResourceRepository resourceRepository,
+    IBookingAvailabilityRepository bookingAvailabilityRepository)
     : IRequestHandler<UpdateResourceCommandRequest, UpdateResourceResponse>
 {
-    public async Task<UpdateResourceResponse> Handle(UpdateResourceCommandRequest request, CancellationToken cancellationToken)
+    public Task<UpdateResourceResponse> Handle(UpdateResourceCommandRequest request, CancellationToken cancellationToken) =>
+        resourceBookingLock.RunExclusiveAsync(request.Id, ct => UpdateUnderLockAsync(request, ct), cancellationToken);
+
+    private async Task<UpdateResourceResponse> UpdateUnderLockAsync(UpdateResourceCommandRequest request, CancellationToken cancellationToken)
     {
+        // Fresh read, taken only after the lock is held - never a value computed before lock acquisition.
         var resource = await resourceRepository.FindByIdAsync(request.Id, cancellationToken)
             ?? throw new NotFoundException($"Resource {request.Id} was not found.");
 
@@ -96,12 +111,12 @@ public sealed class UpdateResourceCommandHandler(
             resource.TimeZoneId);
     }
 
-    // Booking-create doesn't exist yet in this codebase, so this only guards against the one write
-    // path that already exists and could otherwise orphan a commitment: shrinking Capacity below what
-    // active (Pending/Confirmed) bookings already require at some point in time. A sweep-line over
-    // each booking's [Start, +Quantity) / [End, -Quantity) events finds the highest concurrent demand;
-    // IntervalMath.ComputeAvailableCapacity isn't reused here since it answers a different question
-    // (which sub-intervals remain bookable), not "what's the single worst-case peak".
+    // Guards against shrinking Capacity below what active (Pending/Confirmed) bookings already require
+    // at some point in time. A sweep-line over each booking's [Start, +Quantity) / [End, -Quantity)
+    // events finds the highest concurrent demand; IntervalMath.ComputeAvailableCapacity isn't reused
+    // here since it answers a different question (which sub-intervals remain bookable), not "what's the
+    // single worst-case peak". Runs inside UpdateUnderLockAsync's lock, so this read is guaranteed
+    // current with respect to any concurrent CreateBookingCommandHandler call for the same resource.
     private async Task EnsureCapacityCoversExistingBookingsAsync(Guid resourceId, int newCapacity, CancellationToken cancellationToken)
     {
         var activeBookings = await bookingAvailabilityRepository.GetActiveBookingsAsync(

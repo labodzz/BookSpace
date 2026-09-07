@@ -263,11 +263,4 @@ public sealed class CreateBookingCommandHandlerTests
 
         Assert.Equal(BookingStatus.Confirmed, result.Status);
     }
-
-    private sealed class PassThroughResourceBookingLock : IResourceBookingLock
-    {
-        public Task<TResult> RunExclusiveAsync<TResult>(
-            Guid resourceId, Func<CancellationToken, Task<TResult>> operation, CancellationToken cancellationToken) =>
-            operation(cancellationToken);
-    }
 }
