@@ -1,9 +1,12 @@
 # Bookings and Concurrency
 
-What the Booking work packet (WP-4/5: single-user correctness, then concurrency) actually built, on top
-of the `Booking` entity/table/status enum that already existed in the schema since WP-1. Read
+What the Booking work packet (single-user correctness, then concurrency) actually built, on top of the
+`Booking` entity/table/status enum that already existed in the schema since WP-1. Read
 [resource-lifecycle-and-capacity.md](resource-lifecycle-and-capacity.md) and
 [availability-and-timezones.md](availability-and-timezones.md) first - this document assumes both.
+Recurring bookings and the approval workflow build on everything here without changing it - see
+[recurring-bookings-and-approvals.md](recurring-bookings-and-approvals.md), including a real EF Core
+concurrency bug that work found and fixed.
 
 ## 1. Booking lifecycle
 

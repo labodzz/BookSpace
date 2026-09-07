@@ -178,41 +178,51 @@ over another user's booking than any other tenant member (i.e. none).
 
 ---
 
-## Booking Approval Workflow
+## Booking Approval Workflow — RESOLVED
 
 **Question**: Should `Resource.RequiresApproval = true` cause booking creation to produce a `Pending`
 booking (subject to an approve/reject workflow) instead of going straight to `Confirmed`?
 
-**Context**: `ApprovalRequest` has had a schema since WP-1 but zero Application-layer logic. This work
-packet's `CreateBookingCommandHandler` ignores `Resource.RequiresApproval` entirely and always produces
-`Confirmed` - see [bookings-and-concurrency.md](bookings-and-concurrency.md#1-booking-lifecycle). Building
-only the "create a `Pending` booking" half without an approve/reject handler would leave bookings stuck
-in `Pending` forever with no way out, which is worse than not building it at all.
+**Resolution**: yes - implemented in the Recurrence/Approvals work packet. `RequiresApproval = true`
+(checked at both single-booking and recurring-series creation) now produces `Pending` bookings with their
+own `ApprovalRequest`, decided via `POST /bookings/{id}/approve` or `/reject` by a `ResourceApprover` for
+that resource or a `TenantAdmin`/`SysAdmin`, with a fresh availability/capacity re-check at decision time
+protected by the same `IResourceBookingLock` boundary booking creation uses. Full writeup:
+[recurring-bookings-and-approvals.md](recurring-bookings-and-approvals.md) §4-§5.
 
-**Why it matters**: `RequiresApproval` currently has no observable effect on booking creation, which is
-surprising given the field's name and the existing "Approval Semantics" open question about what Pending
-means for capacity.
+**Still not resolved by this work packet** (left as its own separate concern, not silently answered
+alongside this one): automatic expiry handling for `ApprovalRequest.ExpiresAtUtc` (no background-job
+infrastructure exists in this codebase to drive it) - see
+[recurring-bookings-and-approvals.md](recurring-bookings-and-approvals.md#15-known-limitations).
 
-**Trigger**: An Approval Work Packet that designs the full lifecycle (who approves, what happens on
-expiry/rejection, does `Pending` release capacity if never approved).
-
-**Current default**: every booking this work packet's API creates is `Confirmed`, regardless of
-`Resource.RequiresApproval`.
+**Original context** (kept for history): `ApprovalRequest` had a schema since WP-1 but zero
+Application-layer logic; the prior Booking work packet's `CreateBookingCommandHandler` ignored
+`Resource.RequiresApproval` entirely, producing `Confirmed` unconditionally, and explicitly deferred this
+decision rather than building only half of it (a `Pending` booking with no way to ever leave that state).
 
 ---
 
-## Approval Semantics
+## Approval Semantics — PARTIALLY RESOLVED
 
 **Question**: How should a Pending approval affect capacity - does a pending booking reserve capacity
 the same as a confirmed one? What happens to reserved capacity when an approval expires or is rejected?
 
-**Context**: `ApprovalRequest` has a schema (from WP-1) but zero Application-layer logic today. The
-current availability query treats `Pending` bookings as capacity-consuming (same as `Confirmed`) - this
-was a deliberate placeholder decision ("you should not be able to double-book a slot while someone
-else's approval is pending"), not a designed approval-lifecycle semantic, since there is no approval
-lifecycle implemented yet to design around.
+**Resolved part**: `Pending` deliberately continues to consume capacity identically to `Confirmed` - now
+a confirmed, tested decision rather than an untested placeholder, since bookings that actually reach
+`Pending` (and go through approval/rejection) exist for the first time as of the Recurrence/Approvals
+work packet. Rejecting a `Pending` booking (or cancelling one) correctly and immediately releases its
+capacity, since only `Pending`/`Confirmed` ever count - see
+[recurring-bookings-and-approvals.md](recurring-bookings-and-approvals.md) §5-§6.
 
-**Trigger**: The Approval/Booking Work Packet.
+**Still unresolved**: what happens when an `ApprovalRequest.ExpiresAtUtc` passes with no decision made.
+Nothing drives that transition automatically - there is no background-job/scheduling infrastructure
+anywhere in this codebase to build it on top of yet. A `Pending` booking whose approval window has
+technically expired stays `Pending`, and still consumes capacity, until a human explicitly approves or
+rejects it.
 
-**Current default**: Pending consumes capacity identically to Confirmed; there is no expiry/rejection
-handling to release it, because nothing creates a Pending booking through the API yet.
+**Trigger**: A future work packet that introduces scheduled/background job infrastructure, or a decision
+that expiry should instead be enforced lazily (e.g. checked at read/decision time rather than driven by a
+timer).
+
+**Current default**: Pending consumes capacity identically to Confirmed (confirmed, not placeholder);
+expiry is tracked but not enforced.

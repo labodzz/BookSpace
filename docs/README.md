@@ -19,6 +19,10 @@ assumptions and not merely from audit findings. Start here, then follow links in
   rejection-reason contract, capacity/interval semantics, cancellation semantics, and the
   transaction-scoped resource-row lock that makes double-booking impossible under real concurrency -
   with the SQL Server/LocalDB test evidence proving it.
+- **[recurring-bookings-and-approvals.md](recurring-bookings-and-approvals.md)** - recurrence storage/
+  generation model, per-occurrence conflict surfacing, the approval workflow and its own concurrency
+  boundary, why recurrence's DST policy deliberately differs from the availability query's, and a real
+  EF Core identity-map concurrency bug this work found and fixed.
 - **[audit-remediation-summary.md](audit-remediation-summary.md)** - what was fixed in the
   2026-09-04 remediation pass, what was deferred and why, classified by risk type.
 - **[open-questions.md](open-questions.md)** - genuinely unresolved decisions, each with its context,

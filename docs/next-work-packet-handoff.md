@@ -10,6 +10,25 @@ another user's booking, `RequiresApproval`/approval-workflow wiring, idempotency
 preparation notes are kept below, unedited, as a record of what was checked before implementation began -
 every invariant listed was in fact preserved; see `bookings-and-concurrency.md` §7-§9 for how.
 
+## Recurrence/Approvals Work Packet — completed
+
+The `RequiresApproval`/approval-workflow wiring the Booking Work Packet deliberately left open is now
+also done, alongside recurring bookings - see
+[recurring-bookings-and-approvals.md](recurring-bookings-and-approvals.md). Two things worth knowing
+before touching this area again:
+
+- **A real concurrency bug was found and fixed during this work**, not merely avoided: a naive "read
+  before the lock, read again after acquiring it" pattern in `ApproveBookingCommandHandler` looked
+  correct but wasn't - EF Core's change tracker (identity map) silently returned the same stale tracked
+  `Booking` instance on the second read instead of the row's current state, because both reads ran on the
+  same `DbContext`. See [recurring-bookings-and-approvals.md](recurring-bookings-and-approvals.md) §8 -
+  **any future handler that needs to resolve a lock key from an entity, then reload that same entity
+  after acquiring the lock, must make the pre-lock read a projection, not a tracked load, or it will hit
+  the identical trap.**
+- The existing capacity-reduction concurrency fix (commit `186ae66`,
+  `UpdateResourceCommandHandler`/`IResourceBookingLock`) was inspected and confirmed to need no changes -
+  see [recurring-bookings-and-approvals.md](recurring-bookings-and-approvals.md) §9.
+
 ## What is already stable and should not be unnecessarily rewritten
 
 - The mediator/validation/error-handling pipeline (see [architecture.md](architecture.md)) - a new
@@ -71,20 +90,19 @@ every invariant listed was in fact preserved; see `bookings-and-concurrency.md` 
 
 ## Regression protection - keep these green
 
-Current counts, after the Booking Work Packet (previously 165/79/21):
+Current counts, after the Recurrence/Approvals Work Packet (previously 207/92/24 after Booking; 165/79/21
+before that):
 
-- `BookSpace.Application.Tests`: 207 tests. Includes the pre-existing `GetResourceAvailabilityQueryHandlerTests`
-  suite (DST, capacity-aware slots, resource-status gating, unchanged behavior - only its internal
-  DST-conversion logic moved into the new shared `AvailabilityCalculator`, proven by this suite staying
-  green throughout) and `UpdateResourceCommandHandlerTests` (capacity sweep-line boundary cases), plus
-  the new `Bookings/` suite (create/get/cancel handlers and validators) and `IntervalMathTests`' new
-  `Covers` coverage.
-- `BookSpace.Api.Tests`: 92 tests, SQLite-backed. Includes the new `BookingsEndpointsTests` (auth/RBAC,
-  cross-tenant and cross-user 404s, the freed-capacity-after-cancellation proof against the real
-  availability endpoint).
-- `BookSpace.Infrastructure.Tests`: 24 tests, real-LocalDB-backed. Includes the new
-  `BookingConcurrencyTests` - the only place the double-booking-is-impossible guarantee is actually
-  proven, including a reconstructed naive-approach reproduction showing what it prevents.
+- `BookSpace.Application.Tests`: 271 tests. Adds `RecurringOccurrenceGeneratorTests` (pure, DST-critical),
+  `CreateRecurringSeriesCommandHandlerTests`, `Approve`/`RejectBookingCommandHandlerTests`,
+  `GetPendingApprovalsQueryHandlerTests`, `GetRecurringSeriesQueryHandlerTests`, and cascade-cancellation
+  cases added to `CancelBookingCommandHandlerTests`, on top of everything from the Booking Work Packet.
+- `BookSpace.Api.Tests`: 105 tests, SQLite-backed. Adds `RecurringSeriesAndApprovalEndpointsTests` (series
+  creation with/without conflicts, cascade cancellation, `RequiresApproval` over the wire, the
+  pending-approval queue, approve/reject, RBAC, cross-tenant 404s).
+- `BookSpace.Infrastructure.Tests`: 30 tests, real-LocalDB-backed. Adds `UpdateResourceCapacityConcurrencyTests`
+  (the fix for commit `186ae66`) and `ApprovalConcurrencyTests` (the two tests that caught and then
+  proved the fix for the identity-map bug in §8 above), on top of the existing `BookingConcurrencyTests`.
 
-Any future work packet touching Bookings, Resources, or availability should extend these suites
-deliberately, not silently break them.
+Any future work packet touching Bookings, RecurringSeries, Approvals, Resources, or availability should
+extend these suites deliberately, not silently break them.
