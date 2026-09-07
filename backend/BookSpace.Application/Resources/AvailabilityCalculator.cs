@@ -2,11 +2,14 @@ using BookSpace.Domain.Entities;
 
 namespace BookSpace.Application.Resources;
 
-// Shared between the availability read model (GetResourceAvailabilityQueryHandler) and Booking-create's
-// own pre-commit re-check (CreateBookingCommandHandler), so both compute "when is this resource open"
-// the exact same way, including the DST edge-case policy on ConvertLocalToUtc - do not write a second,
-// divergent conversion path (see docs/availability-and-timezones.md).
-internal static class AvailabilityCalculator
+// Shared between the availability read model (GetResourceAvailabilityQueryHandler), Booking-create's own
+// pre-commit re-check (CreateBookingCommandHandler), and DevelopmentSeeder (Infrastructure - hence
+// public, not internal), so all three compute "when is this resource open" the exact same way, including
+// the DST edge-case policy on ConvertLocalToUtc - do not write a second, divergent conversion path (see
+// docs/availability-and-timezones.md). RecurringOccurrenceGenerator deliberately does NOT reuse
+// ConvertLocalToUtc - recurrence occurrence generation has its own, intentionally different DST policy;
+// see docs/recurring-bookings-and-approvals.md for why.
+public static class AvailabilityCalculator
 {
     // Expands day-of-week AvailabilityRules into UTC open periods for each calendar date in
     // [fromDate, toDate], merging same-day rules that overlap or touch. Periods are NOT merged across

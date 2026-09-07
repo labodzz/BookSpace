@@ -1,3 +1,4 @@
+using BookSpace.Application.Resources;
 using BookSpace.Application.Security;
 using BookSpace.Domain.Entities;
 using BookSpace.Domain.Enums;
@@ -115,35 +116,52 @@ internal static class DevelopmentSeeder
             Reason = "Projector maintenance",
         });
 
-        // Two-year weekly recurring booking (WP-1 acceptance: the model must represent this without a redesign).
+        // Two-year weekly recurring booking (WP-1 acceptance: the model must represent this without a
+        // redesign). StartDate/StartTime/EndTime are resolved to UTC per-occurrence, DST-safely, by
+        // RecurringOccurrenceGenerator - not by adding a fixed UTC duration - see
+        // docs/recurring-bookings-and-approvals.md.
+        var seriesStartDate = DateOnly.FromDateTime(now.UtcDateTime.Date.AddDays(1));
         var recurringSeries = new RecurringSeries
         {
             Id = Guid.NewGuid(),
             TenantId = acme.Id,
             ResourceId = hotDesk1.Id,
             UserId = acmeMember.Id,
-            StartUtc = new DateTimeOffset(now.UtcDateTime.Date.AddDays(1).AddHours(9), TimeSpan.Zero),
-            EndUtc = new DateTimeOffset(now.UtcDateTime.Date.AddDays(1).AddHours(9).AddYears(2), TimeSpan.Zero),
+            StartDate = seriesStartDate,
+            StartTime = new TimeOnly(9, 0),
+            EndTime = new TimeOnly(17, 0),
+            EndDate = seriesStartDate.AddYears(2),
             TimeZoneId = acme.DefaultTimeZoneId,
             Frequency = RecurrenceFrequency.Weekly,
             Interval = 1,
+            Quantity = 1,
         };
         dbContext.RecurringSeries.Add(recurringSeries);
 
-        var recurringOccurrences = Enumerable.Range(0, 3).Select(week => new Booking
+        var seriesTimeZone = TimeZoneInfo.FindSystemTimeZoneById(recurringSeries.TimeZoneId);
+        var recurringOccurrences = Enumerable.Range(0, 3).Select(week =>
         {
-            Id = Guid.NewGuid(),
-            TenantId = acme.Id,
-            ResourceId = hotDesk1.Id,
-            UserId = acmeMember.Id,
-            SeriesId = recurringSeries.Id,
-            StartUtc = recurringSeries.StartUtc.AddDays(7 * week),
-            EndUtc = recurringSeries.StartUtc.AddDays(7 * week).AddHours(8),
-            Quantity = 1,
-            Status = BookingStatus.Confirmed,
-            CreatedAtUtc = now,
+            var occurrenceDate = seriesStartDate.AddDays(7 * week);
+            return new Booking
+            {
+                Id = Guid.NewGuid(),
+                TenantId = acme.Id,
+                ResourceId = hotDesk1.Id,
+                UserId = acmeMember.Id,
+                SeriesId = recurringSeries.Id,
+                StartUtc = AvailabilityCalculator.ConvertLocalToUtc(occurrenceDate, recurringSeries.StartTime, seriesTimeZone),
+                EndUtc = AvailabilityCalculator.ConvertLocalToUtc(occurrenceDate, recurringSeries.EndTime, seriesTimeZone),
+                Quantity = recurringSeries.Quantity,
+                Status = BookingStatus.Confirmed,
+                CreatedAtUtc = now,
+            };
         });
         dbContext.Bookings.AddRange(recurringOccurrences);
+
+        dbContext.ResourceApprovers.Add(new ResourceApprover
+        {
+            Id = Guid.NewGuid(), TenantId = acme.Id, ResourceId = conferenceRoomA.Id, UserId = acmeApprover.Id,
+        });
 
         // One-off booking pending approval.
         var pendingBooking = new Booking
@@ -164,7 +182,7 @@ internal static class DevelopmentSeeder
             Id = Guid.NewGuid(),
             TenantId = acme.Id,
             BookingId = pendingBooking.Id,
-            ApproverId = acmeApprover.Id,
+            ApproverId = null, // populated only once someone actually decides - acmeApprover is eligible via ResourceApprover, not pre-assigned
             Status = ApprovalStatus.Pending,
             RequestedAtUtc = now,
             ExpiresAtUtc = now.AddHours(acme.ApprovalExpiryHours),
