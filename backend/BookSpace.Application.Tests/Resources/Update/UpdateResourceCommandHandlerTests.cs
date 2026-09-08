@@ -1,5 +1,6 @@
 using BookSpace.Application.Common;
 using BookSpace.Application.Resources;
+using BookSpace.Application.Tests.Bookings;
 using BookSpace.Domain.Entities;
 using BookSpace.Domain.Enums;
 using Moq;
@@ -12,7 +13,11 @@ public sealed class UpdateResourceCommandHandlerTests
     private readonly Mock<IResourceRepository> _resourceRepository = new();
     private readonly Mock<IBookingAvailabilityRepository> _bookingAvailabilityRepository = new();
 
-    private UpdateResourceCommandHandler CreateSut() => new(_resourceRepository.Object, _bookingAvailabilityRepository.Object);
+    // The lock is a pass-through here (no real DB/transaction in a handler test) - the actual
+    // capacity-reduction-vs-booking-creation race this lock closes is proven against real SQL Server in
+    // BookSpace.Infrastructure.Tests (UpdateResourceCapacityConcurrencyTests).
+    private UpdateResourceCommandHandler CreateSut() =>
+        new(new PassThroughResourceBookingLock(), _resourceRepository.Object, _bookingAvailabilityRepository.Object);
 
     private static Resource CreateResource(Guid? id = null) => new()
     {

@@ -28,7 +28,7 @@ namespace BookSpace.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
-                    b.Property<Guid>("ApproverId")
+                    b.Property<Guid?>("ApproverId")
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<Guid>("BookingId")
@@ -219,8 +219,11 @@ namespace BookSpace.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
-                    b.Property<DateTimeOffset?>("EndUtc")
-                        .HasColumnType("datetimeoffset");
+                    b.Property<DateOnly?>("EndDate")
+                        .HasColumnType("date");
+
+                    b.Property<TimeOnly>("EndTime")
+                        .HasColumnType("time");
 
                     b.Property<string>("Frequency")
                         .IsRequired()
@@ -230,11 +233,20 @@ namespace BookSpace.Infrastructure.Migrations
                     b.Property<int>("Interval")
                         .HasColumnType("int");
 
+                    b.Property<int?>("OccurrenceCount")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("int");
+
                     b.Property<Guid>("ResourceId")
                         .HasColumnType("uniqueidentifier");
 
-                    b.Property<DateTimeOffset>("StartUtc")
-                        .HasColumnType("datetimeoffset");
+                    b.Property<DateOnly>("StartDate")
+                        .HasColumnType("date");
+
+                    b.Property<TimeOnly>("StartTime")
+                        .HasColumnType("time");
 
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uniqueidentifier");
@@ -257,9 +269,15 @@ namespace BookSpace.Infrastructure.Migrations
 
                     b.ToTable("RecurringSeries", null, t =>
                         {
+                            t.HasCheckConstraint("CK_RecurringSeries_EndCondition", "([EndDate] IS NOT NULL AND [OccurrenceCount] IS NULL) OR ([EndDate] IS NULL AND [OccurrenceCount] IS NOT NULL)");
+
                             t.HasCheckConstraint("CK_RecurringSeries_Interval", "[Interval] > 0");
 
-                            t.HasCheckConstraint("CK_RecurringSeries_TimeRange", "[EndUtc] IS NULL OR [EndUtc] > [StartUtc]");
+                            t.HasCheckConstraint("CK_RecurringSeries_OccurrenceCount", "[OccurrenceCount] IS NULL OR [OccurrenceCount] > 0");
+
+                            t.HasCheckConstraint("CK_RecurringSeries_Quantity", "[Quantity] > 0");
+
+                            t.HasCheckConstraint("CK_RecurringSeries_TimeRange", "[EndTime] > [StartTime]");
                         });
                 });
 
@@ -556,8 +574,7 @@ namespace BookSpace.Infrastructure.Migrations
                     b.HasOne("BookSpace.Domain.Entities.User", null)
                         .WithMany()
                         .HasForeignKey("ApproverId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.HasOne("BookSpace.Domain.Entities.Booking", null)
                         .WithMany()

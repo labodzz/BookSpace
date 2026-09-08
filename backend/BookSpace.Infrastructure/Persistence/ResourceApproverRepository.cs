@@ -15,6 +15,12 @@ internal sealed class ResourceApproverRepository(BookSpaceDbContext dbContext) :
             .Where(approver => approver.ResourceId == resourceId)
             .ToListAsync(cancellationToken);
 
+    public async Task<IReadOnlyList<Guid>> GetResourceIdsByUserAsync(Guid userId, CancellationToken cancellationToken) =>
+        await dbContext.ResourceApprovers
+            .Where(approver => approver.UserId == userId)
+            .Select(approver => approver.ResourceId)
+            .ToListAsync(cancellationToken);
+
     public async Task AddAsync(ResourceApprover approver, CancellationToken cancellationToken) =>
         await dbContext.ResourceApprovers.AddAsync(approver, cancellationToken);
 

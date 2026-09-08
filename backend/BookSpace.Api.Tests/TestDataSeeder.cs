@@ -40,6 +40,11 @@ public static class TestDataSeeder
     public static readonly Guid AcmeResourceId = Guid.NewGuid();
     public static readonly Guid GlobexResourceId = Guid.NewGuid();
 
+    // A separate resource (not AcmeResourceId) so RequiresApproval=true doesn't change the expected
+    // behavior of every existing availability/capacity test that already assumes AcmeResourceId always
+    // confirms bookings directly. AcmeApproverUserId is its ResourceApprover.
+    public static readonly Guid AcmeApprovalRequiredResourceId = Guid.NewGuid();
+
     // A fixed point a few days out, rather than "today", so the seeded AvailabilityRules (which
     // cover every day of the week) never have to account for which weekday the suite happens to run on.
     // Built from DateTime.UtcNow.Date (Kind stays Utc) rather than DateTimeOffset.UtcNow.Date (whose
@@ -120,14 +125,33 @@ public static class TestDataSeeder
                 Id = GlobexResourceId, TenantId = GlobexTenantId, ResourceTypeId = GlobexResourceTypeId,
                 Name = "Globex Only Room", Capacity = 4, RequiresApproval = false,
                 Status = ResourceStatus.Active, TimeZoneId = "UTC",
+            },
+            new Resource
+            {
+                Id = AcmeApprovalRequiredResourceId, TenantId = AcmeTenantId, ResourceTypeId = ResourceTypeId,
+                Name = "Approval Required Room", Capacity = 4, RequiresApproval = true,
+                Status = ResourceStatus.Active, TimeZoneId = "UTC",
             });
+
+        dbContext.ResourceApprovers.Add(new ResourceApprover
+        {
+            Id = Guid.NewGuid(), TenantId = AcmeTenantId, ResourceId = AcmeApprovalRequiredResourceId, UserId = AcmeApproverUserId,
+        });
 
         // Whole-day rules for every weekday, so the fixture doesn't depend on which weekday the
         // suite happens to run on.
-        dbContext.AvailabilityRules.AddRange(Enum.GetValues<DayOfWeek>().Select(dayOfWeek => new AvailabilityRule
+        dbContext.AvailabilityRules.AddRange(Enum.GetValues<DayOfWeek>().SelectMany(dayOfWeek => new[]
         {
-            Id = Guid.NewGuid(), TenantId = AcmeTenantId, ResourceId = AcmeResourceId,
-            DayOfWeek = dayOfWeek, StartTime = TimeOnly.MinValue, EndTime = TimeOnly.MaxValue,
+            new AvailabilityRule
+            {
+                Id = Guid.NewGuid(), TenantId = AcmeTenantId, ResourceId = AcmeResourceId,
+                DayOfWeek = dayOfWeek, StartTime = TimeOnly.MinValue, EndTime = TimeOnly.MaxValue,
+            },
+            new AvailabilityRule
+            {
+                Id = Guid.NewGuid(), TenantId = AcmeTenantId, ResourceId = AcmeApprovalRequiredResourceId,
+                DayOfWeek = dayOfWeek, StartTime = TimeOnly.MinValue, EndTime = TimeOnly.MaxValue,
+            },
         }));
 
         dbContext.BlackoutPeriods.Add(new BlackoutPeriod

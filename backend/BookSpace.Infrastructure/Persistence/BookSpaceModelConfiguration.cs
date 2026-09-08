@@ -139,7 +139,13 @@ internal static class BookSpaceModelConfiguration
             entity.ToTable("RecurringSeries", table =>
             {
                 table.HasCheckConstraint("CK_RecurringSeries_Interval", "[Interval] > 0");
-                table.HasCheckConstraint("CK_RecurringSeries_TimeRange", "[EndUtc] IS NULL OR [EndUtc] > [StartUtc]");
+                table.HasCheckConstraint("CK_RecurringSeries_TimeRange", "[EndTime] > [StartTime]");
+                table.HasCheckConstraint("CK_RecurringSeries_Quantity", "[Quantity] > 0");
+                table.HasCheckConstraint("CK_RecurringSeries_OccurrenceCount", "[OccurrenceCount] IS NULL OR [OccurrenceCount] > 0");
+                // Exactly one end condition - never both, never neither.
+                table.HasCheckConstraint(
+                    "CK_RecurringSeries_EndCondition",
+                    "([EndDate] IS NOT NULL AND [OccurrenceCount] IS NULL) OR ([EndDate] IS NULL AND [OccurrenceCount] IS NOT NULL)");
             });
             entity.HasKey(series => series.Id);
             entity.Property(series => series.TimeZoneId).HasMaxLength(100).IsRequired();

@@ -85,14 +85,26 @@ require real SQL Server (LocalDB) and are called out as such in their own file-l
   `AvailabilityRule` (Create/Delete only, no Update), `BlackoutPeriod` (full CRUD, backdating-guarded),
   `ResourceApprover` assignment, optimistic concurrency on `Resource`/`BlackoutPeriod`.
 - Live availability query: capacity-aware, DST-correct, SQL-Server-bounded range filtering.
+- Bookings: single-user creation (availability/blackout/capacity-checked, `[Start,End)` semantics reused
+  from `IntervalMath`), member self-service view/cancel, and - the hard part - concurrency-safe capacity
+  enforcement under real racing requests via a transaction-scoped `Resource`-row lock, proven against
+  real SQL Server/LocalDB. See [bookings-and-concurrency.md](bookings-and-concurrency.md) for the full
+  writeup.
+- Recurring bookings: `RecurringSeries` (Daily/Weekly/Monthly, DST-safe per-occurrence generation) with
+  every occurrence materialized as a real, independently viewable/cancellable `Booking`; conflicts
+  surfaced explicitly per occurrence at creation, never silently dropped.
+- Approval workflow: `Resource.RequiresApproval` now produces `Pending` bookings decided via approve/
+  reject by a `ResourceApprover` or `TenantAdmin`/`SysAdmin`, with a fresh availability re-check at
+  decision time under the same resource lock booking creation uses. See
+  [recurring-bookings-and-approvals.md](recurring-bookings-and-approvals.md) for the full writeup,
+  including a real EF Core identity-map bug this work surfaced and fixed.
 
-**Intentionally deferred** (see [open-questions.md](open-questions.md) and
-[next-work-packet-handoff.md](next-work-packet-handoff.md) for what each depends on): database-level
-composite tenant foreign keys, absolute refresh-token session lifetime, logout/session revocation,
-password-change session revocation, dynamic role-change invalidation, Resource reactivation-from-
-Archived as an explicit action, JWT signing-key git-history rewrite.
+**Intentionally deferred** (see [open-questions.md](open-questions.md) for what each depends on):
+database-level composite tenant foreign keys, absolute refresh-token session lifetime, logout/session
+revocation, password-change session revocation, dynamic role-change invalidation, Resource
+reactivation-from-Archived as an explicit action, JWT signing-key git-history rewrite, TenantAdmin
+cancellation of another user's booking, automatic `ApprovalRequest` expiry enforcement, booking
+idempotency keys.
 
-**Not yet implemented at all** - do not assume any of this exists: Booking creation/cancellation,
-`RecurringSeries` and `ApprovalRequest` business logic (their tables exist in the schema from WP-1, but
-no Application-layer commands/queries/handlers touch them), any approval workflow, rate limiting,
-notification/reminder delivery.
+**Not yet implemented at all** - do not assume any of this exists: rate limiting, notification/reminder
+delivery, any scheduled/background job infrastructure.

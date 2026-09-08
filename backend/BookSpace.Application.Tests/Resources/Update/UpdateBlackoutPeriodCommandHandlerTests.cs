@@ -1,6 +1,7 @@
 using BookSpace.Application.Common;
 using BookSpace.Application.Resources;
 using BookSpace.Domain.Entities;
+using BookSpace.Domain.Enums;
 using Moq;
 using Xunit;
 
@@ -10,7 +11,20 @@ public sealed class UpdateBlackoutPeriodCommandHandlerTests
 {
     private readonly Mock<IBlackoutPeriodRepository> _blackoutPeriodRepository = new();
 
-    private UpdateBlackoutPeriodCommandHandler CreateSut() => new(_blackoutPeriodRepository.Object);
+    // Every successful update re-checks for conflicting bookings against the new window - defaults to
+    // "none" here so existing tests don't each need to set this up individually; the dedicated conflict
+    // test below overrides it explicitly.
+    private readonly Mock<IBookingAvailabilityRepository> _bookingAvailabilityRepository = CreateBookingAvailabilityRepositoryMock();
+
+    private UpdateBlackoutPeriodCommandHandler CreateSut() => new(_blackoutPeriodRepository.Object, _bookingAvailabilityRepository.Object);
+
+    private static Mock<IBookingAvailabilityRepository> CreateBookingAvailabilityRepositoryMock()
+    {
+        var mock = new Mock<IBookingAvailabilityRepository>();
+        mock.Setup(r => r.GetActiveBookingsAsync(It.IsAny<Guid>(), It.IsAny<DateTimeOffset>(), It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<Booking>)[]);
+        return mock;
+    }
 
     private static BlackoutPeriod CreatePeriod(Guid resourceId) => new()
     {
@@ -38,6 +52,30 @@ public sealed class UpdateBlackoutPeriodCommandHandlerTests
         Assert.Equal(newEnd, result.EndUtc);
         Assert.Equal("New reason", result.Reason);
         _blackoutPeriodRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Handle_MovedIntoOverlapWithAnExistingActiveBooking_StillUpdatesButReportsTheConflict()
+    {
+        var resourceId = Guid.NewGuid();
+        var period = CreatePeriod(resourceId);
+        var newStart = DateTimeOffset.UtcNow.AddDays(2);
+        var newEnd = newStart.AddHours(3);
+        var overlappingBooking = new Booking
+        {
+            Id = Guid.NewGuid(), TenantId = period.TenantId, ResourceId = resourceId, UserId = Guid.NewGuid(),
+            StartUtc = newStart, EndUtc = newEnd, Quantity = 1, Status = BookingStatus.Confirmed, CreatedAtUtc = newStart,
+        };
+        _blackoutPeriodRepository.Setup(r => r.FindByIdAsync(period.Id, It.IsAny<CancellationToken>())).ReturnsAsync(period);
+        _bookingAvailabilityRepository
+            .Setup(r => r.GetActiveBookingsAsync(resourceId, It.IsAny<DateTimeOffset>(), It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([overlappingBooking]);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new UpdateBlackoutPeriodCommandRequest(resourceId, period.Id, newStart, newEnd, "New reason"), CancellationToken.None);
+
+        _blackoutPeriodRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+        Assert.Contains(overlappingBooking.Id, result.ConflictingBookingIds);
     }
 
     [Fact]
