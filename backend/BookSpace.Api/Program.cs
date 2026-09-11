@@ -23,6 +23,8 @@ using Serilog.Formatting.Compact;
 const string ConsoleOutputTemplate =
     "{Timestamp:HH:mm:ss} [{Level:u3}] (cid: {CorrelationId}) {Message:lj}{NewLine}{Exception}";
 
+const string CorsPolicyName = "Frontend";
+
 // Two-stage setup (the pattern Serilog itself recommends): a minimal bootstrap logger captures
 // anything that goes wrong before configuration/DI are even up, then builder.Host.UseSerilog below
 // replaces it with the fully configured logger for the rest of the app's life.
@@ -73,6 +75,23 @@ try
     builder.Services.AddControllers();
     // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
     builder.Services.AddOpenApi();
+
+    // Fail closed, same principle as the tenant query filter: an unconfigured/empty origin list means
+    // WithOrigins() is never called, so the policy allows no cross-origin requests at all, rather than
+    // falling back to an open AllowAnyOrigin(). The frontend calls this API with an Authorization: Bearer
+    // header, never cookies, so AllowCredentials() is deliberately not set - it isn't needed, and setting
+    // it would also forbid combining this policy with a wildcard origin later by mistake.
+    var corsOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
+    builder.Services.AddCors(options =>
+    {
+        options.AddPolicy(CorsPolicyName, policy =>
+        {
+            policy.WithOrigins(corsOrigins)
+                .AllowAnyHeader()
+                .AllowAnyMethod()
+                .WithExposedHeaders(CorrelationIdMiddleware.HeaderName);
+        });
+    });
 
     builder.Services.AddProblemDetails();
     // Tried in registration order, first to return true wins: specific exception types are mapped
@@ -138,6 +157,11 @@ try
     app.UseExceptionHandler();
 
     app.UseHttpsRedirection();
+
+    // Must run before UseAuthentication/UseAuthorization: a preflight OPTIONS request carries no
+    // Authorization header at all, so if auth ran first a browser's preflight would be rejected before
+    // CORS ever got a chance to answer it.
+    app.UseCors(CorsPolicyName);
 
     app.UseAuthentication();
     app.UseAuthorization();
