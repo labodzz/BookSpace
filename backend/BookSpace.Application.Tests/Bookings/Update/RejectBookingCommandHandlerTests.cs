@@ -21,7 +21,7 @@ public sealed class RejectBookingCommandHandlerTests
     private static readonly Guid ResourceId = Guid.NewGuid();
 
     private RejectBookingCommandHandler CreateSut() =>
-        new(_bookingRepository.Object, _approvalRequestRepository.Object, _resourceApproverRepository.Object, _currentUserContext.Object);
+        new(new PassThroughResourceBookingLock(), _bookingRepository.Object, _approvalRequestRepository.Object, _resourceApproverRepository.Object, _currentUserContext.Object);
 
     private static Booking CreatePendingBooking() => new()
     {
@@ -34,6 +34,7 @@ public sealed class RejectBookingCommandHandlerTests
     {
         _currentUserContext.SetupGet(c => c.UserId).Returns(ApproverUserId);
         _currentUserContext.SetupGet(c => c.Roles).Returns([]);
+        _bookingRepository.Setup(r => r.FindResourceIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking.ResourceId);
         _bookingRepository.Setup(r => r.FindByIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking);
         _resourceApproverRepository
             .Setup(r => r.FindByResourceAndUserAsync(ResourceId, ApproverUserId, It.IsAny<CancellationToken>()))
@@ -65,10 +66,44 @@ public sealed class RejectBookingCommandHandlerTests
     }
 
     [Fact]
+    public async Task Handle_AsTenantAdmin_BypassesThePerResourceApproverCheck()
+    {
+        var booking = CreatePendingBooking();
+        SetupApprover(booking);
+        _currentUserContext.SetupGet(c => c.Roles).Returns(["TenantAdmin"]);
+        // Deliberately NOT a ResourceApprover for this resource - TenantAdmin must not need to be. Approve
+        // already proves this bypass; Reject had no equivalent test at all before this.
+        _resourceApproverRepository
+            .Setup(r => r.FindByResourceAndUserAsync(ResourceId, ApproverUserId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((ResourceApprover?)null);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new RejectBookingCommandRequest(booking.Id, null), CancellationToken.None);
+
+        Assert.Equal(BookingStatus.Rejected, result.Status);
+    }
+
+    [Fact]
+    public async Task Handle_AsSysAdmin_BypassesThePerResourceApproverCheck()
+    {
+        var booking = CreatePendingBooking();
+        SetupApprover(booking);
+        _currentUserContext.SetupGet(c => c.Roles).Returns(["SysAdmin"]);
+        _resourceApproverRepository
+            .Setup(r => r.FindByResourceAndUserAsync(ResourceId, ApproverUserId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((ResourceApprover?)null);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new RejectBookingCommandRequest(booking.Id, null), CancellationToken.None);
+
+        Assert.Equal(BookingStatus.Rejected, result.Status);
+    }
+
+    [Fact]
     public async Task Handle_WithUnknownBooking_ThrowsNotFoundException()
     {
         _currentUserContext.SetupGet(c => c.UserId).Returns(ApproverUserId);
-        _bookingRepository.Setup(r => r.FindByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync((Booking?)null);
+        _bookingRepository.Setup(r => r.FindResourceIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync((Guid?)null);
         var sut = CreateSut();
 
         var exception = await Assert.ThrowsAsync<NotFoundException>(() =>
@@ -99,6 +134,25 @@ public sealed class RejectBookingCommandHandlerTests
     {
         var booking = CreatePendingBooking();
         booking.Status = BookingStatus.Rejected;
+        SetupApprover(booking);
+        var sut = CreateSut();
+
+        var exception = await Assert.ThrowsAsync<ConflictException>(() =>
+            sut.Handle(new RejectBookingCommandRequest(booking.Id, null), CancellationToken.None));
+
+        Assert.Equal(ErrorCodes.BookingApprovalNotAllowed, exception.ErrorCode);
+        _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // Approve's equivalent guard has a 3-status [Theory] (Confirmed/Rejected/Cancelled); Reject only ever
+    // had the single already-Rejected case tested. Same guard clause, same coverage bar.
+    [Theory]
+    [InlineData(BookingStatus.Confirmed)]
+    [InlineData(BookingStatus.Cancelled)]
+    public async Task Handle_WithBookingNotPending_ThrowsConflictExceptionWithApprovalNotAllowedCode(BookingStatus status)
+    {
+        var booking = CreatePendingBooking();
+        booking.Status = status;
         SetupApprover(booking);
         var sut = CreateSut();
 

@@ -216,9 +216,15 @@ public sealed class CreateBookingCommandHandlerTests
             Id = Guid.NewGuid(), TenantId = resource.TenantId, ResourceId = resource.Id, UserId = Guid.NewGuid(),
             StartUtc = At(9), EndUtc = At(10), Quantity = 1, Status = BookingStatus.Confirmed, CreatedAtUtc = At(0),
         };
+        // Deliberately returns [existing], not [] - a real repository call for this exact window could
+        // legitimately still include a booking that merely touches the boundary (the repository's own
+        // range filter is proven separately in BookingAvailabilityRepositoryTests). Returning it here
+        // means this test actually exercises the Application-layer clip logic in IntervalMath -
+        // existing.End(10) clips to window.Start(10), producing a zero-length occupancy that gets
+        // dropped - rather than just asserting the same outcome the mock was told to produce anyway.
         _bookingAvailabilityRepository
             .Setup(r => r.GetActiveBookingsAsync(resource.Id, At(10), At(11), It.IsAny<CancellationToken>()))
-            .ReturnsAsync([]); // the repository itself excludes non-overlapping bookings; existing ends exactly at the new start
+            .ReturnsAsync([existing]);
         var sut = CreateSut();
 
         var result = await sut.Handle(new CreateBookingCommandRequest(resource.Id, At(10), At(11)), CancellationToken.None);
@@ -292,6 +298,46 @@ public sealed class CreateBookingCommandHandlerTests
         _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
+    // The anomalous-state guard for RequiresApproval - if the current tenant can't be resolved (it always
+    // should be, in ordinary operation) this throws rather than silently proceeding without an expiry.
+    [Fact]
+    public async Task Handle_ForResourceRequiringApprovalWhenTenantLookupFails_ThrowsInvalidOperationException()
+    {
+        var resource = CreateResource(requiresApproval: true);
+        SetupResource(resource, OpenAllDay(resource));
+        _resourceApproverRepository
+            .Setup(r => r.GetByResourceIdAsync(resource.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new ResourceApprover { Id = Guid.NewGuid(), TenantId = TenantId, ResourceId = resource.Id, UserId = Guid.NewGuid() }]);
+        _tenantRepository.Setup(r => r.FindByIdAsync(TenantId, It.IsAny<CancellationToken>())).ReturnsAsync((Tenant?)null);
+        var sut = CreateSut();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            sut.Handle(new CreateBookingCommandRequest(resource.Id, At(10), At(11)), CancellationToken.None));
+    }
+
+    // The existing exact-boundary test only proves "remaining=0, request=1"; this proves the sibling case
+    // where the remainder is nonzero but the request still exceeds it by exactly 1.
+    [Fact]
+    public async Task Handle_WhenRequestedQuantityExceedsANonzeroRemainingCapacityByOne_ThrowsConflictExceptionWithCapacityExceededCode()
+    {
+        var resource = CreateResource(capacity: 3);
+        SetupResource(resource, OpenAllDay(resource));
+        var existing = new Booking
+        {
+            Id = Guid.NewGuid(), TenantId = resource.TenantId, ResourceId = resource.Id, UserId = Guid.NewGuid(),
+            StartUtc = At(10), EndUtc = At(11), Quantity = 2, Status = BookingStatus.Confirmed, CreatedAtUtc = At(0),
+        };
+        _bookingAvailabilityRepository
+            .Setup(r => r.GetActiveBookingsAsync(resource.Id, At(10), At(11), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([existing]);
+        var sut = CreateSut();
+
+        var exception = await Assert.ThrowsAsync<ConflictException>(() =>
+            sut.Handle(new CreateBookingCommandRequest(resource.Id, At(10), At(11), Quantity: 2), CancellationToken.None));
+
+        Assert.Equal(ErrorCodes.BookingCapacityExceeded, exception.ErrorCode);
+    }
+
     [Fact]
     public async Task Handle_ForResourceRequiringApprovalWithNoConfiguredApprover_ThrowsConflictExceptionWithNoApproverConfiguredCode()
     {
@@ -307,5 +353,30 @@ public sealed class CreateBookingCommandHandlerTests
 
         Assert.Equal(ErrorCodes.BookingNoApproverConfigured, exception.ErrorCode);
         _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // Every other test in this file uses PassThroughResourceBookingLock, which ignores its resourceId
+    // argument entirely - a bug that passed the wrong id (e.g. Guid.Empty, or a hardcoded value) would go
+    // undetected by any of them. This is the one test in the suite that actually asserts the lock is
+    // acquired keyed by the request's own ResourceId.
+    [Fact]
+    public async Task Handle_AcquiresTheResourceBookingLockKeyedByTheRequestsOwnResourceId()
+    {
+        var resource = CreateResource();
+        SetupResource(resource, OpenAllDay(resource));
+        var lockMock = new Mock<IResourceBookingLock>();
+        lockMock
+            .Setup(l => l.RunExclusiveAsync(
+                It.IsAny<Guid>(), It.IsAny<Func<CancellationToken, Task<CreateBookingResponse>>>(), It.IsAny<CancellationToken>()))
+            .Returns<Guid, Func<CancellationToken, Task<CreateBookingResponse>>, CancellationToken>((_, operation, ct) => operation(ct));
+        var sut = new CreateBookingCommandHandler(
+            lockMock.Object, _resourceRepository.Object, _availabilityRuleRepository.Object, _blackoutPeriodRepository.Object,
+            _bookingAvailabilityRepository.Object, _bookingRepository.Object, _resourceApproverRepository.Object,
+            _approvalRequestRepository.Object, _tenantRepository.Object, _currentUserContext.Object);
+
+        await sut.Handle(new CreateBookingCommandRequest(resource.Id, At(9), At(10)), CancellationToken.None);
+
+        lockMock.Verify(l => l.RunExclusiveAsync(
+            resource.Id, It.IsAny<Func<CancellationToken, Task<CreateBookingResponse>>>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 }

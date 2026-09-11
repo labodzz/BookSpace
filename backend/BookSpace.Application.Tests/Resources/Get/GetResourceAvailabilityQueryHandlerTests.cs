@@ -40,6 +40,119 @@ public sealed class GetResourceAvailabilityQueryHandlerTests
             .ReturnsAsync([]);
     }
 
+    // The blackout range-filter itself (period.StartUtc < rangeEndUtcExclusive && period.EndUtc >
+    // rangeStartUtc) had no exact-boundary test - only a mid-range overlapping blackout was ever used.
+    [Fact]
+    public async Task Handle_WithBlackoutEndingExactlyAtTheRangeStart_ExcludesItFromTheResult()
+    {
+        var resource = CreateResource(capacity: 8);
+        var rule = new AvailabilityRule
+        {
+            Id = Guid.NewGuid(), TenantId = resource.TenantId, ResourceId = resource.Id,
+            DayOfWeek = Date.DayOfWeek, StartTime = TimeOnly.MinValue, EndTime = TimeOnly.MaxValue,
+        };
+        var rangeStart = new DateTimeOffset(Date.Year, Date.Month, Date.Day, 0, 0, 0, TimeSpan.Zero);
+        var blackout = new BlackoutPeriod
+        {
+            Id = Guid.NewGuid(), TenantId = resource.TenantId, ResourceId = resource.Id,
+            StartUtc = rangeStart.AddHours(-1), EndUtc = rangeStart, // ends exactly at rangeStartUtc
+            Reason = "Just before",
+        };
+        _resourceRepository.Setup(r => r.FindByIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(resource);
+        _availabilityRuleRepository.Setup(r => r.GetByResourceIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync([rule]);
+        _blackoutPeriodRepository.Setup(r => r.GetByResourceIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync([blackout]);
+        _bookingAvailabilityRepository
+            .Setup(r => r.GetActiveBookingsAsync(resource.Id, It.IsAny<DateTimeOffset>(), It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new GetResourceAvailabilityQueryRequest(resource.Id, Date, Date), CancellationToken.None);
+
+        Assert.Empty(result.Blackouts);
+        Assert.Contains(result.BookableSlots, slot => slot.AvailableCapacity == 8);
+    }
+
+    [Fact]
+    public async Task Handle_WithBlackoutStartingExactlyAtTheRangeEnd_ExcludesItFromTheResult()
+    {
+        var resource = CreateResource(capacity: 8);
+        var rule = new AvailabilityRule
+        {
+            Id = Guid.NewGuid(), TenantId = resource.TenantId, ResourceId = resource.Id,
+            DayOfWeek = Date.DayOfWeek, StartTime = TimeOnly.MinValue, EndTime = TimeOnly.MaxValue,
+        };
+        var rangeEndExclusive = new DateTimeOffset(Date.AddDays(1).Year, Date.AddDays(1).Month, Date.AddDays(1).Day, 0, 0, 0, TimeSpan.Zero);
+        var blackout = new BlackoutPeriod
+        {
+            Id = Guid.NewGuid(), TenantId = resource.TenantId, ResourceId = resource.Id,
+            StartUtc = rangeEndExclusive, EndUtc = rangeEndExclusive.AddHours(1), // starts exactly at rangeEndUtcExclusive
+            Reason = "Just after",
+        };
+        _resourceRepository.Setup(r => r.FindByIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(resource);
+        _availabilityRuleRepository.Setup(r => r.GetByResourceIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync([rule]);
+        _blackoutPeriodRepository.Setup(r => r.GetByResourceIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync([blackout]);
+        _bookingAvailabilityRepository
+            .Setup(r => r.GetActiveBookingsAsync(resource.Id, It.IsAny<DateTimeOffset>(), It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new GetResourceAvailabilityQueryRequest(resource.Id, Date, Date), CancellationToken.None);
+
+        Assert.Empty(result.Blackouts);
+        Assert.Contains(result.BookableSlots, slot => slot.AvailableCapacity == 8);
+    }
+
+    // Same !=Active branch as Inactive/Maintenance (both already tested elsewhere in this file) but
+    // Archived specifically had never been exercised by name at this handler level.
+    [Fact]
+    public async Task Handle_WithArchivedResource_ReturnsNoBookableSlotsButStillComputesTheSchedule()
+    {
+        var resource = CreateResource();
+        resource.Status = ResourceStatus.Archived;
+        var rule = new AvailabilityRule
+        {
+            Id = Guid.NewGuid(), TenantId = resource.TenantId, ResourceId = resource.Id,
+            DayOfWeek = Date.DayOfWeek, StartTime = new TimeOnly(8, 0), EndTime = new TimeOnly(18, 0),
+        };
+        _resourceRepository.Setup(r => r.FindByIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(resource);
+        _availabilityRuleRepository.Setup(r => r.GetByResourceIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync([rule]);
+        SetupNoBlackoutsOrBookings(resource);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new GetResourceAvailabilityQueryRequest(resource.Id, Date, Date), CancellationToken.None);
+
+        Assert.NotEmpty(result.OpenPeriods); // schedule is still visible - not 404, not hidden
+        Assert.Empty(result.BookableSlots); // but nothing is actually bookable
+    }
+
+    // Response echo fields (TimeZoneId, Capacity, Blackouts[].Reason) were never directly asserted -
+    // every other test here checks OpenPeriods/BookableSlots/BusyPeriods but not these.
+    [Fact]
+    public async Task Handle_EchoesResourceTimeZoneCapacityAndBlackoutReasonOnTheResponse()
+    {
+        var resource = CreateResource(capacity: 6);
+        resource.TimeZoneId = "Europe/Sarajevo";
+        var blackout = new BlackoutPeriod
+        {
+            Id = Guid.NewGuid(), TenantId = resource.TenantId, ResourceId = resource.Id,
+            StartUtc = At(10), EndUtc = At(11), Reason = "Deep cleaning",
+        };
+        _resourceRepository.Setup(r => r.FindByIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(resource);
+        _availabilityRuleRepository.Setup(r => r.GetByResourceIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        _blackoutPeriodRepository.Setup(r => r.GetByResourceIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync([blackout]);
+        _bookingAvailabilityRepository
+            .Setup(r => r.GetActiveBookingsAsync(resource.Id, It.IsAny<DateTimeOffset>(), It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new GetResourceAvailabilityQueryRequest(resource.Id, Date, Date), CancellationToken.None);
+
+        Assert.Equal("Europe/Sarajevo", result.TimeZoneId);
+        Assert.Equal(6, result.Capacity);
+        var echoedBlackout = Assert.Single(result.Blackouts);
+        Assert.Equal("Deep cleaning", echoedBlackout.Reason);
+    }
+
     [Fact]
     public async Task Handle_WithUnknownResource_ThrowsNotFoundException()
     {

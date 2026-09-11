@@ -30,4 +30,21 @@ public sealed class UpdateResourceTypeCommandRequestValidatorTests
 
         Assert.False(result.IsValid);
     }
+
+    // Create's identical MaxLength(100) rule is tested at both boundaries; Update's was not tested at all.
+    [Fact]
+    public void Validate_WithNameOfExactly100Characters_HasNoErrors()
+    {
+        var result = _sut.Validate(new UpdateResourceTypeCommandRequest(Guid.NewGuid(), new string('a', 100)));
+
+        Assert.True(result.IsValid);
+    }
+
+    [Fact]
+    public void Validate_WithNameOf101Characters_HasErrors()
+    {
+        var result = _sut.Validate(new UpdateResourceTypeCommandRequest(Guid.NewGuid(), new string('a', 101)));
+
+        Assert.False(result.IsValid);
+    }
 }

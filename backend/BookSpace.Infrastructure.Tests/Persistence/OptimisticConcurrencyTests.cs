@@ -1,9 +1,12 @@
+using BookSpace.Application.Bookings;
 using BookSpace.Application.Common;
+using BookSpace.Application.Resources;
 using BookSpace.Application.Security;
 using BookSpace.Domain.Entities;
 using BookSpace.Domain.Enums;
 using BookSpace.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace BookSpace.Infrastructure.Tests.Persistence;
@@ -114,6 +117,86 @@ public sealed class OptimisticConcurrencyTests : IAsyncLifetime
         await dbContext.SaveChangesHandlingConflictsAsync(CancellationToken.None);
 
         Assert.Equal(2, await dbContext.Resources.CountAsync());
+    }
+
+    // Documents a real, non-obvious consequence of the IResourceBookingLock fix described in
+    // docs/resource-lifecycle-and-capacity.md and docs/bookings-and-concurrency.md §7: the two tests
+    // above prove RowVersion by mutating tracked entities directly, bypassing UpdateResourceCommandHandler
+    // and its lock entirely - that is a valid proof that the mapping/mechanism works, but it does NOT
+    // prove a RowVersion conflict is still reachable through two concurrent real Handle calls now that
+    // the handler always wraps its entire read-modify-write in resourceBookingLock.RunExclusiveAsync.
+    // Once the lock serializes both callers, whichever acquires it first fully commits (transaction
+    // commit releases HOLDLOCK) before the second caller's own post-lock FindByIdAsync even runs - so the
+    // second caller's read is always of the first caller's already-committed RowVersion, never a stale
+    // one. Both requests below intentionally change DIFFERENT fields (Name vs. Description) so there is
+    // no ordinary business conflict (e.g. duplicate name) that could mask the result: if a RowVersion
+    // conflict were still reachable through this handler, one of the two would throw ConflictException.
+    // Neither does - the pessimistic lock has made the optimistic-concurrency path unreachable for this
+    // specific handler, which is worth knowing explicitly rather than assuming "RowVersion still protects
+    // concurrent admin edits to a Resource" without having actually exercised the real code path.
+    [Fact]
+    public async Task ConcurrentUpdateResourceCommandHandlerCalls_ForTheSameResource_BothSucceed_RowVersionConflictIsUnreachableThroughTheHandler()
+    {
+        await using var setupContext = CreateDbContext();
+        var resourceTypeId = await setupContext.ResourceTypes.Select(type => type.Id).FirstAsync();
+        var resource = await setupContext.Resources.SingleAsync(r => r.Id == _resourceId);
+
+        using var startGate = new SemaphoreSlim(0, 2);
+
+        async Task<bool> RenameAsync()
+        {
+            await startGate.WaitAsync();
+            await using var dbContext = CreateDbContext();
+            var handler = new UpdateResourceCommandHandler(
+                new ResourceBookingLock(dbContext, NullLogger<ResourceBookingLock>.Instance),
+                new ResourceRepository(dbContext),
+                new BookingAvailabilityRepository(dbContext));
+            try
+            {
+                await handler.Handle(
+                    new UpdateResourceCommandRequest(
+                        _resourceId, resourceTypeId, "Renamed by the first admin", resource.Description,
+                        resource.Capacity, resource.RequiresApproval, resource.TimeZoneId, resource.Status),
+                    CancellationToken.None);
+                return true;
+            }
+            catch (ConflictException)
+            {
+                return false;
+            }
+        }
+
+        async Task<bool> RedescribeAsync()
+        {
+            await startGate.WaitAsync();
+            await using var dbContext = CreateDbContext();
+            var handler = new UpdateResourceCommandHandler(
+                new ResourceBookingLock(dbContext, NullLogger<ResourceBookingLock>.Instance),
+                new ResourceRepository(dbContext),
+                new BookingAvailabilityRepository(dbContext));
+            try
+            {
+                await handler.Handle(
+                    new UpdateResourceCommandRequest(
+                        _resourceId, resourceTypeId, resource.Name, "Redescribed by the second admin",
+                        resource.Capacity, resource.RequiresApproval, resource.TimeZoneId, resource.Status),
+                    CancellationToken.None);
+                return true;
+            }
+            catch (ConflictException)
+            {
+                return false;
+            }
+        }
+
+        var renameTask = Task.Run(RenameAsync);
+        var redescribeTask = Task.Run(RedescribeAsync);
+        startGate.Release(2);
+        var results = await Task.WhenAll(renameTask, redescribeTask);
+
+        // Neither call is rejected by a RowVersion conflict - the lock's strict commit-before-next-read
+        // ordering means the second caller's fresh read always already reflects the first caller's write.
+        Assert.All(results, succeeded => Assert.True(succeeded));
     }
 
     private BookSpaceDbContext CreateDbContext()

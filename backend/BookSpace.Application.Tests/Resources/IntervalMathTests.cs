@@ -106,6 +106,40 @@ public sealed class IntervalMathTests
     }
 
     [Fact]
+    public void ComputeAvailableCapacity_WithOccupancyStartingBeforeTheWindow_ClipsToTheWindowStart()
+    {
+        // Occupancy runs 06:00-10:00 but the window only opens at 08:00 - it must clip to (08:00,10:00),
+        // not be dropped the way a fully-outside occupancy is, and not be counted for its full 06:00-10:00
+        // span either.
+        var result = IntervalMath.ComputeAvailableCapacity(
+            (At(8), At(18)), capacity: 8, occupancies: [(At(6), At(10), 5)]);
+
+        Assert.Equal(2, result.Count);
+        Assert.Equal((At(8), At(10), 3), result[0]);
+        Assert.Equal((At(10), At(18), 8), result[1]);
+    }
+
+    [Fact]
+    public void ComputeAvailableCapacity_WithOccupancyEndingAfterTheWindow_ClipsToTheWindowEnd()
+    {
+        // Occupancy runs 16:00-20:00 but the window closes at 18:00 - it must clip to (16:00,18:00).
+        var result = IntervalMath.ComputeAvailableCapacity(
+            (At(8), At(18)), capacity: 8, occupancies: [(At(16), At(20), 5)]);
+
+        Assert.Equal(2, result.Count);
+        Assert.Equal((At(8), At(16), 8), result[0]);
+        Assert.Equal((At(16), At(18), 3), result[1]);
+    }
+
+    [Fact]
+    public void ComputeAvailableCapacity_WithZeroCapacity_ReturnsNoSlotsAtAll()
+    {
+        var result = IntervalMath.ComputeAvailableCapacity((At(8), At(18)), capacity: 0, occupancies: []);
+
+        Assert.Empty(result);
+    }
+
+    [Fact]
     public void Covers_WithOnePeriodFullyContainingWindow_ReturnsTrue()
     {
         Assert.True(IntervalMath.Covers((At(10), At(12)), [(At(8), At(18))]));

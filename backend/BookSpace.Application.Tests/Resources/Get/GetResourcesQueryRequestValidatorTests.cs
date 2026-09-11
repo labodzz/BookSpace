@@ -26,4 +26,16 @@ public sealed class GetResourcesQueryRequestValidatorTests
 
         Assert.False(result.IsValid);
     }
+
+    // Only the invalid side (0, -1, 101) was previously tested - the success-side boundaries themselves
+    // (exactly 1, exactly 100) were never directly asserted.
+    [Theory]
+    [InlineData(1, 20)]
+    [InlineData(1, 100)]
+    public void Validate_WithBoundaryPaging_HasNoErrors(int page, int pageSize)
+    {
+        var result = _sut.Validate(new GetResourcesQueryRequest(page, pageSize));
+
+        Assert.True(result.IsValid);
+    }
 }

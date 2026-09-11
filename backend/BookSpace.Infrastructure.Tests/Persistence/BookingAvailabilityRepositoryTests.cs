@@ -91,6 +91,67 @@ public sealed class BookingAvailabilityRepositoryTests : IAsyncLifetime
         Assert.All(results, booking => Assert.True(booking.StartUtc < _queryWindowEnd && booking.EndUtc > _queryWindowStart));
     }
 
+    // The base seed above only proves the range filter at the window's START boundary (straddling and
+    // touching-exactly cases) - the symmetric END boundary was never exercised.
+    [Fact]
+    public async Task GetActiveBookingsAsync_WithABookingStraddlingTheWindowEndBoundary_IncludesIt()
+    {
+        await using var seedContext = CreateDbContext();
+        var userId = await seedContext.Users.Select(u => u.Id).FirstAsync();
+        seedContext.Bookings.Add(NewBooking(userId, _queryWindowEnd.AddHours(-1), _queryWindowEnd.AddHours(1)));
+        await seedContext.SaveChangesAsync();
+
+        await using var dbContext = CreateDbContext();
+        var repository = new BookingAvailabilityRepository(dbContext);
+
+        var results = await repository.GetActiveBookingsAsync(_resourceId, _queryWindowStart, _queryWindowEnd, CancellationToken.None);
+
+        Assert.Equal(3, results.Count); // the 2 from the base seed plus this straddling one
+    }
+
+    [Fact]
+    public async Task GetActiveBookingsAsync_WithABookingStartingExactlyAtTheWindowEnd_ExcludesIt()
+    {
+        await using var seedContext = CreateDbContext();
+        var userId = await seedContext.Users.Select(u => u.Id).FirstAsync();
+        seedContext.Bookings.Add(NewBooking(userId, _queryWindowEnd, _queryWindowEnd.AddHours(1)));
+        await seedContext.SaveChangesAsync();
+
+        await using var dbContext = CreateDbContext();
+        var repository = new BookingAvailabilityRepository(dbContext);
+
+        var results = await repository.GetActiveBookingsAsync(_resourceId, _queryWindowStart, _queryWindowEnd, CancellationToken.None);
+
+        Assert.Equal(2, results.Count); // unchanged from the base seed - touches but does not overlap
+    }
+
+    // ActiveStatuses (Pending/Confirmed count, everything else doesn't) was previously proven end-to-end
+    // for Cancelled only (via BookingsEndpointsTests); Rejected/Completed/NoShow were never proven at this
+    // repository level, or anywhere else.
+    [Fact]
+    public async Task GetActiveBookingsAsync_ExcludesRejectedCompletedAndNoShowBookings()
+    {
+        await using var seedContext = CreateDbContext();
+        var userId = await seedContext.Users.Select(u => u.Id).FirstAsync();
+        var insideWindow = _queryWindowStart.AddDays(3);
+        foreach (var status in new[] { BookingStatus.Rejected, BookingStatus.Completed, BookingStatus.NoShow })
+        {
+            seedContext.Bookings.Add(new Booking
+            {
+                Id = Guid.NewGuid(), TenantId = _tenantId, ResourceId = _resourceId, UserId = userId,
+                StartUtc = insideWindow, EndUtc = insideWindow.AddHours(1), Quantity = 1, Status = status, CreatedAtUtc = DateTimeOffset.UtcNow,
+            });
+        }
+        await seedContext.SaveChangesAsync();
+
+        await using var dbContext = CreateDbContext();
+        var repository = new BookingAvailabilityRepository(dbContext);
+
+        var results = await repository.GetActiveBookingsAsync(_resourceId, _queryWindowStart, _queryWindowEnd, CancellationToken.None);
+
+        Assert.Equal(2, results.Count); // unchanged from the base seed - none of these three statuses count as active
+    }
+
     private Booking NewBooking(Guid userId, DateTimeOffset startUtc, DateTimeOffset endUtc) => new()
     {
         Id = Guid.NewGuid(),

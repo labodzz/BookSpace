@@ -38,4 +38,20 @@ public sealed class GetOwnBookingsQueryRequestValidatorTests
 
         Assert.False(result.IsValid);
     }
+
+    [Fact]
+    public void Validate_WithPageSizeOfExactlyOneHundred_HasNoErrors()
+    {
+        var result = _sut.Validate(new GetOwnBookingsQueryRequest(PageSize: 100));
+
+        Assert.True(result.IsValid);
+    }
+
+    [Fact]
+    public void Validate_WithPageSizeOfExactlyOne_HasNoErrors()
+    {
+        var result = _sut.Validate(new GetOwnBookingsQueryRequest(PageSize: 1));
+
+        Assert.True(result.IsValid);
+    }
 }

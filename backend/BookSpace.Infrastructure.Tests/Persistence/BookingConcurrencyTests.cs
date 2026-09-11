@@ -206,6 +206,129 @@ public sealed class BookingConcurrencyTests : IAsyncLifetime
         Assert.Equal(3, bookingCount);
     }
 
+    // Proves the "different resources are fully independent" claim in docs/bookings-and-concurrency.md
+    // §7, which until now was asserted only by comment. Resource A's row lock is taken manually here,
+    // exactly replicating what ResourceBookingLock itself does (see ResourceBookingLock.cs), and
+    // deliberately never committed/rolled back during the test - if the lock were global rather than
+    // per-resource-row, a concurrent CreateBookingCommandHandler call for a DIFFERENT resource B would
+    // block behind it and the awaited call below would still be pending when the 10-second timeout task
+    // wins the race. It isn't - proving resource B's lock acquisition never waits on resource A's.
+    [Fact]
+    public async Task CreateBookingCommandHandler_ForADifferentResource_NeverWaitsOnAnotherResourcesStillHeldLock()
+    {
+        var resourceAId = await SeedResourceAsync(capacity: 1);
+        var resourceBId = await SeedResourceAsync(capacity: 1);
+        var start = DateTimeOffset.UtcNow.AddDays(3);
+        var end = start.AddHours(1);
+
+        await using var holderContext = CreateDbContext(_tenantId);
+        await using var holderTransaction = await holderContext.Database.BeginTransactionAsync();
+        await holderContext.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT TOP (1) Id FROM Resources WITH (UPDLOCK, HOLDLOCK) WHERE Id = {resourceAId}");
+        try
+        {
+            var handler = CreateHandler(_userAId, out var dbContextToDispose);
+            try
+            {
+                var bookingTask = handler.Handle(new CreateBookingCommandRequest(resourceBId, start, end, Quantity: 1), CancellationToken.None);
+                var timeoutTask = Task.Delay(TimeSpan.FromSeconds(10));
+
+                var completedTask = await Task.WhenAny(bookingTask, timeoutTask);
+
+                Assert.Same(bookingTask, completedTask);
+                var response = await bookingTask;
+                Assert.Equal(BookingStatus.Confirmed, response.Status);
+            }
+            finally
+            {
+                await dbContextToDispose.DisposeAsync();
+            }
+        }
+        finally
+        {
+            // Resource A's lock is still held right up to this point - nothing in the assertions above
+            // could have passed by resource A's lock ever being released early.
+            await holderTransaction.RollbackAsync();
+        }
+    }
+
+    // No test anywhere in this codebase passed a genuinely cancellable token before this - every existing
+    // test uses CancellationToken.None. An already-cancelled token must fail fast, before the lock is
+    // even acquired, and must never leave a partial/orphan row behind.
+    [Fact]
+    public async Task CreateBookingCommandHandler_WithAnAlreadyCancelledToken_ThrowsWithoutPersistingAnything()
+    {
+        var resourceId = await SeedResourceAsync(capacity: 1);
+        var start = DateTimeOffset.UtcNow.AddDays(4);
+        var handler = CreateHandler(_userAId, out var dbContextToDispose);
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                handler.Handle(new CreateBookingCommandRequest(resourceId, start, start.AddHours(1), Quantity: 1), new CancellationToken(canceled: true)));
+        }
+        finally
+        {
+            await dbContextToDispose.DisposeAsync();
+        }
+
+        await using var verifyContext = CreateDbContext(_tenantId);
+        Assert.Equal(0, await verifyContext.Bookings.CountAsync(b => b.ResourceId == resourceId));
+    }
+
+    // ResourceBookingLock's SqlException (error 1205/1222) catch clause - translating a deadlock/lock-wait
+    // timeout into a clean ConflictException("...please retry") - was completely unverified by any test.
+    // Resource A's row lock is held open manually (never committed/rolled back until this test's own
+    // finally block, well after the assertion), and the attacking connection's session-level LOCK_TIMEOUT
+    // is set low so the handler's own UPDLOCK acquisition genuinely times out against it (error 1222)
+    // rather than this test waiting indefinitely or relying on a real deadlock, which is far harder to
+    // force deterministically.
+    [Fact]
+    public async Task CreateBookingCommandHandler_WhenTheResourceLockTimesOut_ThrowsConflictExceptionNotARawSqlException()
+    {
+        var resourceId = await SeedResourceAsync(capacity: 1);
+        var start = DateTimeOffset.UtcNow.AddDays(5);
+
+        await using var holderContext = CreateDbContext(_tenantId);
+        await using var holderTransaction = await holderContext.Database.BeginTransactionAsync();
+        await holderContext.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT TOP (1) Id FROM Resources WITH (UPDLOCK, HOLDLOCK) WHERE Id = {resourceId}");
+        try
+        {
+            await using var attackerContext = CreateDbContext(_tenantId, _userAId);
+            await attackerContext.Database.OpenConnectionAsync();
+            try
+            {
+                await attackerContext.Database.ExecuteSqlRawAsync("SET LOCK_TIMEOUT 1000;");
+                var handler = new CreateBookingCommandHandler(
+                    new ResourceBookingLock(attackerContext, NullLogger<ResourceBookingLock>.Instance),
+                    new ResourceRepository(attackerContext),
+                    new AvailabilityRuleRepository(attackerContext),
+                    new BlackoutPeriodRepository(attackerContext),
+                    new BookingAvailabilityRepository(attackerContext),
+                    new BookingRepository(attackerContext),
+                    new ResourceApproverRepository(attackerContext),
+                    new ApprovalRequestRepository(attackerContext),
+                    new TenantRepository(attackerContext),
+                    new FixedCurrentUserContext(_tenantId, _userAId));
+
+                var exception = await Assert.ThrowsAsync<ConflictException>(() =>
+                    handler.Handle(new CreateBookingCommandRequest(resourceId, start, start.AddHours(1), Quantity: 1), CancellationToken.None));
+
+                Assert.Contains("retry", exception.Message, StringComparison.OrdinalIgnoreCase);
+            }
+            finally
+            {
+                await attackerContext.Database.CloseConnectionAsync();
+            }
+        }
+        finally
+        {
+            // Resource A's lock was still held right up to this point - the timeout above could not have
+            // been satisfied by an early release.
+            await holderTransaction.RollbackAsync();
+        }
+    }
+
     private async Task<Guid> SeedResourceAsync(int capacity)
     {
         var resourceId = Guid.NewGuid();

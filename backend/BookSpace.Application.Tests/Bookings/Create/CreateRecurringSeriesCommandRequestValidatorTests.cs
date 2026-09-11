@@ -40,6 +40,16 @@ public sealed class CreateRecurringSeriesCommandRequestValidatorTests
     }
 
     [Fact]
+    public void Validate_WithStartDateOfToday_HasNoErrors()
+    {
+        // The rule is startDate >= today - only strictly-past dates were previously tested; this proves
+        // the boundary itself is inclusive, not just "not clearly in the past".
+        var request = ValidRequest() with { StartDate = DateOnly.FromDateTime(DateTime.UtcNow) };
+
+        Assert.True(_sut.Validate(request).IsValid);
+    }
+
+    [Fact]
     public void Validate_WithEndTimeNotAfterStartTime_HasErrors()
     {
         var request = ValidRequest() with { EndTime = new TimeOnly(9, 0) };
@@ -127,6 +137,45 @@ public sealed class CreateRecurringSeriesCommandRequestValidatorTests
     {
         // The task's own reference ceiling: daily for 2 years is ~730 occurrences, within MaxOccurrences.
         var request = ValidRequest(occurrenceCount: null) with { EndDate = StartDate.AddYears(2) };
+
+        Assert.True(_sut.Validate(request).IsValid);
+    }
+
+    // EstimateOccurrenceCount has a distinct arithmetic branch per frequency (totalDays/(7*interval)+1 for
+    // Weekly, the conservative totalDays/(28*interval)+1 for Monthly) - only the Daily branch had a test
+    // before this pair, so a wrong divisor in either would have gone undetected.
+    [Fact]
+    public void Validate_WeeklyEndDateImplyingMoreThanMaxOccurrences_HasErrors()
+    {
+        // MaxOccurrences (750) weeks is ~14.4 years; 20 years weekly is comfortably beyond that.
+        var request = ValidRequest(frequency: RecurrenceFrequency.Weekly, occurrenceCount: null) with { EndDate = StartDate.AddYears(20) };
+
+        Assert.False(_sut.Validate(request).IsValid);
+    }
+
+    [Fact]
+    public void Validate_WeeklyForTwoYears_HasNoErrors()
+    {
+        // ~104 weekly occurrences over 2 years, well within MaxOccurrences.
+        var request = ValidRequest(frequency: RecurrenceFrequency.Weekly, occurrenceCount: null) with { EndDate = StartDate.AddYears(2) };
+
+        Assert.True(_sut.Validate(request).IsValid);
+    }
+
+    [Fact]
+    public void Validate_MonthlyEndDateImplyingMoreThanMaxOccurrences_HasErrors()
+    {
+        // The conservative 28-day-per-month estimate means MaxOccurrences (750) months is ~57.5 years;
+        // 100 years monthly is comfortably beyond that.
+        var request = ValidRequest(frequency: RecurrenceFrequency.Monthly, occurrenceCount: null) with { EndDate = StartDate.AddYears(100) };
+
+        Assert.False(_sut.Validate(request).IsValid);
+    }
+
+    [Fact]
+    public void Validate_MonthlyForTwoYears_HasNoErrors()
+    {
+        var request = ValidRequest(frequency: RecurrenceFrequency.Monthly, occurrenceCount: null) with { EndDate = StartDate.AddYears(2) };
 
         Assert.True(_sut.Validate(request).IsValid);
     }
