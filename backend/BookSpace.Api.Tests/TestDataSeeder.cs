@@ -21,6 +21,11 @@ public static class TestDataSeeder
     public static readonly Guid GlobexMemberUserId = Guid.NewGuid();
     public const string GlobexMemberEmail = "member@globex.integration-test";
 
+    // Globex had no TenantAdmin user seeded anywhere - needed to create Globex-owned rows through the
+    // real API (rather than only via direct DbContext seeding) for cross-tenant name-reuse tests.
+    public static readonly Guid GlobexAdminUserId = Guid.NewGuid();
+    public const string GlobexAdminEmail = "admin@globex.integration-test";
+
     public static readonly Guid AcmeMemberUserId = Guid.NewGuid();
     public const string AcmeMemberEmail = "member@acme.integration-test";
 
@@ -30,6 +35,13 @@ public static class TestDataSeeder
     // was ever actually exercised by a real login before these two were added.
     public static readonly Guid AcmeApproverUserId = Guid.NewGuid();
     public const string AcmeApproverEmail = "approver@acme.integration-test";
+
+    // Holds the Approver role (passes the route-level [Authorize(Roles="Approver,...")] check) but is
+    // deliberately NOT assigned as a ResourceApprover for any resource - needed to exercise the deeper,
+    // resource-specific ApprovalAuthorization check (Booking.ApprovalForbidden, 409) as distinct from the
+    // route-level 403 a plain Member gets.
+    public static readonly Guid AcmeUnassignedApproverUserId = Guid.NewGuid();
+    public const string AcmeUnassignedApproverEmail = "unassigned-approver@acme.integration-test";
 
     public static readonly Guid AcmeSysAdminUserId = Guid.NewGuid();
     public const string AcmeSysAdminEmail = "sysadmin@acme.integration-test";
@@ -97,15 +109,19 @@ public static class TestDataSeeder
             new User { Id = AcmeAdminUserId, TenantId = AcmeTenantId, FirstName = "Acme", LastName = "Admin", Email = AcmeAdminEmail, PasswordHash = passwordHash, CreatedAtUtc = now },
             new User { Id = AcmeMemberUserId, TenantId = AcmeTenantId, FirstName = "Acme", LastName = "Member", Email = AcmeMemberEmail, PasswordHash = passwordHash, CreatedAtUtc = now },
             new User { Id = AcmeApproverUserId, TenantId = AcmeTenantId, FirstName = "Acme", LastName = "Approver", Email = AcmeApproverEmail, PasswordHash = passwordHash, CreatedAtUtc = now },
+            new User { Id = AcmeUnassignedApproverUserId, TenantId = AcmeTenantId, FirstName = "Acme", LastName = "UnassignedApprover", Email = AcmeUnassignedApproverEmail, PasswordHash = passwordHash, CreatedAtUtc = now },
             new User { Id = AcmeSysAdminUserId, TenantId = AcmeTenantId, FirstName = "Acme", LastName = "SysAdmin", Email = AcmeSysAdminEmail, PasswordHash = passwordHash, CreatedAtUtc = now },
-            new User { Id = GlobexMemberUserId, TenantId = GlobexTenantId, FirstName = "Globex", LastName = "Member", Email = GlobexMemberEmail, PasswordHash = passwordHash, CreatedAtUtc = now });
+            new User { Id = GlobexMemberUserId, TenantId = GlobexTenantId, FirstName = "Globex", LastName = "Member", Email = GlobexMemberEmail, PasswordHash = passwordHash, CreatedAtUtc = now },
+            new User { Id = GlobexAdminUserId, TenantId = GlobexTenantId, FirstName = "Globex", LastName = "Admin", Email = GlobexAdminEmail, PasswordHash = passwordHash, CreatedAtUtc = now });
 
         dbContext.UserRoles.AddRange(
             new UserRole { Id = Guid.NewGuid(), UserId = AcmeAdminUserId, RoleId = tenantAdminRole.Id },
             new UserRole { Id = Guid.NewGuid(), UserId = AcmeMemberUserId, RoleId = memberRole.Id },
             new UserRole { Id = Guid.NewGuid(), UserId = AcmeApproverUserId, RoleId = approverRole.Id },
+            new UserRole { Id = Guid.NewGuid(), UserId = AcmeUnassignedApproverUserId, RoleId = approverRole.Id },
             new UserRole { Id = Guid.NewGuid(), UserId = AcmeSysAdminUserId, RoleId = sysAdminRole.Id },
-            new UserRole { Id = Guid.NewGuid(), UserId = GlobexMemberUserId, RoleId = memberRole.Id });
+            new UserRole { Id = Guid.NewGuid(), UserId = GlobexMemberUserId, RoleId = memberRole.Id },
+            new UserRole { Id = Guid.NewGuid(), UserId = GlobexAdminUserId, RoleId = tenantAdminRole.Id });
 
         dbContext.ResourceTypes.AddRange(
             new ResourceType { Id = ResourceTypeId, TenantId = AcmeTenantId, Name = "Meeting Room" },

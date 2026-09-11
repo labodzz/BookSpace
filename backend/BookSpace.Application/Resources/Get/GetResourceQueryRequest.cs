@@ -22,7 +22,7 @@ public sealed class GetResourceQueryHandler(IResourceRepository resourceReposito
     public async Task<GetResourceResponse> Handle(GetResourceQueryRequest request, CancellationToken cancellationToken)
     {
         var resource = await resourceRepository.FindByIdAsync(request.Id, cancellationToken)
-            ?? throw new NotFoundException($"Resource {request.Id} was not found.");
+            ?? throw new NotFoundException($"Resource {request.Id} was not found.", ErrorCodes.ResourceNotFound);
 
         return new GetResourceResponse(
             resource.Id,

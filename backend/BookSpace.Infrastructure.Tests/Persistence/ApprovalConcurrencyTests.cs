@@ -166,6 +166,82 @@ public sealed class ApprovalConcurrencyTests : IAsyncLifetime
         Assert.Equal(1, committedDemand); // exactly the allowed capacity - no double-booking, no orphan row
     }
 
+    // RejectBookingCommandHandler deliberately does NOT acquire IResourceBookingLock (docs/recurring-
+    // bookings-and-approvals.md §7 - "moving OUT of Pending can only reduce demand, never invalidate the
+    // capacity invariant"), which is true for capacity. This test checks a DIFFERENT invariant that
+    // reasoning doesn't cover: can the SAME booking be decided twice by two different, simultaneous
+    // decisions (one Approve, one Reject) racing each other? Booking also has no RowVersion column (by
+    // design - see docs/optimistic-concurrency.md - Cancel's idempotency was the reason given). Approve
+    // is lock-protected; Reject is not - so unlike the Approve-vs-Approve test above, these two do not
+    // both funnel through the same serialization point.
+    [Fact]
+    public async Task ConcurrentApproveAndRejectOnTheSameBooking_ExactlyOneDecisionWinsCleanly()
+    {
+        var resourceId = await SeedResourceAsync(capacity: 4, requiresApproval: true);
+        var (bookingId, approvalRequestId) = await SeedPendingBookingAsync(resourceId, _memberUserId, quantity: 1);
+        await SeedResourceApproverAsync(resourceId, _approverUserId);
+
+        using var startGate = new SemaphoreSlim(0, 2);
+
+        async Task<bool> ApproveAsync()
+        {
+            await startGate.WaitAsync();
+            await using var dbContext = CreateDbContext(_tenantId, _approverUserId);
+            var handler = CreateApproveHandler(dbContext, _approverUserId);
+            try
+            {
+                await handler.Handle(new ApproveBookingCommandRequest(bookingId, null), CancellationToken.None);
+                return true;
+            }
+            catch (ConflictException)
+            {
+                return false;
+            }
+        }
+
+        async Task<bool> RejectAsync()
+        {
+            await startGate.WaitAsync();
+            await using var dbContext = CreateDbContext(_tenantId, _approverUserId);
+            var handler = CreateRejectHandler(dbContext, _approverUserId);
+            try
+            {
+                await handler.Handle(new RejectBookingCommandRequest(bookingId, null), CancellationToken.None);
+                return true;
+            }
+            catch (ConflictException)
+            {
+                return false;
+            }
+        }
+
+        var approveTask = Task.Run(ApproveAsync);
+        var rejectTask = Task.Run(RejectAsync);
+        startGate.Release(2);
+        var results = await Task.WhenAll(approveTask, rejectTask);
+
+        // The invariant this test checks: a Pending booking must be decided exactly once, never both
+        // ways and never left ambiguous, regardless of which decision a caller happened to send first.
+        Assert.Single(results, succeeded => succeeded);
+        Assert.Single(results, succeeded => !succeeded);
+
+        await using var verifyContext = CreateDbContext(_tenantId);
+        var finalBooking = await verifyContext.Bookings.SingleAsync(b => b.Id == bookingId);
+        var finalApproval = await verifyContext.ApprovalRequests.SingleAsync(a => a.Id == approvalRequestId);
+        Assert.NotEqual(BookingStatus.Pending, finalBooking.Status);
+        // Booking and ApprovalRequest must always agree on which decision actually won.
+        Assert.Equal(
+            finalBooking.Status == BookingStatus.Confirmed ? ApprovalStatus.Approved : ApprovalStatus.Rejected,
+            finalApproval.Status);
+    }
+
+    private RejectBookingCommandHandler CreateRejectHandler(BookSpaceDbContext dbContext, Guid userId) => new(
+        new ResourceBookingLock(dbContext, NullLogger<ResourceBookingLock>.Instance),
+        new BookingRepository(dbContext),
+        new ApprovalRequestRepository(dbContext),
+        new ResourceApproverRepository(dbContext),
+        new FixedCurrentUserContext(_tenantId, userId));
+
     private async Task<Guid> SeedResourceAsync(int capacity, bool requiresApproval)
     {
         var resourceId = Guid.NewGuid();

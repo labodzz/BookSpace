@@ -78,6 +78,28 @@ public sealed class RecurringOccurrenceGeneratorTests
     }
 
     [Fact]
+    public void GenerateCandidateDates_MonthlyWithInterval_SkipsMonths()
+    {
+        var series = CreateSeries(RecurrenceFrequency.Monthly, interval: 2, occurrenceCount: 3, startDate: new DateOnly(2026, 1, 15));
+
+        var dates = RecurringOccurrenceGenerator.GenerateCandidateDates(series);
+
+        Assert.Equal([new DateOnly(2026, 1, 15), new DateOnly(2026, 3, 15), new DateOnly(2026, 5, 15)], dates);
+    }
+
+    [Fact]
+    public void GenerateCandidateDates_MonthlyFromTheThirtyFirst_ClampsToFebruary29InALeapYear()
+    {
+        // 2028 is a leap year - Jan 31 -> Feb 29, not Feb 28 the way the non-leap-year clamp test below
+        // proves - a distinct clamp target the generator's DateOnly.AddMonths call must still get right.
+        var series = CreateSeries(RecurrenceFrequency.Monthly, interval: 1, occurrenceCount: 2, startDate: new DateOnly(2028, 1, 31));
+
+        var dates = RecurringOccurrenceGenerator.GenerateCandidateDates(series);
+
+        Assert.Equal([new DateOnly(2028, 1, 31), new DateOnly(2028, 2, 29)], dates);
+    }
+
+    [Fact]
     public void GenerateCandidateDates_MonthlyFromTheThirtyFirst_ClampsToTheLastValidDayOfAShorterMonth()
     {
         // Jan 31 -> Feb has no 31st, clamp to Feb 28 (2026 is not a leap year).
@@ -226,5 +248,64 @@ public sealed class RecurringOccurrenceGeneratorTests
 
         Assert.True(resolution.Succeeded);
         Assert.Equal(new DateTimeOffset(winterDate.Year, winterDate.Month, winterDate.Day, 8, 0, 0, TimeSpan.Zero), resolution.StartUtc);
+    }
+
+    // These two combine GenerateCandidateDates(Weekly) with TryResolveOccurrence across real consecutive
+    // Mondays straddling a real DST transition - the exact "every Monday 09:00 Europe/Sarajevo" scenario
+    // the recurrence design is meant to protect, which every other DST test above only proves in
+    // isolation for a single date. The point being proven: the local wall-clock hour (09:00) must stay
+    // exactly the same on both sides of the transition; only the UTC offset changes. A bug that instead
+    // added a fixed 7*24 hours to the previous occurrence's UTC instant (rather than re-resolving 09:00
+    // local for each new date) would silently drift the meeting by an hour the week of the transition -
+    // these tests would catch that.
+    [Fact]
+    public void WeeklySeries_GenerateThenResolve_KeepsTheLocalWallClockTimeStableAcrossTheSpringForwardTransition()
+    {
+        var timeZone = TimeZoneInfo.FindSystemTimeZoneById("Europe/Sarajevo");
+        var transitionSunday = LastSundayOfMonth(DateTime.UtcNow.Year + 1, 3);
+        var mondayBeforeTransition = transitionSunday.AddDays(-6);
+        var mondayAfterTransition = transitionSunday.AddDays(1);
+        var series = CreateSeries(RecurrenceFrequency.Weekly, interval: 1, occurrenceCount: 4, startDate: mondayBeforeTransition.AddDays(-7));
+
+        var dates = RecurringOccurrenceGenerator.GenerateCandidateDates(series);
+        Assert.Equal(
+            [mondayBeforeTransition.AddDays(-7), mondayBeforeTransition, mondayAfterTransition, mondayAfterTransition.AddDays(7)], dates);
+
+        var resolutions = dates
+            .Select(date => RecurringOccurrenceGenerator.TryResolveOccurrence(date, new TimeOnly(9, 0), new TimeOnly(10, 0), timeZone))
+            .ToList();
+
+        Assert.All(resolutions, resolution => Assert.True(resolution.Succeeded));
+        // Pre-transition Mondays: 09:00 CET (UTC+1) = 08:00Z.
+        Assert.Equal(new DateTimeOffset(dates[0].Year, dates[0].Month, dates[0].Day, 8, 0, 0, TimeSpan.Zero), resolutions[0].StartUtc);
+        Assert.Equal(new DateTimeOffset(dates[1].Year, dates[1].Month, dates[1].Day, 8, 0, 0, TimeSpan.Zero), resolutions[1].StartUtc);
+        // Post-transition Mondays: 09:00 CEST (UTC+2) = 07:00Z - the offset changed, but the local
+        // wall-clock hour (09:00) is identical to the pre-transition occurrences above.
+        Assert.Equal(new DateTimeOffset(dates[2].Year, dates[2].Month, dates[2].Day, 7, 0, 0, TimeSpan.Zero), resolutions[2].StartUtc);
+        Assert.Equal(new DateTimeOffset(dates[3].Year, dates[3].Month, dates[3].Day, 7, 0, 0, TimeSpan.Zero), resolutions[3].StartUtc);
+    }
+
+    [Fact]
+    public void WeeklySeries_GenerateThenResolve_KeepsTheLocalWallClockTimeStableAcrossTheFallBackTransition()
+    {
+        var timeZone = TimeZoneInfo.FindSystemTimeZoneById("Europe/Sarajevo");
+        var transitionSunday = LastSundayOfMonth(DateTime.UtcNow.Year + 1, 10);
+        var mondayBeforeTransition = transitionSunday.AddDays(-6);
+        var mondayAfterTransition = transitionSunday.AddDays(1);
+        var series = CreateSeries(RecurrenceFrequency.Weekly, interval: 1, occurrenceCount: 4, startDate: mondayBeforeTransition.AddDays(-7));
+
+        var dates = RecurringOccurrenceGenerator.GenerateCandidateDates(series);
+
+        var resolutions = dates
+            .Select(date => RecurringOccurrenceGenerator.TryResolveOccurrence(date, new TimeOnly(9, 0), new TimeOnly(10, 0), timeZone))
+            .ToList();
+
+        Assert.All(resolutions, resolution => Assert.True(resolution.Succeeded));
+        // Pre-transition Mondays: still CEST (UTC+2), 09:00 = 07:00Z.
+        Assert.Equal(new DateTimeOffset(dates[0].Year, dates[0].Month, dates[0].Day, 7, 0, 0, TimeSpan.Zero), resolutions[0].StartUtc);
+        Assert.Equal(new DateTimeOffset(dates[1].Year, dates[1].Month, dates[1].Day, 7, 0, 0, TimeSpan.Zero), resolutions[1].StartUtc);
+        // Post-transition Mondays: back to CET (UTC+1), 09:00 = 08:00Z - local wall-clock hour unchanged.
+        Assert.Equal(new DateTimeOffset(dates[2].Year, dates[2].Month, dates[2].Day, 8, 0, 0, TimeSpan.Zero), resolutions[2].StartUtc);
+        Assert.Equal(new DateTimeOffset(dates[3].Year, dates[3].Month, dates[3].Day, 8, 0, 0, TimeSpan.Zero), resolutions[3].StartUtc);
     }
 }

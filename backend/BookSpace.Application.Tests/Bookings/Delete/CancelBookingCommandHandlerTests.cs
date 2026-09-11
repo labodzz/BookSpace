@@ -170,6 +170,92 @@ public sealed class CancelBookingCommandHandlerTests
     }
 
     [Fact]
+    public async Task Handle_CancelRemainingSeriesTrue_SkipsLaterOccurrencesAlreadyRejectedOrCancelled()
+    {
+        // The Completed exclusion is already proven above; CancellableStatuses excludes four statuses in
+        // total (Rejected, Cancelled, Completed, NoShow) via one boolean check - this proves the other two.
+        var seriesId = Guid.NewGuid();
+        var anchor = DateTimeOffset.UtcNow.AddDays(5);
+        var booking = CreateBooking();
+        booking.SeriesId = seriesId;
+        booking.StartUtc = anchor;
+        booking.EndUtc = anchor.AddHours(1);
+
+        var alreadyRejectedLaterOccurrence = new Booking
+        {
+            Id = Guid.NewGuid(), TenantId = TenantId, ResourceId = booking.ResourceId, UserId = UserId, SeriesId = seriesId,
+            StartUtc = anchor.AddDays(1), EndUtc = anchor.AddDays(1).AddHours(1), Quantity = 1, Status = BookingStatus.Rejected, CreatedAtUtc = anchor,
+        };
+        var alreadyCancelledLaterOccurrence = new Booking
+        {
+            Id = Guid.NewGuid(), TenantId = TenantId, ResourceId = booking.ResourceId, UserId = UserId, SeriesId = seriesId,
+            StartUtc = anchor.AddDays(2), EndUtc = anchor.AddDays(2).AddHours(1), Quantity = 1, Status = BookingStatus.Cancelled, CreatedAtUtc = anchor,
+        };
+
+        _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
+        _bookingRepository.Setup(r => r.FindByIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking);
+        _bookingRepository
+            .Setup(r => r.GetBySeriesIdAsync(seriesId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([booking, alreadyRejectedLaterOccurrence, alreadyCancelledLaterOccurrence]);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new CancelBookingCommandRequest(booking.Id, CancelRemainingSeries: true), CancellationToken.None);
+
+        Assert.Equal(BookingStatus.Cancelled, booking.Status);
+        Assert.Equal(BookingStatus.Rejected, alreadyRejectedLaterOccurrence.Status);
+        Assert.Equal(BookingStatus.Cancelled, alreadyCancelledLaterOccurrence.Status);
+        Assert.DoesNotContain(alreadyRejectedLaterOccurrence.Id, result.CascadedOccurrenceIds);
+        Assert.DoesNotContain(alreadyCancelledLaterOccurrence.Id, result.CascadedOccurrenceIds);
+    }
+
+    [Fact]
+    public async Task Handle_CancelRemainingSeriesTrue_CascadesAPendingLaterOccurrence()
+    {
+        // CancellableStatuses includes Pending - an occurrence still awaiting approval must be cascaded
+        // exactly like a Confirmed one, not left dangling because it hasn't been decided yet.
+        var seriesId = Guid.NewGuid();
+        var anchor = DateTimeOffset.UtcNow.AddDays(5);
+        var booking = CreateBooking();
+        booking.SeriesId = seriesId;
+        booking.StartUtc = anchor;
+        booking.EndUtc = anchor.AddHours(1);
+
+        var pendingLaterOccurrence = new Booking
+        {
+            Id = Guid.NewGuid(), TenantId = TenantId, ResourceId = booking.ResourceId, UserId = UserId, SeriesId = seriesId,
+            StartUtc = anchor.AddDays(1), EndUtc = anchor.AddDays(1).AddHours(1), Quantity = 1, Status = BookingStatus.Pending, CreatedAtUtc = anchor,
+        };
+
+        _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
+        _bookingRepository.Setup(r => r.FindByIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking);
+        _bookingRepository
+            .Setup(r => r.GetBySeriesIdAsync(seriesId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([booking, pendingLaterOccurrence]);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new CancelBookingCommandRequest(booking.Id, CancelRemainingSeries: true), CancellationToken.None);
+
+        Assert.Equal(BookingStatus.Cancelled, pendingLaterOccurrence.Status);
+        Assert.Contains(pendingLaterOccurrence.Id, result.CascadedOccurrenceIds);
+    }
+
+    [Fact]
+    public async Task Handle_WithOwnPendingBooking_CancelsAndSaves()
+    {
+        // Cancelling a single (non-cascaded) Pending booking - the one CancellableStatuses status never
+        // exercised by the ordinary single-cancellation tests above (which all default to Confirmed).
+        var booking = CreateBooking(BookingStatus.Pending);
+        _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
+        _bookingRepository.Setup(r => r.FindByIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new CancelBookingCommandRequest(booking.Id), CancellationToken.None);
+
+        Assert.Equal(BookingStatus.Cancelled, result.Status);
+        _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
     public async Task Handle_CancelRemainingSeriesTrueOnAOneOffBooking_IsIgnoredAndOnlyCancelsTheOneBooking()
     {
         var booking = CreateBooking(); // SeriesId is null - a one-off booking

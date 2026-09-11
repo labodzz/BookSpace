@@ -94,4 +94,22 @@ public sealed class CreateBlackoutPeriodCommandHandlerTests
         Assert.Equal("Resource.NotFound", exception.ErrorCode);
         _blackoutPeriodRepository.Verify(r => r.AddAsync(It.IsAny<BlackoutPeriod>(), It.IsAny<CancellationToken>()), Times.Never);
     }
+
+    // The Archived-is-terminal branch - identical reasoning/code shape to
+    // CreateAvailabilityRuleCommandHandler's own check - had no test at all before this, despite a
+    // dedicated code comment explaining the design intent.
+    [Fact]
+    public async Task Handle_WithArchivedResource_ThrowsConflictExceptionWithoutSaving()
+    {
+        var resource = CreateResource();
+        resource.Status = ResourceStatus.Archived;
+        _resourceRepository.Setup(r => r.FindByIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(resource);
+        var sut = CreateSut();
+        var start = DateTimeOffset.UtcNow.AddDays(1);
+        var request = new CreateBlackoutPeriodCommandRequest(resource.Id, start, start.AddHours(1), "Maintenance");
+
+        await Assert.ThrowsAsync<ConflictException>(() => sut.Handle(request, CancellationToken.None));
+
+        _blackoutPeriodRepository.Verify(r => r.AddAsync(It.IsAny<BlackoutPeriod>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
 }

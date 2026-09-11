@@ -134,6 +134,47 @@ public sealed class AuthenticationServiceTests
         _refreshTokenRepository.Verify(r => r.RevokeFamilyAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    // The load-bearing invariant reuse-detection depends on entirely: every token descended from one
+    // login keeps the SAME FamilyId through every rotation, so RevokeFamilyAsync(familyId) reaches the
+    // whole chain. No test previously captured the newly-issued child token during a rotation (as
+    // opposed to a fresh login) and asserted its FamilyId - a regression that passed Guid.NewGuid()
+    // instead of the parent's FamilyId here would silently defeat family-wide revocation and every
+    // existing test would still pass.
+    [Fact]
+    public async Task RefreshAsync_WithValidToken_TheNewChildTokenKeepsTheParentsFamilyId()
+    {
+        var user = CreateUser();
+        var familyId = Guid.NewGuid();
+        var existingToken = new RefreshToken
+        {
+            Id = Guid.NewGuid(),
+            UserId = user.Id,
+            FamilyId = familyId,
+            TokenHash = "existing-hash",
+            CreatedAtUtc = DateTimeOffset.UtcNow.AddDays(-1),
+            ExpiresAtUtc = DateTimeOffset.UtcNow.AddDays(13),
+        };
+        _refreshTokenRepository.Setup(r => r.FindByTokenHashAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(existingToken);
+        _userRepository.Setup(r => r.FindByIdForAuthenticationAsync(user.Id, It.IsAny<CancellationToken>())).ReturnsAsync(user);
+        _userRepository.Setup(r => r.GetRolesAsync(user.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<string>)["Member"]);
+        _jwtTokenGenerator.Setup(g => g.GenerateAccessToken(user, It.IsAny<IReadOnlyCollection<string>>()))
+            .Returns(new AccessToken("new-access-token", DateTimeOffset.UtcNow.AddMinutes(15)));
+        RefreshToken? capturedChild = null;
+        _refreshTokenRepository
+            .Setup(r => r.AddAsync(It.IsAny<RefreshToken>(), It.IsAny<CancellationToken>()))
+            .Callback<RefreshToken, CancellationToken>((token, _) => capturedChild = token)
+            .Returns(Task.CompletedTask);
+
+        var sut = CreateSut();
+        await sut.RefreshAsync("raw-refresh-token", CancellationToken.None);
+
+        Assert.NotNull(capturedChild);
+        Assert.Equal(familyId, capturedChild!.FamilyId);
+        Assert.NotEqual(existingToken.Id, capturedChild.Id); // a genuinely new token, not the same row
+    }
+
     [Fact]
     public async Task RefreshAsync_WithExpiredToken_ReturnsFailureWithoutReuseDetection()
     {

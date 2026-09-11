@@ -1,3 +1,4 @@
+using BookSpace.Application.Bookings;
 using BookSpace.Application.Common;
 using BookSpace.Application.Resources;
 using BookSpace.Application.Tests.Bookings;
@@ -49,6 +50,28 @@ public sealed class UpdateResourceCommandHandlerTests
         Assert.Equal(ResourceStatus.Maintenance, result.Status);
         Assert.Equal(newResourceTypeId, result.ResourceTypeId);
         _resourceRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+        // Capacity increased (4 -> 10) - the peak-demand re-check only applies to a reduction, and this
+        // was previously only implied by the test above succeeding, never directly asserted as skipped.
+        _bookingAvailabilityRepository.Verify(
+            r => r.GetActiveBookingsAsync(It.IsAny<Guid>(), It.IsAny<DateTimeOffset>(), It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task Handle_WithCapacityUnchanged_SkipsThePeakDemandCheck()
+    {
+        var resource = CreateResource(); // Capacity = 4
+        _resourceRepository.Setup(r => r.FindByIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(resource);
+        _resourceRepository.Setup(r => r.ResourceTypeExistsAsync(resource.ResourceTypeId, It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        _resourceRepository.Setup(r => r.ExistsByNameAsync(resource.Name, resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(false);
+        var sut = CreateSut();
+        var request = new UpdateResourceCommandRequest(resource.Id, resource.ResourceTypeId, resource.Name, resource.Description, 4, false, "UTC", ResourceStatus.Active);
+
+        await sut.Handle(request, CancellationToken.None);
+
+        _bookingAvailabilityRepository.Verify(
+            r => r.GetActiveBookingsAsync(It.IsAny<Guid>(), It.IsAny<DateTimeOffset>(), It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Fact]
@@ -196,5 +219,30 @@ public sealed class UpdateResourceCommandHandlerTests
         var result = await sut.Handle(request, CancellationToken.None);
 
         Assert.Equal(5, result.Capacity);
+    }
+
+    // Every other test in this file uses PassThroughResourceBookingLock, which ignores its resourceId
+    // argument entirely - a bug that passed the wrong id would go undetected by any of them. This is the
+    // one test that actually asserts the lock is acquired keyed by the request's own Id.
+    [Fact]
+    public async Task Handle_AcquiresTheResourceBookingLockKeyedByTheRequestsOwnId()
+    {
+        var resource = CreateResource();
+        _resourceRepository.Setup(r => r.FindByIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(resource);
+        _resourceRepository.Setup(r => r.ResourceTypeExistsAsync(resource.ResourceTypeId, It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        _resourceRepository.Setup(r => r.ExistsByNameAsync(resource.Name, resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(false);
+        var lockMock = new Mock<IResourceBookingLock>();
+        lockMock
+            .Setup(l => l.RunExclusiveAsync(
+                It.IsAny<Guid>(), It.IsAny<Func<CancellationToken, Task<UpdateResourceResponse>>>(), It.IsAny<CancellationToken>()))
+            .Returns<Guid, Func<CancellationToken, Task<UpdateResourceResponse>>, CancellationToken>((_, operation, ct) => operation(ct));
+        var sut = new UpdateResourceCommandHandler(lockMock.Object, _resourceRepository.Object, _bookingAvailabilityRepository.Object);
+        var request = new UpdateResourceCommandRequest(
+            resource.Id, resource.ResourceTypeId, resource.Name, resource.Description, resource.Capacity, resource.RequiresApproval, resource.TimeZoneId, resource.Status);
+
+        await sut.Handle(request, CancellationToken.None);
+
+        lockMock.Verify(l => l.RunExclusiveAsync(
+            resource.Id, It.IsAny<Func<CancellationToken, Task<UpdateResourceResponse>>>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 }

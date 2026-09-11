@@ -49,6 +49,55 @@ public sealed class GetRecurringSeriesQueryHandlerTests
         Assert.Equal(occurrence.Id, occurrenceResponse.Id);
     }
 
+    // OrderBy(StartUtc) was previously unproven - every other test uses exactly one occurrence.
+    [Fact]
+    public async Task Handle_WithMultipleOccurrences_OrdersThemByStartUtc()
+    {
+        var series = CreateSeries(UserId);
+        var later = new Booking
+        {
+            Id = Guid.NewGuid(), TenantId = series.TenantId, ResourceId = series.ResourceId, UserId = UserId, SeriesId = series.Id,
+            StartUtc = DateTimeOffset.UtcNow.AddDays(2), EndUtc = DateTimeOffset.UtcNow.AddDays(2).AddHours(1),
+            Quantity = 1, Status = BookingStatus.Confirmed, CreatedAtUtc = DateTimeOffset.UtcNow,
+        };
+        var earlier = new Booking
+        {
+            Id = Guid.NewGuid(), TenantId = series.TenantId, ResourceId = series.ResourceId, UserId = UserId, SeriesId = series.Id,
+            StartUtc = DateTimeOffset.UtcNow.AddDays(1), EndUtc = DateTimeOffset.UtcNow.AddDays(1).AddHours(1),
+            Quantity = 1, Status = BookingStatus.Confirmed, CreatedAtUtc = DateTimeOffset.UtcNow,
+        };
+        _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
+        _recurringSeriesRepository.Setup(r => r.FindByIdAsync(series.Id, It.IsAny<CancellationToken>())).ReturnsAsync(series);
+        // Deliberately returned out of order.
+        _bookingRepository.Setup(r => r.GetBySeriesIdAsync(series.Id, It.IsAny<CancellationToken>())).ReturnsAsync([later, earlier]);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new GetRecurringSeriesQueryRequest(series.Id), CancellationToken.None);
+
+        Assert.Equal(2, result.Occurrences.Count);
+        Assert.Equal(earlier.Id, result.Occurrences[0].Id);
+        Assert.Equal(later.Id, result.Occurrences[1].Id);
+    }
+
+    // Every existing test hardcodes OccurrenceCount with EndDate=null - the EndDate-terminated variant
+    // of the response mapping was never asserted.
+    [Fact]
+    public async Task Handle_WithAnEndDateTerminatedSeries_MapsEndDateAndNullOccurrenceCount()
+    {
+        var series = CreateSeries(UserId);
+        series.OccurrenceCount = null;
+        series.EndDate = series.StartDate.AddMonths(1);
+        _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
+        _recurringSeriesRepository.Setup(r => r.FindByIdAsync(series.Id, It.IsAny<CancellationToken>())).ReturnsAsync(series);
+        _bookingRepository.Setup(r => r.GetBySeriesIdAsync(series.Id, It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new GetRecurringSeriesQueryRequest(series.Id), CancellationToken.None);
+
+        Assert.Equal(series.EndDate, result.EndDate);
+        Assert.Null(result.OccurrenceCount);
+    }
+
     [Fact]
     public async Task Handle_WithUnknownSeries_ThrowsNotFoundException()
     {

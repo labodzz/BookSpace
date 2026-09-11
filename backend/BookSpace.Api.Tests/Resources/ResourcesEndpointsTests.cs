@@ -159,6 +159,480 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
+    // --- Cross-tenant 404 on the MUTATION paths (the read paths already all have this below) ---
+    // Every read route (GetResource, GetAvailabilityRules, GetBlackoutPeriods, GetResourceApprovers,
+    // GetAvailability) already had a cross-tenant 404 test; none of the mutation routes that follow the
+    // identical tenant-filtered-lookup pattern did.
+
+    [Fact]
+    public async Task UpdateResource_ForAnotherTenantsResource_ReturnsNotFound()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+
+        var response = await client.PutAsJsonAsync($"/resources/{TestDataSeeder.GlobexResourceId}", new
+        {
+            resourceTypeId = TestDataSeeder.ResourceTypeId,
+            name = "Should Not Apply",
+            capacity = 4,
+            requiresApproval = false,
+            timeZoneId = "UTC",
+            status = ResourceStatus.Active,
+        });
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task DeleteResource_ForAnotherTenantsResource_ReturnsNotFound()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+
+        var response = await client.DeleteAsync($"/resources/{TestDataSeeder.GlobexResourceId}");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task CreateAvailabilityRule_ForAnotherTenantsResource_ReturnsNotFound()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+
+        var response = await client.PostAsJsonAsync($"/resources/{TestDataSeeder.GlobexResourceId}/availability-rules",
+            new { dayOfWeek = DayOfWeek.Monday, startTime = "08:00:00", endTime = "10:00:00" });
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task CreateBlackoutPeriod_ForAnotherTenantsResource_ReturnsNotFound()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var start = DateTimeOffset.UtcNow.AddDays(7);
+
+        var response = await client.PostAsJsonAsync($"/resources/{TestDataSeeder.GlobexResourceId}/blackout-periods",
+            new { startUtc = start, endUtc = start.AddHours(1), reason = "Should not apply" });
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task AssignResourceApprover_ForAnotherTenantsResource_ReturnsNotFound()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+
+        var response = await client.PostAsJsonAsync(
+            $"/resources/{TestDataSeeder.GlobexResourceId}/approvers", new { userId = TestDataSeeder.AcmeMemberUserId });
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    // The second, distinct tenant-isolation check AssignResourceApproverCommandHandler performs: the
+    // RESOURCE is Acme's own, but the target UserId being made an approver belongs to a different tenant.
+    [Fact]
+    public async Task AssignResourceApprover_WithATargetUserFromAnotherTenant_ReturnsNotFound()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+
+        var response = await client.PostAsJsonAsync(
+            $"/resources/{TestDataSeeder.AcmeResourceId}/approvers", new { userId = TestDataSeeder.GlobexMemberUserId });
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task RemoveResourceApprover_ForAnotherTenantsResource_ReturnsNotFound()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+
+        var response = await client.DeleteAsync($"/resources/{TestDataSeeder.GlobexResourceId}/approvers/{TestDataSeeder.AcmeMemberUserId}");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    // --- RemoveResourceApprover had ZERO tests of any kind before this - not even a happy path ---
+
+    [Fact]
+    public async Task RemoveResourceApprover_ReturnsNoContent()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resource = await CreateResourceAsync(client, $"ApproverRemoveHost {Guid.NewGuid()}");
+        await client.PostAsJsonAsync($"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeMemberUserId });
+
+        var response = await client.DeleteAsync($"/resources/{resource.Id}/approvers/{TestDataSeeder.AcmeMemberUserId}");
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+    }
+
+    // --- SysAdmin-Allowed sweep: every mutation in this controller is [Authorize(Roles =
+    // "TenantAdmin,SysAdmin")], but only CreateResource had ever actually been exercised with a real
+    // SysAdmin login (see the comment on CreateResource_AsSysAdmin_ReturnsOkWithCreatedResource above).
+    // Since SysAdmin and TenantAdmin are meant to be treated identically everywhere, a regression that
+    // accidentally dropped SysAdmin from any one of these role lists would go undetected without this. ---
+
+    [Fact]
+    public async Task UpdateResource_AsSysAdmin_ReturnsOk()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resource = await CreateResourceAsync(client, $"SysAdminUpdate {Guid.NewGuid()}");
+        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+
+        var response = await sysAdminClient.PutAsJsonAsync($"/resources/{resource.Id}", new
+        {
+            resourceTypeId = TestDataSeeder.ResourceTypeId,
+            name = "Renamed By SysAdmin",
+            capacity = 8,
+            requiresApproval = false,
+            timeZoneId = "UTC",
+            status = ResourceStatus.Active,
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task DeleteResource_AsSysAdmin_ReturnsOk()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resource = await CreateResourceAsync(client, $"SysAdminDelete {Guid.NewGuid()}");
+        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+
+        var response = await sysAdminClient.DeleteAsync($"/resources/{resource.Id}");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task CreateAvailabilityRule_AsSysAdmin_ReturnsOk()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resource = await CreateResourceAsync(client, $"SysAdminRule {Guid.NewGuid()}");
+        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+
+        var response = await sysAdminClient.PostAsJsonAsync($"/resources/{resource.Id}/availability-rules",
+            new { dayOfWeek = DayOfWeek.Friday, startTime = "08:00:00", endTime = "10:00:00" });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task DeleteAvailabilityRule_AsSysAdmin_ReturnsNoContent()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resource = await CreateResourceAsync(client, $"SysAdminRuleDelete {Guid.NewGuid()}");
+        var createResponse = await client.PostAsJsonAsync($"/resources/{resource.Id}/availability-rules",
+            new { dayOfWeek = DayOfWeek.Saturday, startTime = "08:00:00", endTime = "10:00:00" });
+        var rule = await createResponse.Content.ReadFromJsonAsync<AvailabilityRuleResponse>(JsonOptions);
+        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+
+        var response = await sysAdminClient.DeleteAsync($"/resources/{resource.Id}/availability-rules/{rule!.Id}");
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task CreateBlackoutPeriod_AsSysAdmin_ReturnsOk()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resource = await CreateResourceAsync(client, $"SysAdminBlackout {Guid.NewGuid()}");
+        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+        var start = DateTimeOffset.UtcNow.AddDays(8);
+
+        var response = await sysAdminClient.PostAsJsonAsync($"/resources/{resource.Id}/blackout-periods",
+            new { startUtc = start, endUtc = start.AddHours(1), reason = "SysAdmin maintenance" });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task UpdateBlackoutPeriod_AsSysAdmin_ReturnsOk()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resource = await CreateResourceAsync(client, $"SysAdminBlackoutUpdate {Guid.NewGuid()}");
+        var start = DateTimeOffset.UtcNow.AddDays(9);
+        var createResponse = await client.PostAsJsonAsync($"/resources/{resource.Id}/blackout-periods",
+            new { startUtc = start, endUtc = start.AddHours(1), reason = "Original" });
+        var period = await createResponse.Content.ReadFromJsonAsync<BlackoutPeriodResponse>(JsonOptions);
+        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+
+        var response = await sysAdminClient.PutAsJsonAsync($"/resources/{resource.Id}/blackout-periods/{period!.Id}",
+            new { startUtc = start, endUtc = start.AddHours(2), reason = "Changed by SysAdmin" });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task DeleteBlackoutPeriod_AsSysAdmin_ReturnsNoContent()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resource = await CreateResourceAsync(client, $"SysAdminBlackoutDelete {Guid.NewGuid()}");
+        var start = DateTimeOffset.UtcNow.AddDays(10);
+        var createResponse = await client.PostAsJsonAsync($"/resources/{resource.Id}/blackout-periods",
+            new { startUtc = start, endUtc = start.AddHours(1), reason = "To delete" });
+        var period = await createResponse.Content.ReadFromJsonAsync<BlackoutPeriodResponse>(JsonOptions);
+        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+
+        var response = await sysAdminClient.DeleteAsync($"/resources/{resource.Id}/blackout-periods/{period!.Id}");
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task AssignResourceApprover_AsSysAdmin_ReturnsOk()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resource = await CreateResourceAsync(client, $"SysAdminApproverAssign {Guid.NewGuid()}");
+        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+
+        var response = await sysAdminClient.PostAsJsonAsync($"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeMemberUserId });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task RemoveResourceApprover_AsSysAdmin_ReturnsNoContent()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resource = await CreateResourceAsync(client, $"SysAdminApproverRemove {Guid.NewGuid()}");
+        await client.PostAsJsonAsync($"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeMemberUserId });
+        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+
+        var response = await sysAdminClient.DeleteAsync($"/resources/{resource.Id}/approvers/{TestDataSeeder.AcmeMemberUserId}");
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+    }
+
+    // --- Member-Denied sweep: UpdateResource/DeleteResource/AssignResourceApprover already had this;
+    // these 6 sub-resource mutation endpoints' [Authorize(Roles=...)] attributes had never been exercised
+    // by any Member-forbidden test. ---
+
+    [Fact]
+    public async Task CreateAvailabilityRule_AsMember_ReturnsForbidden()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+
+        var response = await client.PostAsJsonAsync($"/resources/{TestDataSeeder.AcmeResourceId}/availability-rules",
+            new { dayOfWeek = DayOfWeek.Sunday, startTime = "08:00:00", endTime = "10:00:00" });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task DeleteAvailabilityRule_AsMember_ReturnsForbidden()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resource = await CreateResourceAsync(client, $"MemberDeniedRuleDelete {Guid.NewGuid()}");
+        var createResponse = await client.PostAsJsonAsync($"/resources/{resource.Id}/availability-rules",
+            new { dayOfWeek = DayOfWeek.Sunday, startTime = "08:00:00", endTime = "10:00:00" });
+        var rule = await createResponse.Content.ReadFromJsonAsync<AvailabilityRuleResponse>(JsonOptions);
+        using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+
+        var response = await memberClient.DeleteAsync($"/resources/{resource.Id}/availability-rules/{rule!.Id}");
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task CreateBlackoutPeriod_AsMember_ReturnsForbidden()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+        var start = DateTimeOffset.UtcNow.AddDays(11);
+
+        var response = await client.PostAsJsonAsync($"/resources/{TestDataSeeder.AcmeResourceId}/blackout-periods",
+            new { startUtc = start, endUtc = start.AddHours(1), reason = "Should be forbidden" });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task UpdateBlackoutPeriod_AsMember_ReturnsForbidden()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resource = await CreateResourceAsync(client, $"MemberDeniedBlackoutUpdate {Guid.NewGuid()}");
+        var start = DateTimeOffset.UtcNow.AddDays(12);
+        var createResponse = await client.PostAsJsonAsync($"/resources/{resource.Id}/blackout-periods",
+            new { startUtc = start, endUtc = start.AddHours(1), reason = "Original" });
+        var period = await createResponse.Content.ReadFromJsonAsync<BlackoutPeriodResponse>(JsonOptions);
+        using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+
+        var response = await memberClient.PutAsJsonAsync($"/resources/{resource.Id}/blackout-periods/{period!.Id}",
+            new { startUtc = start, endUtc = start.AddHours(2), reason = "Should be forbidden" });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task DeleteBlackoutPeriod_AsMember_ReturnsForbidden()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resource = await CreateResourceAsync(client, $"MemberDeniedBlackoutDelete {Guid.NewGuid()}");
+        var start = DateTimeOffset.UtcNow.AddDays(13);
+        var createResponse = await client.PostAsJsonAsync($"/resources/{resource.Id}/blackout-periods",
+            new { startUtc = start, endUtc = start.AddHours(1), reason = "To delete" });
+        var period = await createResponse.Content.ReadFromJsonAsync<BlackoutPeriodResponse>(JsonOptions);
+        using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+
+        var response = await memberClient.DeleteAsync($"/resources/{resource.Id}/blackout-periods/{period!.Id}");
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    // --- Approver-Denied sweep: Approver is a real, seeded role distinct from Member, but every one of
+    // these 10 TenantAdmin,SysAdmin-only endpoints only ever had a Member-forbidden test. Its exclusion
+    // from these routes was previously only asserted by the [Authorize(Roles=...)] attribute itself. ---
+
+    [Fact]
+    public async Task CreateResource_AsApprover_ReturnsForbidden()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
+
+        var response = await client.PostAsJsonAsync("/resources", new
+        {
+            resourceTypeId = TestDataSeeder.ResourceTypeId,
+            name = $"Approver Denied {Guid.NewGuid()}",
+            capacity = 4,
+            requiresApproval = false,
+            timeZoneId = "UTC",
+        });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task UpdateResource_AsApprover_ReturnsForbidden()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
+
+        var response = await client.PutAsJsonAsync($"/resources/{TestDataSeeder.AcmeResourceId}", new
+        {
+            resourceTypeId = TestDataSeeder.ResourceTypeId,
+            name = "Should Be Forbidden",
+            capacity = 8,
+            requiresApproval = false,
+            timeZoneId = "UTC",
+            status = ResourceStatus.Active,
+        });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task DeleteResource_AsApprover_ReturnsForbidden()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
+
+        var response = await client.DeleteAsync($"/resources/{TestDataSeeder.AcmeResourceId}");
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task CreateAvailabilityRule_AsApprover_ReturnsForbidden()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
+
+        var response = await client.PostAsJsonAsync($"/resources/{TestDataSeeder.AcmeResourceId}/availability-rules",
+            new { dayOfWeek = DayOfWeek.Monday, startTime = "08:00:00", endTime = "10:00:00" });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task DeleteAvailabilityRule_AsApprover_ReturnsForbidden()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resource = await CreateResourceAsync(client, $"ApproverDeniedRuleDelete {Guid.NewGuid()}");
+        var createResponse = await client.PostAsJsonAsync($"/resources/{resource.Id}/availability-rules",
+            new { dayOfWeek = DayOfWeek.Monday, startTime = "08:00:00", endTime = "10:00:00" });
+        var rule = await createResponse.Content.ReadFromJsonAsync<AvailabilityRuleResponse>(JsonOptions);
+        using var approverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
+
+        var response = await approverClient.DeleteAsync($"/resources/{resource.Id}/availability-rules/{rule!.Id}");
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task CreateBlackoutPeriod_AsApprover_ReturnsForbidden()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
+        var start = DateTimeOffset.UtcNow.AddDays(16);
+
+        var response = await client.PostAsJsonAsync($"/resources/{TestDataSeeder.AcmeResourceId}/blackout-periods",
+            new { startUtc = start, endUtc = start.AddHours(1), reason = "Should be forbidden" });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task UpdateBlackoutPeriod_AsApprover_ReturnsForbidden()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resource = await CreateResourceAsync(client, $"ApproverDeniedBlackoutUpdate {Guid.NewGuid()}");
+        var start = DateTimeOffset.UtcNow.AddDays(17);
+        var createResponse = await client.PostAsJsonAsync($"/resources/{resource.Id}/blackout-periods",
+            new { startUtc = start, endUtc = start.AddHours(1), reason = "Original" });
+        var period = await createResponse.Content.ReadFromJsonAsync<BlackoutPeriodResponse>(JsonOptions);
+        using var approverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
+
+        var response = await approverClient.PutAsJsonAsync($"/resources/{resource.Id}/blackout-periods/{period!.Id}",
+            new { startUtc = start, endUtc = start.AddHours(2), reason = "Should be forbidden" });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task DeleteBlackoutPeriod_AsApprover_ReturnsForbidden()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resource = await CreateResourceAsync(client, $"ApproverDeniedBlackoutDelete {Guid.NewGuid()}");
+        var start = DateTimeOffset.UtcNow.AddDays(18);
+        var createResponse = await client.PostAsJsonAsync($"/resources/{resource.Id}/blackout-periods",
+            new { startUtc = start, endUtc = start.AddHours(1), reason = "To delete" });
+        var period = await createResponse.Content.ReadFromJsonAsync<BlackoutPeriodResponse>(JsonOptions);
+        using var approverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
+
+        var response = await approverClient.DeleteAsync($"/resources/{resource.Id}/blackout-periods/{period!.Id}");
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task AssignResourceApprover_AsApprover_ReturnsForbidden()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
+
+        var response = await client.PostAsJsonAsync(
+            $"/resources/{TestDataSeeder.AcmeResourceId}/approvers", new { userId = TestDataSeeder.AcmeMemberUserId });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task RemoveResourceApprover_AsApprover_ReturnsForbidden()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resource = await CreateResourceAsync(client, $"ApproverDeniedApproverRemove {Guid.NewGuid()}");
+        await client.PostAsJsonAsync($"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeMemberUserId });
+        using var approverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
+
+        var response = await approverClient.DeleteAsync($"/resources/{resource.Id}/approvers/{TestDataSeeder.AcmeMemberUserId}");
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task RemoveResourceApprover_AsMember_ReturnsForbidden()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resource = await CreateResourceAsync(client, $"MemberDeniedApproverRemove {Guid.NewGuid()}");
+        await client.PostAsJsonAsync($"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeMemberUserId });
+        using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+
+        var response = await memberClient.DeleteAsync($"/resources/{resource.Id}/approvers/{TestDataSeeder.AcmeMemberUserId}");
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
     [Fact]
     public async Task CreateResource_WithDuplicateName_ReturnsConflict()
     {
@@ -273,6 +747,51 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         var response = await client.DeleteAsync($"/resources/{resource.Id}/availability-rules/{rule!.Id}");
 
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task DeleteBlackoutPeriod_ReturnsNoContent()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resource = await CreateResourceAsync(client, $"BlackoutDeleteHappy {Guid.NewGuid()}");
+        var start = DateTimeOffset.UtcNow.AddDays(14);
+        var createResponse = await client.PostAsJsonAsync($"/resources/{resource.Id}/blackout-periods",
+            new { startUtc = start, endUtc = start.AddHours(1), reason = "To delete" });
+        var period = await createResponse.Content.ReadFromJsonAsync<BlackoutPeriodResponse>(JsonOptions);
+
+        var response = await client.DeleteAsync($"/resources/{resource.Id}/blackout-periods/{period!.Id}");
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+    }
+
+    // The "Archived is terminal, blocks new child configuration" rule exists identically in 4 handlers
+    // (CreateAvailabilityRule, CreateBlackoutPeriod, AssignResourceApprover, UpdateResource) but had never
+    // been exercised end-to-end through the real HTTP pipeline - only unit-tested via mocks.
+    [Fact]
+    public async Task CreateAvailabilityRule_ForArchivedResource_ReturnsConflict()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resource = await CreateResourceAsync(client, $"ArchivedRuleTarget {Guid.NewGuid()}");
+        await client.DeleteAsync($"/resources/{resource.Id}");
+
+        var response = await client.PostAsJsonAsync($"/resources/{resource.Id}/availability-rules",
+            new { dayOfWeek = DayOfWeek.Monday, startTime = "08:00:00", endTime = "10:00:00" });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task CreateBlackoutPeriod_ForArchivedResource_ReturnsConflict()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resource = await CreateResourceAsync(client, $"ArchivedBlackoutTarget {Guid.NewGuid()}");
+        await client.DeleteAsync($"/resources/{resource.Id}");
+        var start = DateTimeOffset.UtcNow.AddDays(15);
+
+        var response = await client.PostAsJsonAsync($"/resources/{resource.Id}/blackout-periods",
+            new { startUtc = start, endUtc = start.AddHours(1), reason = "Should be rejected" });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
     }
 
     [Fact]
@@ -482,6 +1001,26 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
             resourceTypeId = TestDataSeeder.ResourceTypeId,
             name,
             capacity = 4,
+            requiresApproval = false,
+            timeZoneId = "UTC",
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    // ExistsByNameAsync has no explicit tenant parameter - it relies entirely on the EF global query
+    // filter. A regression that broadened it tenant-globally would silently block legitimate cross-tenant
+    // creates; only same-tenant duplicate rejection was ever tested before this.
+    [Fact]
+    public async Task CreateResource_WithNameAlreadyUsedByAnotherTenant_Succeeds()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+
+        var response = await client.PostAsJsonAsync("/resources", new
+        {
+            resourceTypeId = TestDataSeeder.ResourceTypeId,
+            name = "Globex Only Room", // the exact name TestDataSeeder gives Globex's resource
+            capacity = 2,
             requiresApproval = false,
             timeZoneId = "UTC",
         });

@@ -56,6 +56,16 @@ public sealed class TenantIsolationFilterTests : IAsyncLifetime
             PasswordHash = "irrelevant-for-this-test",
             CreatedAtUtc = DateTimeOffset.UtcNow,
         });
+        dbContext.Users.Add(new User
+        {
+            Id = Guid.NewGuid(),
+            TenantId = _tenantBId,
+            FirstName = "Tenant",
+            LastName = "BUser",
+            Email = "tenant-b-user@bookspace.test",
+            PasswordHash = "irrelevant-for-this-test",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+        });
         await dbContext.SaveChangesAsync();
     }
 
@@ -95,6 +105,32 @@ public sealed class TenantIsolationFilterTests : IAsyncLifetime
         var resources = await dbContext.Resources.ToListAsync();
 
         Assert.Empty(resources);
+    }
+
+    // The direct Users-specific counterpart to TenantFilter_WithMatchingTenantContext_.../
+    // ...WithDifferentTenantContext_... above, which only ever checked Resources. GET /users' own
+    // controller comment claims this endpoint "cannot leak another tenant's users" purely from the
+    // global filter - this is the test that actually proves that claim for Users specifically, rather
+    // than assuming it follows from the identical Resources behavior.
+    [Fact]
+    public async Task TenantFilter_WithMatchingTenantContext_ReturnsOnlyThatTenantsUsers()
+    {
+        await using var dbContext = CreateDbContext(_tenantAId);
+
+        var users = await dbContext.Users.ToListAsync();
+
+        var user = Assert.Single(users);
+        Assert.Equal("tenant-a-user@bookspace.test", user.Email);
+    }
+
+    [Fact]
+    public async Task TenantFilter_WithDifferentTenantContext_DoesNotSeeOtherTenantsUsers()
+    {
+        await using var dbContext = CreateDbContext(_tenantBId);
+
+        var users = await dbContext.Users.ToListAsync();
+
+        Assert.DoesNotContain(users, user => user.Email == "tenant-a-user@bookspace.test");
     }
 
     [Fact]

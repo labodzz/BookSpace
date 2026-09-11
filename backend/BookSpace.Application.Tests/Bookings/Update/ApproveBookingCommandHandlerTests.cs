@@ -112,6 +112,25 @@ public sealed class ApproveBookingCommandHandlerTests
     }
 
     [Fact]
+    public async Task Handle_AsSysAdmin_BypassesThePerResourceApproverCheck()
+    {
+        var resource = CreateResource();
+        var booking = CreatePendingBooking(resource);
+        SetupEligible(resource, booking);
+        _currentUserContext.SetupGet(c => c.Roles).Returns(["SysAdmin"]);
+        // Deliberately NOT a ResourceApprover for this resource - SysAdmin must not need to be, exactly
+        // like TenantAdmin above.
+        _resourceApproverRepository
+            .Setup(r => r.FindByResourceAndUserAsync(resource.Id, ApproverUserId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((ResourceApprover?)null);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new ApproveBookingCommandRequest(booking.Id, null), CancellationToken.None);
+
+        Assert.Equal(BookingStatus.Confirmed, result.Status);
+    }
+
+    [Fact]
     public async Task Handle_WhenCallerIsNotAResourceApproverForThisResource_ThrowsConflictExceptionWithApprovalForbiddenCode()
     {
         var resource = CreateResource();
@@ -206,5 +225,45 @@ public sealed class ApproveBookingCommandHandlerTests
 
         Assert.Equal(ErrorCodes.BookingCapacityExceeded, exception.ErrorCode);
         Assert.Equal(BookingStatus.Pending, booking.Status);
+    }
+
+    // The other genuinely-external re-check trigger §5 of docs/recurring-bookings-and-approvals.md names
+    // alongside "a blackout was added" - the resource's status itself changing to non-Active between
+    // creation and approval. Only blackout and capacity were previously exercised as re-check failures.
+    [Fact]
+    public async Task Handle_WhenResourceStatusChangedToInactiveAfterCreation_ThrowsConflictExceptionAndLeavesBookingPending()
+    {
+        var resource = CreateResource();
+        var booking = CreatePendingBooking(resource);
+        SetupEligible(resource, booking);
+        resource.Status = ResourceStatus.Inactive; // changed after the booking was created, before approval
+
+        var sut = CreateSut();
+
+        var exception = await Assert.ThrowsAsync<ConflictException>(() =>
+            sut.Handle(new ApproveBookingCommandRequest(booking.Id, null), CancellationToken.None));
+
+        Assert.Equal(ErrorCodes.BookingResourceUnavailable, exception.ErrorCode);
+        Assert.Equal(BookingStatus.Pending, booking.Status);
+        _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // The defensive resourceRepository.FindByIdAsync null-check inside ApproveUnderLockAsync - unreachable
+    // in ordinary operation (the resource existed moments ago, when the booking was resolved), but still
+    // an explicit throw with its own ErrorCode that had no test.
+    [Fact]
+    public async Task Handle_WhenResourceNoLongerExistsAtApprovalTime_ThrowsNotFoundExceptionWithResourceNotFoundCode()
+    {
+        var resource = CreateResource();
+        var booking = CreatePendingBooking(resource);
+        SetupEligible(resource, booking);
+        _resourceRepository.Setup(r => r.FindByIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync((Resource?)null);
+
+        var sut = CreateSut();
+
+        var exception = await Assert.ThrowsAsync<NotFoundException>(() =>
+            sut.Handle(new ApproveBookingCommandRequest(booking.Id, null), CancellationToken.None));
+
+        Assert.Equal(ErrorCodes.ResourceNotFound, exception.ErrorCode);
     }
 }

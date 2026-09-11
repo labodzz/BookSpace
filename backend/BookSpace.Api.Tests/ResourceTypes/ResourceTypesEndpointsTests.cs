@@ -49,6 +49,16 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
     }
 
     [Fact]
+    public async Task CreateResourceType_AsApprover_ReturnsForbidden()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
+
+        var response = await client.PostAsJsonAsync("/resource-types", new { name = $"Approver Denied {Guid.NewGuid()}" });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
     public async Task CreateResourceType_WithDuplicateNameInSameTenant_ReturnsConflict()
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
@@ -58,6 +68,22 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
         var response = await client.PostAsJsonAsync("/resource-types", new { name });
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
+    // ExistsByNameAsync has no explicit tenant parameter - relies entirely on the EF global query filter.
+    // Only same-tenant duplicate rejection was tested before; a regression that broadened this check
+    // tenant-globally would silently block legitimate cross-tenant creates and nothing would fail.
+    [Fact]
+    public async Task CreateResourceType_WithNameAlreadyUsedByAnotherTenant_Succeeds()
+    {
+        var name = $"Cross Tenant Type {Guid.NewGuid()}";
+        using var globexClient = await AuthenticatedClientAsync(TestDataSeeder.GlobexAdminEmail);
+        await CreateResourceTypeAsync(globexClient, name);
+
+        using var acmeClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var response = await acmeClient.PostAsJsonAsync("/resource-types", new { name });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     [Fact]
@@ -127,6 +153,38 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
     }
 
     [Fact]
+    public async Task UpdateResourceType_ForAnotherTenantsResourceType_ReturnsNotFound()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+
+        var response = await client.PutAsJsonAsync($"/resource-types/{TestDataSeeder.GlobexResourceTypeId}", new { name = "Should Not Apply" });
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task UpdateResourceType_AsSysAdmin_ReturnsOk()
+    {
+        using var adminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var created = await CreateResourceTypeAsync(adminClient, $"SysAdminUpdateTarget {Guid.NewGuid()}");
+        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+
+        var response = await sysAdminClient.PutAsJsonAsync($"/resource-types/{created.Id}", new { name = $"Renamed By SysAdmin {Guid.NewGuid()}" });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task UpdateResourceType_AsApprover_ReturnsForbidden()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
+
+        var response = await client.PutAsJsonAsync($"/resource-types/{TestDataSeeder.ResourceTypeId}", new { name = "Should Be Forbidden" });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
     public async Task UpdateResourceType_WithUnknownId_ReturnsNotFound()
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
@@ -158,6 +216,16 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
     }
 
     [Fact]
+    public async Task DeleteResourceType_AsApprover_ReturnsForbidden()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
+
+        var response = await client.DeleteAsync($"/resource-types/{TestDataSeeder.ResourceTypeId}");
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
     public async Task DeleteResourceType_AsMember_ReturnsForbidden()
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
@@ -165,6 +233,28 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
         var response = await client.DeleteAsync($"/resource-types/{TestDataSeeder.ResourceTypeId}");
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task DeleteResourceType_ForAnotherTenantsResourceType_ReturnsNotFound()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+
+        var response = await client.DeleteAsync($"/resource-types/{TestDataSeeder.GlobexResourceTypeId}");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task DeleteResourceType_AsSysAdmin_ReturnsNoContent()
+    {
+        using var adminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var created = await CreateResourceTypeAsync(adminClient, $"SysAdminDeleteTarget {Guid.NewGuid()}");
+        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+
+        var response = await sysAdminClient.DeleteAsync($"/resource-types/{created.Id}");
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
     }
 
     private async Task<ResourceTypeResponse> CreateResourceTypeAsync(HttpClient client, string name)

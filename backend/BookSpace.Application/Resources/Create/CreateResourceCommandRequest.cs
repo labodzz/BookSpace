@@ -46,12 +46,12 @@ public sealed class CreateResourceCommandHandler(IResourceRepository resourceRep
     {
         if (!await resourceRepository.ResourceTypeExistsAsync(request.ResourceTypeId, cancellationToken))
         {
-            throw new NotFoundException($"Resource type {request.ResourceTypeId} was not found.");
+            throw new NotFoundException($"Resource type {request.ResourceTypeId} was not found.", ErrorCodes.ResourceTypeNotFound);
         }
 
         if (await resourceRepository.ExistsByNameAsync(request.Name, excludingResourceId: null, cancellationToken))
         {
-            throw new ConflictException($"A resource named '{request.Name}' already exists.");
+            throw new ConflictException($"A resource named '{request.Name}' already exists.", ErrorCodes.ResourceNameConflict);
         }
 
         var resource = new Resource
