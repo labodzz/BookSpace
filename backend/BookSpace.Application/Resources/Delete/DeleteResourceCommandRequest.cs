@@ -25,7 +25,7 @@ public sealed class DeleteResourceCommandHandler(IResourceRepository resourceRep
     public async Task<DeleteResourceResponse> Handle(DeleteResourceCommandRequest request, CancellationToken cancellationToken)
     {
         var resource = await resourceRepository.FindByIdAsync(request.Id, cancellationToken)
-            ?? throw new NotFoundException($"Resource {request.Id} was not found.");
+            ?? throw new NotFoundException($"Resource {request.Id} was not found.", ErrorCodes.ResourceNotFound);
 
         if (resource.Status != ResourceStatus.Archived)
         {

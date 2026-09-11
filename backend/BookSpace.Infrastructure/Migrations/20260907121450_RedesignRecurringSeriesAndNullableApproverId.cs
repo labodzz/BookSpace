@@ -29,25 +29,33 @@ namespace BookSpace.Infrastructure.Migrations
                 type: "date",
                 nullable: true);
 
+            // Defaults below are chosen to satisfy CK_RecurringSeries_TimeRange/Quantity/EndCondition
+            // (added later in this same Up()) for any row that already exists at migration time -
+            // EF's ADD COLUMN backfills these defaults into existing rows before the CHECK constraints
+            // are added, and SQL Server validates new CHECK constraints against existing data by
+            // default. RecurringSeries had zero Application-layer writers before this migration (see
+            // docs/next-work-packet-handoff.md), so no real series data is expected to exist, but the
+            // defaults must not contradict the constraints being added in the same migration regardless.
             migrationBuilder.AddColumn<TimeOnly>(
                 name: "EndTime",
                 table: "RecurringSeries",
                 type: "time",
                 nullable: false,
-                defaultValue: new TimeOnly(0, 0, 0));
+                defaultValue: new TimeOnly(23, 59, 0));
 
             migrationBuilder.AddColumn<int>(
                 name: "OccurrenceCount",
                 table: "RecurringSeries",
                 type: "int",
-                nullable: true);
+                nullable: true,
+                defaultValue: 1);
 
             migrationBuilder.AddColumn<int>(
                 name: "Quantity",
                 table: "RecurringSeries",
                 type: "int",
                 nullable: false,
-                defaultValue: 0);
+                defaultValue: 1);
 
             migrationBuilder.AddColumn<DateOnly>(
                 name: "StartDate",
@@ -70,6 +78,14 @@ namespace BookSpace.Infrastructure.Migrations
                 nullable: true,
                 oldClrType: typeof(Guid),
                 oldType: "uniqueidentifier");
+
+            // SQL Server does NOT backfill an existing row's nullable column with its new DEFAULT
+            // constraint on a plain ADD COLUMN (unlike a NOT NULL column, which it backfills
+            // automatically) - WITH VALUES would be needed for that, which the migration-generator
+            // tooling doesn't emit here. OccurrenceCount is nullable, so an explicit backfill is required
+            // to keep any pre-existing row from ending up with EndDate/OccurrenceCount both NULL, which
+            // CK_RecurringSeries_EndCondition (added right below) would then reject.
+            migrationBuilder.Sql("UPDATE RecurringSeries SET OccurrenceCount = 1 WHERE OccurrenceCount IS NULL AND EndDate IS NULL;");
 
             migrationBuilder.AddCheckConstraint(
                 name: "CK_RecurringSeries_EndCondition",
