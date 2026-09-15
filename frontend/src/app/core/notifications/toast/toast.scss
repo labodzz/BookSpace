@@ -1,0 +1,50 @@
+:host {
+  position: fixed;
+  top: var(--space-4);
+  right: var(--space-4);
+  z-index: 1000;
+  display: block;
+  pointer-events: none;
+}
+
+.toast-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-width: 360px;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  font-size: 0.875rem;
+  color: var(--color-text);
+  pointer-events: auto;
+}
+
+.toast--error {
+  border-color: var(--color-error);
+  color: var(--color-error);
+}
+
+.toast--success {
+  border-color: var(--color-success);
+  color: var(--color-success);
+}
+
+.toast__dismiss {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 1.125rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
