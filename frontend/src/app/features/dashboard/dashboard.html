@@ -1,0 +1,14 @@
+<section class="card dashboard-card">
+  <h1>Welcome back</h1>
+  @if (authService.currentUser(); as user) {
+    <p class="dashboard-meta">Signed in as {{ user.email }}</p>
+    @if (user.roles.length) {
+      <div class="dashboard-roles">
+        @for (role of user.roles; track role) {
+          <span class="dashboard-role-pill">{{ role }}</span>
+        }
+      </div>
+    }
+  }
+  <p class="dashboard-note">The booking dashboard lives here next.</p>
+</section>
