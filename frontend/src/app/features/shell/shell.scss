@@ -1,0 +1,40 @@
+:host {
+  display: block;
+  min-height: 100dvh;
+}
+
+.shell {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
+.shell-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4) var(--space-6);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.shell-brand {
+  font-weight: 700;
+  color: var(--color-primary);
+}
+
+.shell-user {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.shell-user__email {
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+}
+
+.shell-content {
+  flex: 1;
+  padding: var(--space-6);
+}
