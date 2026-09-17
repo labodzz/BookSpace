@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using BookSpace.Api.Logging;
+using Microsoft.AspNetCore.Http;
 using Xunit;
 
 namespace BookSpace.Api.Tests.Auth;
@@ -93,6 +94,34 @@ public sealed class AuthEndpointsTests : IClassFixture<CustomWebApplicationFacto
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
+    // A failed login/refresh is an ordinary result, not a thrown exception (see AuthController's
+    // UnauthorizedProblemAsync), so this - not the IExceptionHandler pipeline - is what actually shapes
+    // the 401 body. Asserts it matches the same ProblemDetails+errorCode+correlationId contract every
+    // other error response in the API carries, and that a wrong password and an unknown email are
+    // genuinely indistinguishable to the caller (same title, same detail, same errorCode).
+    [Fact]
+    public async Task Login_WithWrongPasswordOrUnknownEmail_ReturnsTheSameIndistinguishableProblemDetails()
+    {
+        using var client = _factory.CreateClient();
+
+        var wrongPasswordResponse = await client.PostAsJsonAsync(
+            "/auth/login", new { email = TestDataSeeder.AcmeAdminEmail, password = "definitely-wrong" });
+        var unknownEmailResponse = await client.PostAsJsonAsync(
+            "/auth/login", new { email = "nobody@bookspace.test", password = TestDataSeeder.Password });
+
+        var wrongPasswordProblem = await wrongPasswordResponse.Content.ReadFromJsonAsync<ProblemPayload>(JsonOptions);
+        var unknownEmailProblem = await unknownEmailResponse.Content.ReadFromJsonAsync<ProblemPayload>(JsonOptions);
+
+        Assert.Equal(StatusCodes.Status401Unauthorized, wrongPasswordProblem!.Status);
+        Assert.Equal("Auth.InvalidCredentials", wrongPasswordProblem.ErrorCode);
+        Assert.True(wrongPasswordResponse.Headers.Contains(CorrelationIdMiddleware.HeaderName));
+        Assert.NotNull(wrongPasswordProblem.CorrelationId);
+
+        Assert.Equal(wrongPasswordProblem.Title, unknownEmailProblem!.Title);
+        Assert.Equal(wrongPasswordProblem.Detail, unknownEmailProblem.Detail);
+        Assert.Equal(wrongPasswordProblem.ErrorCode, unknownEmailProblem.ErrorCode);
+    }
+
     [Fact]
     public async Task Refresh_WithValidToken_ReturnsRotatedTokens()
     {
@@ -179,6 +208,42 @@ public sealed class AuthEndpointsTests : IClassFixture<CustomWebApplicationFacto
         Assert.DoesNotContain(TestDataSeeder.GlobexMemberEmail, payload, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task Logout_WithValidToken_RevokesItSoASubsequentRefreshIsUnauthorized()
+    {
+        using var client = _factory.CreateClient();
+        var loginBody = await LoginAsync(client, TestDataSeeder.GlobexMemberEmail);
+
+        var logoutResponse = await client.PostAsJsonAsync("/auth/logout", new { refreshToken = loginBody.RefreshToken });
+        Assert.Equal(HttpStatusCode.NoContent, logoutResponse.StatusCode);
+
+        var refreshAfterLogout = await client.PostAsJsonAsync("/auth/refresh", new { refreshToken = loginBody.RefreshToken });
+        Assert.Equal(HttpStatusCode.Unauthorized, refreshAfterLogout.StatusCode);
+    }
+
+    [Fact]
+    public async Task Logout_WithUnknownToken_StillReturnsNoContent()
+    {
+        using var client = _factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/auth/logout", new { refreshToken = "not-a-real-token" });
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Logout_WithMissingToken_ReturnsBadRequestWithFieldErrors()
+    {
+        using var client = _factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/auth/logout", new { refreshToken = "" });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<ValidationProblemPayload>(JsonOptions);
+        Assert.NotNull(problem);
+        Assert.True(problem!.Errors.ContainsKey("RefreshToken"));
+    }
+
     private static async Task<AuthResponse> LoginAsync(HttpClient client, string email)
     {
         var response = await client.PostAsJsonAsync("/auth/login", new { email, password = TestDataSeeder.Password });
@@ -189,4 +254,6 @@ public sealed class AuthEndpointsTests : IClassFixture<CustomWebApplicationFacto
     private sealed record AuthResponse(string AccessToken, DateTimeOffset AccessTokenExpiresAtUtc, string RefreshToken, DateTimeOffset RefreshTokenExpiresAtUtc);
 
     private sealed record ValidationProblemPayload(string? Title, int? Status, Dictionary<string, string[]> Errors);
+
+    private sealed record ProblemPayload(string? Title, string? Detail, int? Status, string? ErrorCode, string? CorrelationId);
 }

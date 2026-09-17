@@ -1,14 +1,18 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
+using System.Threading.RateLimiting;
 using BookSpace.Api.ErrorHandling;
 using BookSpace.Api.Logging;
 using BookSpace.Api.Security;
 using BookSpace.Application;
+using BookSpace.Application.Logging;
 using BookSpace.Application.Security;
 using BookSpace.Infrastructure;
 using BookSpace.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Hosting;
 using Microsoft.IdentityModel.Tokens;
@@ -24,6 +28,7 @@ const string ConsoleOutputTemplate =
     "{Timestamp:HH:mm:ss} [{Level:u3}] (cid: {CorrelationId}) {Message:lj}{NewLine}{Exception}";
 
 const string CorsPolicyName = "Frontend";
+const string LoginRateLimiterPolicyName = "login";
 
 // Two-stage setup (the pattern Serilog itself recommends): a minimal bootstrap logger captures
 // anything that goes wrong before configuration/DI are even up, then builder.Host.UseSerilog below
@@ -93,6 +98,59 @@ try
         });
     });
 
+    // Per-client-IP, not global - a shared bucket across every caller would let one busy IP lock
+    // everyone else out of login. 10 attempts/minute is generous for a mistyped password or a
+    // legitimate retry, while still bounding a brute-force/credential-stuffing script. Deliberately
+    // login-only, not a blanket API-wide limit - the rest of the API is already behind auth, where a
+    // valid bearer token is itself a much stronger gate than a request-rate ceiling.
+    //
+    // Effectively disabled (a limit no real test run can reach) in Testing: WebApplicationFactory's
+    // in-memory TestServer gives every request the same RemoteIpAddress (or none), so the entire
+    // integration suite's login traffic - hundreds of logins across unrelated tests - would otherwise
+    // collapse into one partition and trip the real limit, failing tests on a TestServer artifact
+    // rather than a genuine brute-force signal.
+    var isTestingEnvironment = builder.Environment.EnvironmentName == "Testing";
+    builder.Services.AddRateLimiter(options =>
+    {
+        options.AddPolicy(LoginRateLimiterPolicyName, httpContext => RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = isTestingEnvironment ? int.MaxValue : 10,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+            }));
+
+        // Matches the ProblemDetails+correlationId shape every other error response uses (see
+        // NotFoundExceptionHandler etc.) - a 429 from /auth/login shouldn't look different from any
+        // other error the API returns.
+        options.OnRejected = async (context, cancellationToken) =>
+        {
+            context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+
+            var problemDetails = new ProblemDetails
+            {
+                Status = StatusCodes.Status429TooManyRequests,
+                Title = "Too many requests.",
+                Detail = "Too many login attempts. Please wait a moment and try again.",
+            };
+
+            var correlationIdContext = context.HttpContext.RequestServices.GetRequiredService<ICorrelationIdContext>();
+            if (correlationIdContext.CorrelationId is { } correlationId)
+            {
+                problemDetails.Extensions["correlationId"] = correlationId;
+                context.HttpContext.Response.Headers[CorrelationIdMiddleware.HeaderName] = correlationId;
+            }
+
+            var problemDetailsService = context.HttpContext.RequestServices.GetRequiredService<IProblemDetailsService>();
+            await problemDetailsService.TryWriteAsync(new ProblemDetailsContext
+            {
+                HttpContext = context.HttpContext,
+                ProblemDetails = problemDetails,
+            });
+        };
+    });
+
     builder.Services.AddProblemDetails();
     // Tried in registration order, first to return true wins: specific exception types are mapped
     // first (validation -> 400, not found -> 404, conflict -> 409); GlobalExceptionHandler is the
@@ -108,7 +166,10 @@ try
     builder.Services.AddHttpContextAccessor();
     builder.Services.AddScoped<ICurrentUserContext, CurrentUserContext>();
 
-    var authConfig = builder.Configuration.GetSection("Auth");
+    // Bound through the same AuthOptions type Infrastructure/DependencyInjection.cs binds for
+    // IOptions<AuthOptions> elsewhere (JwtTokenGenerator etc.) - one shape for the "Auth" config
+    // section, not two independent readers that could quietly drift out of sync.
+    var authOptions = builder.Configuration.GetSection("Auth").Get<AuthOptions>();
     builder.Services
         .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         .AddJwtBearer(options =>
@@ -119,11 +180,11 @@ try
             options.TokenValidationParameters = new TokenValidationParameters
             {
                 ValidateIssuer = true,
-                ValidIssuer = authConfig["Issuer"],
+                ValidIssuer = authOptions?.Issuer,
                 ValidateAudience = true,
-                ValidAudience = authConfig["Audience"],
+                ValidAudience = authOptions?.Audience,
                 ValidateIssuerSigningKey = true,
-                IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(authConfig["SigningKey"]
+                IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(authOptions?.SigningKey
                     ?? throw new InvalidOperationException("Auth:SigningKey is not configured."))),
                 ValidateLifetime = true,
                 ClockSkew = TimeSpan.FromSeconds(30),
@@ -165,6 +226,11 @@ try
 
     app.UseAuthentication();
     app.UseAuthorization();
+
+    // Endpoint-metadata-based ([EnableRateLimiting] on AuthController.Login), so this must run after
+    // routing has matched an endpoint - placed alongside UseAuthorization, before the endpoints
+    // themselves execute via MapControllers.
+    app.UseRateLimiter();
 
     app.MapControllers();
 

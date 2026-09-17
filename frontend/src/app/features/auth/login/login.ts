@@ -2,7 +2,7 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { Component, inject, signal } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
-import { toApiError } from '../../../core/http/api-error';
+import { ApiError, toApiError } from '../../../core/http/api-error';
 import { AuthService } from '../../../core/auth/auth.service';
 
 @Component({
@@ -45,10 +45,20 @@ export class LoginComponent {
       },
       error: (error: unknown) => {
         this.isSubmitting.set(false);
-        this.errorMessage.set(
-          error instanceof HttpErrorResponse ? toApiError(error).title : 'Something went wrong. Please try again.',
-        );
+        this.errorMessage.set(error instanceof HttpErrorResponse ? this.messageFor(toApiError(error)) : 'Something went wrong. Please try again.');
       },
     });
+  }
+
+  // errorInterceptor deliberately skips its global toast whenever a response carries field-level
+  // errors, on the assumption the calling form renders them inline (see api-error.ts) - login has no
+  // per-field error UI, so falling back to just the generic title would silently drop the one piece of
+  // information (which field, what's wrong with it) the interceptor is trusting this form to show.
+  private messageFor(apiError: ApiError): string {
+    if (!apiError.fieldErrors) {
+      return apiError.title;
+    }
+
+    return Object.values(apiError.fieldErrors).flat().join(' ');
   }
 }

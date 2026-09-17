@@ -16,7 +16,7 @@ public sealed class AuthenticationService(
     IOptions<AuthOptions> authOptions,
     ILogger<AuthenticationService> logger) : IAuthenticationService
 {
-    public async Task<LoginResult> LoginAsync(string email, string password, CancellationToken cancellationToken)
+    public async Task<LoginResponse> LoginAsync(string email, string password, CancellationToken cancellationToken)
     {
         var user = await userRepository.FindByEmailAsync(email, cancellationToken);
         if (user is null || !passwordHasher.Verify(user.PasswordHash, password))
@@ -24,22 +24,22 @@ public sealed class AuthenticationService(
             // Information, not Error - a wrong password is expected user error, same reasoning as
             // ValidationExceptionHandler. Only the email is logged, never the attempted password.
             logger.LogInformation("Login failed for {Email}: invalid credentials", email);
-            return new LoginResult(false, null);
+            return new LoginResponse(false, null, ErrorCodes.AuthInvalidCredentials);
         }
 
         var roles = await userRepository.GetRolesAsync(user.Id, cancellationToken);
         var tokens = await IssueTokensAsync(user, roles, familyId: Guid.NewGuid(), rotatedFrom: null, cancellationToken);
-        return new LoginResult(true, tokens);
+        return new LoginResponse(true, tokens);
     }
 
-    public async Task<RefreshResult> RefreshAsync(string refreshToken, CancellationToken cancellationToken)
+    public async Task<RefreshResponse> RefreshAsync(string refreshToken, CancellationToken cancellationToken)
     {
         var tokenHash = HashToken(refreshToken);
         var existing = await refreshTokenRepository.FindByTokenHashAsync(tokenHash, cancellationToken);
 
         if (existing is null)
         {
-            return new RefreshResult(false, null, false);
+            return new RefreshResponse(false, null, false, ErrorCodes.AuthInvalidRefreshToken);
         }
 
         // Checked BEFORE expiry, deliberately: a token that was already rotated/revoked is a reuse
@@ -58,18 +58,18 @@ public sealed class AuthenticationService(
                 existing.FamilyId);
             await refreshTokenRepository.RevokeFamilyAsync(existing.FamilyId, cancellationToken);
             await refreshTokenRepository.SaveChangesAsync(cancellationToken);
-            return new RefreshResult(false, null, true);
+            return new RefreshResponse(false, null, true, ErrorCodes.AuthRefreshReuseDetected);
         }
 
         if (existing.ExpiresAtUtc <= DateTimeOffset.UtcNow)
         {
-            return new RefreshResult(false, null, false);
+            return new RefreshResponse(false, null, false, ErrorCodes.AuthInvalidRefreshToken);
         }
 
         var user = await userRepository.FindByIdForAuthenticationAsync(existing.UserId, cancellationToken);
         if (user is null)
         {
-            return new RefreshResult(false, null, false);
+            return new RefreshResponse(false, null, false, ErrorCodes.AuthInvalidRefreshToken);
         }
 
         var roles = await userRepository.GetRolesAsync(user.Id, cancellationToken);
@@ -77,7 +77,7 @@ public sealed class AuthenticationService(
         try
         {
             var tokens = await IssueTokensAsync(user, roles, existing.FamilyId, existing, cancellationToken);
-            return new RefreshResult(true, tokens, false);
+            return new RefreshResponse(true, tokens, false);
         }
         catch (ConflictException)
         {
@@ -93,8 +93,26 @@ public sealed class AuthenticationService(
             // also kill the WINNING request's brand-new token, punishing the legitimate caller who
             // actually won for a race their own losing attempt caused - disproportionate for what is
             // most plausibly a client-side double-fire (retry, duplicate tab), not token theft.
-            return new RefreshResult(false, null, false);
+            return new RefreshResponse(false, null, false, ErrorCodes.AuthInvalidRefreshToken);
         }
+    }
+
+    // Revokes only the calling session's own token family (the lineage descended from the presented
+    // refresh token) - not every session the user has open elsewhere. This is "log out this device,"
+    // not "log out everywhere"; the latter remains an open question (see docs/authentication.md).
+    // Reuses RevokeFamilyAsync, the same mechanism reuse detection uses above - a voluntary logout and
+    // a detected theft both end with "every token in this lineage stops working."
+    public async Task<LogoutResponse> LogoutAsync(string refreshToken, CancellationToken cancellationToken)
+    {
+        var tokenHash = HashToken(refreshToken);
+        var existing = await refreshTokenRepository.FindByTokenHashAsync(tokenHash, cancellationToken);
+        if (existing is not null)
+        {
+            await refreshTokenRepository.RevokeFamilyAsync(existing.FamilyId, cancellationToken);
+            await refreshTokenRepository.SaveChangesAsync(cancellationToken);
+        }
+
+        return new LogoutResponse();
     }
 
     private async Task<AuthTokens> IssueTokensAsync(

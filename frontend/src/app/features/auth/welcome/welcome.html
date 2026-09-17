@@ -1,0 +1,28 @@
+<div class="welcome-page">
+  <div class="welcome-card">
+    <div class="welcome-card__brand">
+      <svg viewBox="0 0 40 40" aria-hidden="true">
+        <path d="M20 4 34 11 20 18 6 11Z" fill="currentColor" opacity="1" />
+        <path d="M20 18 34 11V29L20 36Z" fill="currentColor" opacity=".7" />
+        <path d="M20 18 6 11V29L20 36Z" fill="currentColor" opacity=".5" />
+      </svg>
+      <span class="welcome-card__wordmark">Book<span class="welcome-card__wordmark--accent">Space</span></span>
+    </div>
+
+    <h1 class="welcome-card__headline">Book<span class="welcome-card__headline--accent">Space</span></h1>
+
+    <p class="welcome-card__pitch">
+      The right space, at the right time. Manage rooms, desks and equipment for your whole team, without
+      the back-and-forth.
+    </p>
+
+    <div class="welcome-card__actions">
+      <a class="welcome-cta welcome-cta--primary" [routerLink]="['/login']" [queryParams]="returnUrl ? { returnUrl } : {}">
+        Log in
+        <svg viewBox="0 0 20 20" aria-hidden="true">
+          <path d="M4 10h12M11 5l5 5-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+        </svg>
+      </a>
+    </div>
+  </div>
+</div>

@@ -72,10 +72,29 @@ and translates it to `ConflictException`. Because EF Core wraps the insert (new 
 (revoking the presented token) in one transaction, a losing request's entire attempt - including its
 half-built child token - rolls back atomically. No orphan token is ever left behind.
 
+## Logout
+
+`POST /auth/logout` (`LogoutCommandRequest` -> `AuthenticationService.LogoutAsync`) takes the caller's
+raw refresh token, hashes it, looks it up, and - if found - calls the same `RevokeFamilyAsync` reuse
+detection already uses, revoking every still-active token descended from that one login. A voluntary
+logout and a detected theft both end the same way: every token in that lineage stops working.
+
+This revokes only the *calling session's* family - "log out this device," not "log out every device the
+user is signed into." Always returns 204, even for an unknown/already-invalid token: logout never
+reveals that distinction (same "don't leak state" reasoning as login/refresh's identical failure
+messages), and the client clears its own local tokens unconditionally regardless of the response.
+
+The frontend (`AuthService.logout()`) sends this best-effort - local state is cleared first and always,
+whether or not the request reaches the server or succeeds. It also emits an internal `loggedOut$` signal
+that cancels any `refreshAccessToken()` call still in flight at that moment (`takeUntil`) - without this,
+a refresh that started just before logout could complete afterward and silently write fresh tokens back
+into storage, undoing the logout the user just performed.
+
 ## Deferred session-management decisions
 
 Explicitly out of scope for this remediation pass, tracked in [open-questions.md](open-questions.md):
-absolute refresh-token/session lifetime (today it slides indefinitely as long as the token keeps
-getting refreshed), what logout should revoke (one session vs. every session for the user), and
-whether a password change should revoke all outstanding refresh-token families. None of these are
-implemented today; do not assume a specific answer to any of them without opening that question.
+whether logout should also offer an "every session for this user" option (today it only revokes the
+calling device), absolute refresh-token/session lifetime (today it slides indefinitely as long as the
+token keeps getting refreshed), and whether a password change should revoke all outstanding
+refresh-token families (no password-change feature exists yet at all). Do not assume a specific answer
+to any of these without opening that question.

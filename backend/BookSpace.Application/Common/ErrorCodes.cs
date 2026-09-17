@@ -1,11 +1,16 @@
 namespace BookSpace.Application.Common;
 
-// Stable, dotted-notation ErrorCode strings attached to NotFoundException/ConflictException so a
-// client can branch on a machine-readable value instead of parsing the human-readable message.
-// Only used from Resources feature code onward - earlier handlers (Auth/Users) predate this and
-// keep throwing without an ErrorCode, which is fine since the field is optional.
+// Stable, dotted-notation ErrorCode strings attached to NotFoundException/ConflictException (or, for
+// Auth - which never throws for an ordinary "wrong password"/"bad token" outcome - to the plain
+// LoginResponse/RefreshResponse result record instead) so a client can branch on a machine-readable
+// value instead of parsing the human-readable message. Users' handlers predate this convention and
+// still throw without an ErrorCode in places, which is fine since the field is optional.
 internal static class ErrorCodes
 {
+    public const string AuthInvalidCredentials = "Auth.InvalidCredentials";
+    public const string AuthInvalidRefreshToken = "Auth.InvalidRefreshToken";
+    public const string AuthRefreshReuseDetected = "Auth.RefreshReuseDetected";
+
     public const string ResourceNotFound = "Resource.NotFound";
     public const string ResourceTypeNotFound = "Resource.ResourceTypeNotFound";
     public const string ResourceNameConflict = "Resource.NameConflict";

@@ -5,7 +5,31 @@ import { catchError, switchMap, throwError } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import { AuthService } from '../auth/auth.service';
 
-const AUTH_ENDPOINTS = ['/auth/login', '/auth/refresh'];
+const AUTH_ENDPOINTS = ['/auth/login', '/auth/refresh', '/auth/logout'];
+
+const ABSOLUTE_URL_SCHEME = /^[a-z][a-z\d+.-]*:\/\//i;
+
+// apiUrl is '' in production (the API is served from the same origin as the app, not a separate
+// host) - request.url.startsWith('') is true for every string, so a plain startsWith check would
+// treat EVERY HTTP call the app ever makes as an API call once a same-origin deployment goes live,
+// attaching the bearer token to (and force-logging-out on a 401 from) any future third-party call
+// too. Empty apiUrl means "same origin as this page" instead of "starts with this literal": a
+// relative URL is always same-origin by construction, and an absolute one only if it starts with
+// this page's own origin. Deliberately a plain string check, not `new URL(url, location.origin)` -
+// location.origin is an opaque "null" outside a real http(s) document (e.g. in a unit test's DOM),
+// which the URL constructor rejects as an invalid base.
+//
+// Takes apiUrl as a parameter (rather than reading the `environment` import internally) so it's a
+// plain, directly unit-testable function - Angular's unit-test builder disallows vi.mock-ing a
+// relative import like `environment` to exercise both branches, so the branch has to be reachable a
+// different way instead.
+export function isApiRequest(url: string, apiUrl: string): boolean {
+  if (apiUrl) {
+    return url.startsWith(apiUrl);
+  }
+
+  return !ABSOLUTE_URL_SCHEME.test(url) || url.startsWith(location.origin);
+}
 
 // Attaches the current access token to every request against our own API, and on a 401 transparently
 // refreshes it once and replays the request - the login/refresh calls themselves are excluded so a
@@ -14,19 +38,19 @@ export const authInterceptor: HttpInterceptorFn = (request, next) => {
   const authService = inject(AuthService);
   const router = inject(Router);
 
-  const isApiRequest = request.url.startsWith(environment.apiUrl);
-  const isAuthEndpoint = AUTH_ENDPOINTS.some((endpoint) => request.url.includes(endpoint));
+  const requestIsApiRequest = isApiRequest(request.url, environment.apiUrl);
+  const isAuthEndpoint = AUTH_ENDPOINTS.some((endpoint) => request.url.endsWith(endpoint));
 
   const attachToken = (req: HttpRequest<unknown>) => {
     const accessToken = authService.currentAccessToken();
-    return isApiRequest && !isAuthEndpoint && accessToken
+    return requestIsApiRequest && !isAuthEndpoint && accessToken
       ? req.clone({ setHeaders: { Authorization: `Bearer ${accessToken}` } })
       : req;
   };
 
   return next(attachToken(request)).pipe(
     catchError((error: unknown) => {
-      if (!(error instanceof HttpErrorResponse) || error.status !== 401 || !isApiRequest || isAuthEndpoint) {
+      if (!(error instanceof HttpErrorResponse) || error.status !== 401 || !requestIsApiRequest || isAuthEndpoint) {
         return throwError(() => error);
       }
 

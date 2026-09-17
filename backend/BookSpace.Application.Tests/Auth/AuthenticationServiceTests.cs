@@ -331,6 +331,46 @@ public sealed class AuthenticationServiceTests
     }
 
     [Fact]
+    public async Task LogoutAsync_WithKnownToken_RevokesItsFamily()
+    {
+        var familyId = Guid.NewGuid();
+        var existingToken = new RefreshToken
+        {
+            Id = Guid.NewGuid(),
+            UserId = Guid.NewGuid(),
+            FamilyId = familyId,
+            TokenHash = "known-hash",
+            CreatedAtUtc = DateTimeOffset.UtcNow.AddDays(-1),
+            ExpiresAtUtc = DateTimeOffset.UtcNow.AddDays(13),
+        };
+        _refreshTokenRepository.Setup(r => r.FindByTokenHashAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(existingToken);
+
+        var sut = CreateSut();
+        await sut.LogoutAsync("raw-refresh-token", CancellationToken.None);
+
+        _refreshTokenRepository.Verify(r => r.RevokeFamilyAsync(familyId, It.IsAny<CancellationToken>()), Times.Once);
+        _refreshTokenRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    // A logout for a token the server doesn't recognize (already expired and pruned, already revoked,
+    // or simply never valid) must not throw or leak that distinction - it's still a "successful" logout
+    // from the caller's perspective, since the client is going to clear its own local state regardless.
+    [Fact]
+    public async Task LogoutAsync_WithUnknownToken_DoesNothingAndStillReturnsAResponse()
+    {
+        _refreshTokenRepository.Setup(r => r.FindByTokenHashAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((RefreshToken?)null);
+
+        var sut = CreateSut();
+        var result = await sut.LogoutAsync("unknown-token", CancellationToken.None);
+
+        Assert.NotNull(result);
+        _refreshTokenRepository.Verify(r => r.RevokeFamilyAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+        _refreshTokenRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task RefreshAsync_WhenUserNoLongerExists_ReturnsFailure()
     {
         var existingToken = new RefreshToken
