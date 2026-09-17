@@ -21,6 +21,8 @@
   --color-success-bg: #e7f5ec;
   --color-error: #c23b3b;
   --color-error-bg: #fbeaea;
+  --color-warning: #9a6b12;
+  --color-warning-bg: #fbf1df;
 
   --space-1: 4px;
   --space-2: 8px;
@@ -114,6 +116,7 @@ a {
   border-radius: var(--radius-md);
   border: 1px solid transparent;
   font-weight: 600;
+  text-decoration: none;
   cursor: pointer;
   transition: background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
 }
@@ -166,9 +169,110 @@ a {
   border-color: var(--color-primary);
 }
 
+.field select {
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.field select:focus-visible {
+  border-color: var(--color-primary);
+}
+
 .field-error-text {
   font-size: 0.8125rem;
   color: var(--color-error);
+}
+
+.field-hint {
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+}
+
+/* Booking status / role pills - shared across the dashboard, resources, bookings, calendar, and
+   approvals screens so every status reads consistently wherever it appears. */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.status-pill--pending {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+
+.status-pill--confirmed {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.status-pill--rejected {
+  background: var(--color-error-bg);
+  color: var(--color-error);
+}
+
+.status-pill--cancelled {
+  background: var(--color-surface-alt);
+  color: var(--color-text-secondary);
+}
+
+.status-pill--completed {
+  background: var(--color-accent-soft);
+  color: var(--color-primary);
+}
+
+.status-pill--noshow {
+  background: var(--color-surface-alt);
+  color: var(--color-text-muted);
+}
+
+/* Loading / empty / error placeholder used by every major screen so the app never shows a blank pane
+   while data is in flight, missing, or failed to load. */
+.state-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-7) var(--space-5);
+  color: var(--color-text-secondary);
+  text-align: center;
+}
+
+.state-panel__title {
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.skeleton {
+  display: block;
+  background: linear-gradient(90deg, var(--color-surface-alt) 25%, var(--color-border) 37%, var(--color-surface-alt) 63%);
+  background-size: 400% 100%;
+  animation: skeleton-shimmer 1.4s ease infinite;
+  border-radius: var(--radius-sm);
+}
+
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0 50%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+  }
 }
 
 .banner {

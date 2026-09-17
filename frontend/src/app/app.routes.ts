@@ -22,6 +22,19 @@ export const routes: Routes = [
         path: '',
         loadComponent: () => import('./features/dashboard/dashboard').then((m) => m.DashboardComponent),
       },
+      {
+        path: 'resources',
+        loadComponent: () => import('./features/resources/resource-list/resource-list').then((m) => m.ResourceListComponent),
+      },
+      {
+        path: 'resources/:id',
+        loadComponent: () => import('./features/resources/resource-detail/resource-detail').then((m) => m.ResourceDetailComponent),
+      },
+      {
+        path: 'resources/:id/availability',
+        loadComponent: () =>
+          import('./features/resources/resource-availability/resource-availability').then((m) => m.ResourceAvailabilityComponent),
+      },
     ],
   },
   { path: '**', redirectTo: '' },
