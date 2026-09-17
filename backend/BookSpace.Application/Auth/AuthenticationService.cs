@@ -102,6 +102,14 @@ public sealed class AuthenticationService(
     // not "log out everywhere"; the latter remains an open question (see docs/authentication.md).
     // Reuses RevokeFamilyAsync, the same mechanism reuse detection uses above - a voluntary logout and
     // a detected theft both end with "every token in this lineage stops working."
+    //
+    // Deliberately revokes on ANY known token for the family, active or already-rotated - unlike
+    // RefreshAsync's reuse detection, this endpoint only ever runs from an explicit user action (a real
+    // "Log out" click), never automatically: the frontend's interceptor reacts to a failed refresh with
+    // AuthService.clearExpiredSession() (local-only, no server call), not this endpoint. That means a
+    // tab that's fallen behind - still holding a pre-rotation token because it missed a BroadcastChannel
+    // update, or was asleep through a sibling tab's refresh - can still authoritatively end "this
+    // device's" session via logout, which is exactly what a deliberate Logout click should do.
     public async Task<LogoutResponse> LogoutAsync(string refreshToken, CancellationToken cancellationToken)
     {
         var tokenHash = HashToken(refreshToken);

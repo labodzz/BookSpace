@@ -221,6 +221,28 @@ public sealed class AuthEndpointsTests : IClassFixture<CustomWebApplicationFacto
         Assert.Equal(HttpStatusCode.Unauthorized, refreshAfterLogout.StatusCode);
     }
 
+    // An explicit Logout click from a tab holding an old, already-rotated token (e.g. it was asleep
+    // through a sibling tab's refresh, or missed the BroadcastChannel update) must still end the
+    // session for the currently-active descendant - logout means "kill this device's session," and the
+    // stale local copy of one of its tokens is still a legitimate way to identify that lineage. This is
+    // safe because the frontend's automatic reaction to a failed refresh never reaches this endpoint at
+    // all (see AuthService.clearExpiredSession) - only a real, explicit Logout click does.
+    [Fact]
+    public async Task Logout_WithAlreadyRotatedToken_StillRevokesTheCurrentlyActiveSession()
+    {
+        using var client = _factory.CreateClient();
+        var loginBody = await LoginAsync(client, TestDataSeeder.GlobexMemberEmail);
+
+        var refreshResponse = await client.PostAsJsonAsync("/auth/refresh", new { refreshToken = loginBody.RefreshToken });
+        var rotated = await refreshResponse.Content.ReadFromJsonAsync<AuthResponse>(JsonOptions);
+
+        var logoutResponse = await client.PostAsJsonAsync("/auth/logout", new { refreshToken = loginBody.RefreshToken });
+        Assert.Equal(HttpStatusCode.NoContent, logoutResponse.StatusCode);
+
+        var refreshAfterLogout = await client.PostAsJsonAsync("/auth/refresh", new { refreshToken = rotated!.RefreshToken });
+        Assert.Equal(HttpStatusCode.Unauthorized, refreshAfterLogout.StatusCode);
+    }
+
     [Fact]
     public async Task Logout_WithUnknownToken_StillReturnsNoContent()
     {

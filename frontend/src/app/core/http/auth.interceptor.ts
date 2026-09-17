@@ -57,8 +57,15 @@ export const authInterceptor: HttpInterceptorFn = (request, next) => {
       return authService.refreshAccessToken().pipe(
         switchMap(() => next(attachToken(request))),
         catchError((refreshError: unknown) => {
-          authService.logout();
-          router.navigate(['/login'], { queryParams: { sessionExpired: true } });
+          // Only a definitive "the backend rejected this refresh token" (401) means the session is
+          // actually over. Anything else - a network error, a 5xx, or this call being torn down because
+          // it lost a cross-tab race or a logout ran concurrently (see AuthService.refreshAccessToken) -
+          // says nothing about whether the session is still good, so local state is left untouched and
+          // a later request gets to try again.
+          if (refreshError instanceof HttpErrorResponse && refreshError.status === 401) {
+            authService.clearExpiredSession();
+            router.navigate(['/login'], { queryParams: { sessionExpired: true } });
+          }
           return throwError(() => refreshError);
         }),
       );

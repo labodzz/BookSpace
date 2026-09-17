@@ -1,4 +1,4 @@
-import { HttpClient, provideHttpClient, withInterceptors } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse, provideHttpClient, withInterceptors } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
@@ -107,11 +107,13 @@ describe('authInterceptor', () => {
     expect(result).toEqual({ ok: true });
   });
 
-  it('logs out and redirects to /login on a failed refresh, without retrying indefinitely', () => {
-    const refreshAccessToken = vi.fn().mockReturnValue(throwError(() => new Error('refresh failed')));
-    const logout = vi.fn();
+  it('clears the expired session and redirects to /login when the backend confirms the refresh token is invalid (401)', () => {
+    const refreshAccessToken = vi
+      .fn()
+      .mockReturnValue(throwError(() => new HttpErrorResponse({ status: 401, statusText: 'Unauthorized' })));
+    const clearExpiredSession = vi.fn();
     (authService as unknown as { refreshAccessToken: typeof refreshAccessToken }).refreshAccessToken = refreshAccessToken;
-    (authService as unknown as { logout: typeof logout }).logout = logout;
+    (authService as unknown as { clearExpiredSession: typeof clearExpiredSession }).clearExpiredSession = clearExpiredSession;
 
     let errored = false;
     httpClient.get(`${environment.apiUrl}/bookings`).subscribe({ error: () => (errored = true) });
@@ -120,8 +122,31 @@ describe('authInterceptor', () => {
     firstAttempt.flush('unauthorized', { status: 401, statusText: 'Unauthorized' });
 
     expect(refreshAccessToken).toHaveBeenCalledOnce();
-    expect(logout).toHaveBeenCalledOnce();
+    expect(clearExpiredSession).toHaveBeenCalledOnce();
     expect(errored).toBe(true);
     httpTesting.expectNone(`${environment.apiUrl}/bookings`);
+  });
+
+  // The scenario this guards against: a refresh can fail for reasons that say nothing about whether the
+  // session itself is still good - a network error, a 5xx, or (see AuthService.refreshAccessToken) this
+  // call being torn down after losing a cross-tab race. None of those are "the backend rejected this
+  // token," so none of them should wipe the user's local session out from under them.
+  it('does not clear the session on a non-401 refresh failure (network error, 5xx, or a lost race)', () => {
+    const refreshAccessToken = vi
+      .fn()
+      .mockReturnValue(throwError(() => new HttpErrorResponse({ status: 0, statusText: 'Unknown Error' })));
+    const clearExpiredSession = vi.fn();
+    (authService as unknown as { refreshAccessToken: typeof refreshAccessToken }).refreshAccessToken = refreshAccessToken;
+    (authService as unknown as { clearExpiredSession: typeof clearExpiredSession }).clearExpiredSession = clearExpiredSession;
+
+    let errored = false;
+    httpClient.get(`${environment.apiUrl}/bookings`).subscribe({ error: () => (errored = true) });
+
+    const firstAttempt = httpTesting.expectOne(`${environment.apiUrl}/bookings`);
+    firstAttempt.flush('unauthorized', { status: 401, statusText: 'Unauthorized' });
+
+    expect(refreshAccessToken).toHaveBeenCalledOnce();
+    expect(clearExpiredSession).not.toHaveBeenCalled();
+    expect(errored).toBe(true);
   });
 });
