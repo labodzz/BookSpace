@@ -95,6 +95,15 @@ a {
   border-radius: var(--radius-lg);
 }
 
+.auth-page {
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+  background: linear-gradient(160deg, #3a2c30 0%, #2a1f23 100%);
+}
+
 .btn {
   appearance: none;
   display: inline-flex;
