@@ -1,6 +1,7 @@
 import { Routes } from '@angular/router';
 import { authGuard } from './core/auth/auth.guard';
 import { guestGuard } from './core/auth/guest.guard';
+import { roleGuard } from './core/auth/role.guard';
 
 export const routes: Routes = [
   {
@@ -34,6 +35,11 @@ export const routes: Routes = [
         path: 'resources/:id/availability',
         loadComponent: () =>
           import('./features/resources/resource-availability/resource-availability').then((m) => m.ResourceAvailabilityComponent),
+      },
+      {
+        path: 'users',
+        canActivate: [roleGuard('TenantAdmin', 'SysAdmin')],
+        loadComponent: () => import('./features/users/user-list/user-list').then((m) => m.UserListComponent),
       },
     ],
   },
