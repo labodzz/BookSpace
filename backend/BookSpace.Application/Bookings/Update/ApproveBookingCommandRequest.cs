@@ -2,15 +2,30 @@ using BookSpace.Application.Common;
 using BookSpace.Application.Mediator;
 using BookSpace.Application.Resources;
 using BookSpace.Application.Security;
+using BookSpace.Domain.Entities;
 using BookSpace.Domain.Enums;
 using FluentValidation;
 
 namespace BookSpace.Application.Bookings;
 
-public sealed record ApproveBookingCommandRequest(Guid Id, string? DecisionNote) : IRequest<ApproveBookingResponse>;
+// ApproveRemainingSeries approves this booking AND every OTHER currently-Pending occurrence in the same
+// recurring series in one call - a plain Approver facing a series with, say, 100 pending occurrences
+// would otherwise have to approve them one at a time. Ignored (no error) for a booking with no SeriesId,
+// same convention as CancelBookingCommandRequest.CancelRemainingSeries. Unlike cancellation, an
+// occurrence that no longer passes BookingEligibilityChecker (a blackout was added since, capacity
+// changed, etc.) is never force-approved - it's left Pending and reported back as a conflict, so the
+// approver can still look at it individually and decide (including rejecting just that one).
+public sealed record ApproveBookingCommandRequest(Guid Id, string? DecisionNote, bool ApproveRemainingSeries = false) : IRequest<ApproveBookingResponse>;
 
+// CascadedApprovedOccurrenceIds lists every OTHER occurrence also approved by this call (empty unless
+// ApproveRemainingSeries was true and the booking belongs to a series). CascadedConflicts lists sibling
+// occurrences ApproveRemainingSeries could NOT approve (still Pending) with why, mirroring
+// CreateRecurringSeriesResponse.Conflicts's shape - never silently dropped, never force-approved.
 public sealed record ApproveBookingResponse(
-    Guid Id, Guid ResourceId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, int Quantity, BookingStatus Status);
+    Guid Id, Guid ResourceId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, int Quantity, BookingStatus Status,
+    IReadOnlyList<Guid> CascadedApprovedOccurrenceIds, IReadOnlyList<ApprovalSeriesConflictResponse> CascadedConflicts);
+
+public sealed record ApprovalSeriesConflictResponse(Guid BookingId, string Reason);
 
 public sealed class ApproveBookingCommandRequestValidator : AbstractValidator<ApproveBookingCommandRequest>
 {
@@ -22,11 +37,13 @@ public sealed class ApproveBookingCommandRequestValidator : AbstractValidator<Ap
 
 // Availability MUST be re-checked at approval time, not trusted from creation time - see
 // docs/recurring-bookings-and-approvals.md. Protected by the same IResourceBookingLock as booking
-// creation and UpdateResourceCommandHandler's capacity-reduction check: the re-check and the
+// creation and UpdateResourceCommandHandler's capacity-reduction check: the re-check and every
 // Pending -> Confirmed write happen inside one locked transaction, so a concurrent create/approve/
-// capacity-update for the same resource can never interleave with this decision. If eligibility no
-// longer holds, this throws before any write - the booking stays exactly Pending, never partially
-// approved.
+// capacity-update for the same resource can never interleave with this decision. For the PRIMARY booking
+// (request.Id), ineligibility throws before any write - it stays exactly Pending, never partially
+// approved. For ApproveRemainingSeries' cascaded siblings, ineligibility does NOT throw and does NOT
+// abort the batch - that sibling is simply left Pending and reported back in CascadedConflicts, so one
+// occurrence going stale never blocks approving the other 99.
 public sealed class ApproveBookingCommandHandler(
     IResourceBookingLock resourceBookingLock,
     IBookingRepository bookingRepository,
@@ -79,14 +96,64 @@ public sealed class ApproveBookingCommandHandler(
         var approvalRequest = await approvalRequestRepository.FindByBookingIdAsync(booking.Id, cancellationToken)
             ?? throw new InvalidOperationException($"Booking {booking.Id} is Pending but has no ApprovalRequest.");
 
-        booking.Status = BookingStatus.Confirmed;
-        approvalRequest.Status = ApprovalStatus.Approved;
-        approvalRequest.ApproverId = currentUserContext.UserId;
-        approvalRequest.DecisionNote = request.DecisionNote;
-        approvalRequest.DecidedAtUtc = DateTimeOffset.UtcNow;
+        ApproveOccurrence(booking, approvalRequest, request.DecisionNote);
+
+        var cascadedApprovedIds = new List<Guid>();
+        var cascadedConflicts = new List<ApprovalSeriesConflictResponse>();
+
+        // Every other still-Pending occurrence in the same series, re-checked (never force-approved) and
+        // approved inside this SAME lock acquisition - occurrences within one series never overlap each
+        // other in time (each is on a distinct calendar date), so approving one can never invalidate
+        // another's capacity check, exactly the same reasoning CreateRecurringSeriesCommandHandler
+        // already relies on for evaluating every candidate occurrence in a single lock.
+        if (request.ApproveRemainingSeries && booking.SeriesId is { } seriesId)
+        {
+            var seriesOccurrences = await bookingRepository.GetBySeriesIdAsync(seriesId, cancellationToken);
+            var pendingSiblings = seriesOccurrences.Where(occurrence => occurrence.Id != booking.Id && occurrence.Status == BookingStatus.Pending).ToList();
+
+            if (pendingSiblings.Count > 0)
+            {
+                var siblingApprovalRequests = await approvalRequestRepository.GetByBookingIdsAsync(
+                    pendingSiblings.Select(occurrence => occurrence.Id).ToList(), cancellationToken);
+                var siblingApprovalRequestByBookingId = siblingApprovalRequests.ToDictionary(ar => ar.BookingId);
+
+                foreach (var occurrence in pendingSiblings)
+                {
+                    if (!siblingApprovalRequestByBookingId.TryGetValue(occurrence.Id, out var siblingApprovalRequest))
+                    {
+                        cascadedConflicts.Add(new ApprovalSeriesConflictResponse(occurrence.Id, "ApprovalRequestMissing"));
+                        continue;
+                    }
+
+                    var siblingEligibility = await BookingEligibilityChecker.CheckAsync(
+                        resource, occurrence.StartUtc, occurrence.EndUtc, occurrence.Quantity, excludeBookingId: occurrence.Id,
+                        rules, blackouts, bookingAvailabilityRepository, cancellationToken);
+
+                    if (siblingEligibility != BookingEligibility.Eligible)
+                    {
+                        cascadedConflicts.Add(new ApprovalSeriesConflictResponse(occurrence.Id, BookingEligibilityChecker.ToErrorCode(siblingEligibility)));
+                        continue;
+                    }
+
+                    ApproveOccurrence(occurrence, siblingApprovalRequest, request.DecisionNote);
+                    cascadedApprovedIds.Add(occurrence.Id);
+                }
+            }
+        }
 
         await bookingRepository.SaveChangesAsync(cancellationToken);
 
-        return new ApproveBookingResponse(booking.Id, booking.ResourceId, booking.StartUtc, booking.EndUtc, booking.Quantity, booking.Status);
+        return new ApproveBookingResponse(
+            booking.Id, booking.ResourceId, booking.StartUtc, booking.EndUtc, booking.Quantity, booking.Status,
+            cascadedApprovedIds, cascadedConflicts);
+    }
+
+    private void ApproveOccurrence(Booking booking, ApprovalRequest approvalRequest, string? decisionNote)
+    {
+        booking.Status = BookingStatus.Confirmed;
+        approvalRequest.Status = ApprovalStatus.Approved;
+        approvalRequest.ApproverId = currentUserContext.UserId;
+        approvalRequest.DecisionNote = decisionNote;
+        approvalRequest.DecidedAtUtc = DateTimeOffset.UtcNow;
     }
 }

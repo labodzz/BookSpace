@@ -240,6 +240,27 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
         Assert.Contains(body!, item => item.BookingId == created!.Id);
     }
 
+    // SeriesId lets the client group an approver's queue by recurring series (e.g. offer "approve all
+    // pending in this series") - a one-off booking (this fixture) must report it as null, never a
+    // placeholder/empty guid that could be mistaken for a real series.
+    [Fact]
+    public async Task GetPendingApprovals_ForAOneOffBooking_ReportsNullSeriesId()
+    {
+        using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+        var start = TestDataSeeder.AvailabilityAnchorUtc.AddHours(2).AddDays(95);
+        var createResponse = await memberClient.PostAsJsonAsync("/bookings", new
+        {
+            resourceId = TestDataSeeder.AcmeApprovalRequiredResourceId, startUtc = start, endUtc = start.AddHours(1), quantity = 1,
+        });
+        var created = await createResponse.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
+
+        using var approverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
+        var response = await approverClient.GetAsync("/bookings/pending-approval");
+
+        var body = await response.Content.ReadFromJsonAsync<List<PendingApprovalItem>>(JsonOptions);
+        Assert.Null(body!.Single(item => item.BookingId == created!.Id).SeriesId);
+    }
+
     // SysAdmin had never been exercised at the API level for any of the three approval endpoints - only
     // TenantAdmin's half of [Authorize(Roles="Approver,TenantAdmin,SysAdmin")] was proven to actually work.
     [Fact]
@@ -387,6 +408,63 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
         Assert.Equal(BookingStatus.Confirmed, body!.Status);
+    }
+
+    // A plain Approver facing a series with many pending occurrences must be able to approve them all in
+    // one call instead of one at a time - see ApproveBookingCommandRequest.ApproveRemainingSeries.
+    [Fact]
+    public async Task ApproveBooking_WithApproveRemainingSeriesTrue_ApprovesEveryOtherPendingOccurrenceInTheSeries()
+    {
+        using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+        var createResponse = await memberClient.PostAsJsonAsync("/bookings/series", new
+        {
+            resourceId = TestDataSeeder.AcmeApprovalRequiredResourceId, startDate = SeriesStartDate(80), startTime = "09:00:00", endTime = "10:00:00",
+            frequency = RecurrenceFrequency.Daily, interval = 1, endDate = (DateOnly?)null, occurrenceCount = 3, quantity = 1,
+        });
+        var created = await createResponse.Content.ReadFromJsonAsync<CreateSeriesResponse>(JsonOptions);
+        var occurrences = created!.CreatedOccurrences.OrderBy(occurrence => occurrence.StartUtc).ToList();
+        Assert.All(occurrences, occurrence => Assert.Equal(BookingStatus.Pending, occurrence.Status));
+
+        using var approverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
+        var response = await approverClient.PostAsJsonAsync(
+            $"/bookings/{occurrences[0].Id}/approve", new { decisionNote = "Approved for the whole series", approveRemainingSeries = true });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<ApproveResponse>(JsonOptions);
+        Assert.Equal(BookingStatus.Confirmed, body!.Status);
+        Assert.Empty(body.CascadedConflicts);
+        Assert.Equal(2, body.CascadedApprovedOccurrenceIds.Count);
+        Assert.Contains(occurrences[1].Id, body.CascadedApprovedOccurrenceIds);
+        Assert.Contains(occurrences[2].Id, body.CascadedApprovedOccurrenceIds);
+
+        var seriesResponse = await memberClient.GetAsync($"/bookings/series/{created.SeriesId}");
+        var seriesBody = await seriesResponse.Content.ReadFromJsonAsync<GetSeriesResponse>(JsonOptions);
+        Assert.All(seriesBody!.Occurrences, occurrence => Assert.Equal(BookingStatus.Confirmed, occurrence.Status));
+    }
+
+    // ApproveRemainingSeries=false (the default) must behave exactly like today - only the targeted
+    // booking is decided, siblings are left untouched for the approver to decide individually.
+    [Fact]
+    public async Task ApproveBooking_WithApproveRemainingSeriesOmitted_OnlyApprovesTheTargetedOccurrence()
+    {
+        using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+        var createResponse = await memberClient.PostAsJsonAsync("/bookings/series", new
+        {
+            resourceId = TestDataSeeder.AcmeApprovalRequiredResourceId, startDate = SeriesStartDate(90), startTime = "09:00:00", endTime = "10:00:00",
+            frequency = RecurrenceFrequency.Daily, interval = 1, endDate = (DateOnly?)null, occurrenceCount = 2, quantity = 1,
+        });
+        var created = await createResponse.Content.ReadFromJsonAsync<CreateSeriesResponse>(JsonOptions);
+        var occurrences = created!.CreatedOccurrences.OrderBy(occurrence => occurrence.StartUtc).ToList();
+
+        using var approverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
+        var response = await approverClient.PostAsJsonAsync($"/bookings/{occurrences[0].Id}/approve", new { decisionNote = (string?)null });
+        var body = await response.Content.ReadFromJsonAsync<ApproveResponse>(JsonOptions);
+        Assert.Empty(body!.CascadedApprovedOccurrenceIds);
+
+        var seriesResponse = await memberClient.GetAsync($"/bookings/series/{created.SeriesId}");
+        var seriesBody = await seriesResponse.Content.ReadFromJsonAsync<GetSeriesResponse>(JsonOptions);
+        Assert.Equal(BookingStatus.Confirmed, seriesBody!.Occurrences.Single(o => o.Id == occurrences[0].Id).Status);
+        Assert.Equal(BookingStatus.Pending, seriesBody.Occurrences.Single(o => o.Id == occurrences[1].Id).Status);
     }
 
     [Fact]
@@ -585,5 +663,12 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
         IReadOnlyList<GetSeriesOccurrence> Occurrences);
 
     private sealed record PendingApprovalItem(
-        Guid BookingId, Guid ResourceId, Guid UserId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, int Quantity, DateTimeOffset ExpiresAtUtc);
+        Guid BookingId, Guid ResourceId, Guid UserId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, int Quantity, DateTimeOffset ExpiresAtUtc,
+        Guid? SeriesId);
+
+    private sealed record ApprovalCascadeConflict(Guid BookingId, string Reason);
+
+    private sealed record ApproveResponse(
+        Guid Id, Guid ResourceId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, int Quantity, BookingStatus Status,
+        IReadOnlyList<Guid> CascadedApprovedOccurrenceIds, IReadOnlyList<ApprovalCascadeConflict> CascadedConflicts);
 }
