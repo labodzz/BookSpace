@@ -1,4 +1,5 @@
 using BookSpace.Application.Auth;
+using BookSpace.Application.Common;
 using BookSpace.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 
@@ -28,8 +29,16 @@ internal sealed class UserRepository(BookSpaceDbContext dbContext) : IUserReposi
             .Join(dbContext.Roles, userRole => userRole.RoleId, role => role.Id, (userRole, role) => role.Name)
             .ToListAsync(cancellationToken);
 
-    public async Task<IReadOnlyList<User>> GetAllAsync(CancellationToken cancellationToken) =>
-        await dbContext.Users
-            .OrderBy(user => user.Email)
+    public async Task<PagedResult<User>> GetPagedAsync(int page, int pageSize, CancellationToken cancellationToken)
+    {
+        var query = dbContext.Users.OrderBy(user => user.Email);
+
+        var totalCount = await query.CountAsync(cancellationToken);
+        var items = await query
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
             .ToListAsync(cancellationToken);
+
+        return new PagedResult<User>(items, page, pageSize, totalCount);
+    }
 }

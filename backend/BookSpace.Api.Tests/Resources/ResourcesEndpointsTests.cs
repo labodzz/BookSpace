@@ -17,7 +17,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     public ResourcesEndpointsTests(CustomWebApplicationFactory factory) => _factory = factory;
 
     [Fact]
-    public async Task CreateResource_AsTenantAdmin_ReturnsOkWithCreatedResource()
+    public async Task CreateResource_AsTenantAdmin_ReturnsCreatedWithCreatedResource()
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
@@ -31,7 +31,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
             timeZoneId = "UTC",
         });
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<ResourceResponse>(JsonOptions);
         Assert.Equal(4, body!.Capacity);
         Assert.Equal(ResourceStatus.Active, body.Status);
@@ -41,7 +41,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     // actually been exercised with a real SysAdmin login before this test - only TenantAdmin's half
     // of that role list was ever proven to work.
     [Fact]
-    public async Task CreateResource_AsSysAdmin_ReturnsOkWithCreatedResource()
+    public async Task CreateResource_AsSysAdmin_ReturnsCreatedWithCreatedResource()
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
 
@@ -55,7 +55,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
             timeZoneId = "UTC",
         });
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     }
 
     [Fact]
@@ -302,7 +302,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     }
 
     [Fact]
-    public async Task CreateAvailabilityRule_AsSysAdmin_ReturnsOk()
+    public async Task CreateAvailabilityRule_AsSysAdmin_ReturnsCreated()
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"SysAdminRule {Guid.NewGuid()}");
@@ -311,7 +311,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         var response = await sysAdminClient.PostAsJsonAsync($"/resources/{resource.Id}/availability-rules",
             new { dayOfWeek = DayOfWeek.Friday, startTime = "08:00:00", endTime = "10:00:00" });
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     }
 
     [Fact]
@@ -330,7 +330,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     }
 
     [Fact]
-    public async Task CreateBlackoutPeriod_AsSysAdmin_ReturnsOk()
+    public async Task CreateBlackoutPeriod_AsSysAdmin_ReturnsCreated()
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"SysAdminBlackout {Guid.NewGuid()}");
@@ -340,7 +340,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         var response = await sysAdminClient.PostAsJsonAsync($"/resources/{resource.Id}/blackout-periods",
             new { startUtc = start, endUtc = start.AddHours(1), reason = "SysAdmin maintenance" });
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     }
 
     [Fact]
@@ -377,7 +377,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     }
 
     [Fact]
-    public async Task AssignResourceApprover_AsSysAdmin_ReturnsOk()
+    public async Task AssignResourceApprover_AsSysAdmin_ReturnsCreated()
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"SysAdminApproverAssign {Guid.NewGuid()}");
@@ -385,7 +385,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
 
         var response = await sysAdminClient.PostAsJsonAsync($"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeMemberUserId });
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     }
 
     [Fact]
@@ -1005,7 +1005,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
             timeZoneId = "UTC",
         });
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     }
 
     // ExistsByNameAsync has no explicit tenant parameter - it relies entirely on the EF global query
@@ -1025,7 +1025,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
             timeZoneId = "UTC",
         });
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     }
 
     // The flip side: two Active resources still cannot share a name - only Archived ones release it.
@@ -1075,8 +1075,8 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         var second = await client.PostAsJsonAsync($"/resources/{resource.Id}/availability-rules",
             new { dayOfWeek = DayOfWeek.Wednesday, startTime = "12:00:00", endTime = "18:00:00" });
 
-        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
-        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, second.StatusCode);
     }
 
     // Overlapping blackouts on the same resource are deliberately allowed at Create (see the code
@@ -1093,8 +1093,8 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         var second = await client.PostAsJsonAsync($"/resources/{resource.Id}/blackout-periods",
             new { startUtc = start.AddHours(2), endUtc = start.AddHours(6), reason = "Second" });
 
-        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
-        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, second.StatusCode);
     }
 
     [Fact]

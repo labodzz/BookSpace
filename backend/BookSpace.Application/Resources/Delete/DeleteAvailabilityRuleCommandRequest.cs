@@ -17,7 +17,8 @@ public sealed class DeleteAvailabilityRuleCommandHandler(IAvailabilityRuleReposi
         // succeed just because the rule id happens to be valid for some other resource.
         if (rule is null || rule.ResourceId != request.ResourceId)
         {
-            throw new NotFoundException($"Availability rule {request.RuleId} was not found for resource {request.ResourceId}.");
+            throw new NotFoundException(
+                $"Availability rule {request.RuleId} was not found for resource {request.ResourceId}.", ErrorCodes.AvailabilityRuleNotFound);
         }
 
         await availabilityRuleRepository.RemoveAsync(rule, cancellationToken);

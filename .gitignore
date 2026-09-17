@@ -377,3 +377,10 @@ CoverageReport/
 # workspace, not version control; kept as personal, in-progress API testing setup
 postman/
 .postman/
+
+# Local secrets/environment overrides - this project has none tracked today (the dev JWT signing
+# key lives in `dotnet user-secrets`, not a file), but ignored defensively so one can never be
+# committed by accident if a .env-based workflow is introduced later.
+.env
+.env.*
+!.env.example

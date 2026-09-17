@@ -16,11 +16,15 @@ public sealed class ResourcesController(IMediator mediator) : ControllerBase
 {
     [HttpPost]
     [Authorize(Roles = "TenantAdmin,SysAdmin")]
-    public async Task<IActionResult> CreateResource(CreateResourceRequest request, CancellationToken cancellationToken) =>
-        Ok(await mediator.Send(
+    public async Task<IActionResult> CreateResource(CreateResourceRequest request, CancellationToken cancellationToken)
+    {
+        var response = await mediator.Send(
             new CreateResourceCommandRequest(
                 request.ResourceTypeId, request.Name, request.Description, request.Capacity, request.RequiresApproval, request.TimeZoneId),
-            cancellationToken));
+            cancellationToken);
+
+        return CreatedAtAction(nameof(GetResource), new { id = response.Id }, response);
+    }
 
     [HttpGet]
     public async Task<IActionResult> GetResources(
@@ -40,6 +44,10 @@ public sealed class ResourcesController(IMediator mediator) : ControllerBase
                 request.RequiresApproval, request.TimeZoneId, request.Status),
             cancellationToken));
 
+    // Deliberately 200+body, unlike every other DELETE below (204 No Content): this is a soft-delete
+    // (Status flips to Archived, the row stays), not a real removal, so unlike a true delete there IS
+    // meaningful resulting state for the caller to see - discarding it just to match the others' 204
+    // would throw away real information for a superficial consistency win.
     [HttpDelete("{id:guid}")]
     [Authorize(Roles = "TenantAdmin,SysAdmin")]
     public async Task<IActionResult> DeleteResource(Guid id, CancellationToken cancellationToken) =>
@@ -49,11 +57,17 @@ public sealed class ResourcesController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetAvailabilityRules(Guid id, CancellationToken cancellationToken) =>
         Ok(await mediator.Send(new GetAvailabilityRulesQueryRequest(id), cancellationToken));
 
+    // No single-rule GET endpoint exists to point a Location header at (only the list, above) - 201
+    // without CreatedAtAction, rather than inventing a route just to satisfy the convention.
     [HttpPost("{id:guid}/availability-rules")]
     [Authorize(Roles = "TenantAdmin,SysAdmin")]
-    public async Task<IActionResult> CreateAvailabilityRule(Guid id, CreateAvailabilityRuleRequest request, CancellationToken cancellationToken) =>
-        Ok(await mediator.Send(
-            new CreateAvailabilityRuleCommandRequest(id, request.DayOfWeek, request.StartTime, request.EndTime), cancellationToken));
+    public async Task<IActionResult> CreateAvailabilityRule(Guid id, CreateAvailabilityRuleRequest request, CancellationToken cancellationToken)
+    {
+        var response = await mediator.Send(
+            new CreateAvailabilityRuleCommandRequest(id, request.DayOfWeek, request.StartTime, request.EndTime), cancellationToken);
+
+        return StatusCode(StatusCodes.Status201Created, response);
+    }
 
     [HttpDelete("{id:guid}/availability-rules/{ruleId:guid}")]
     [Authorize(Roles = "TenantAdmin,SysAdmin")]
@@ -67,11 +81,17 @@ public sealed class ResourcesController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetBlackoutPeriods(Guid id, CancellationToken cancellationToken) =>
         Ok(await mediator.Send(new GetBlackoutPeriodsQueryRequest(id), cancellationToken));
 
+    // No single-blackout GET endpoint exists to point a Location header at (only the list, above) -
+    // 201 without CreatedAtAction, rather than inventing a route just to satisfy the convention.
     [HttpPost("{id:guid}/blackout-periods")]
     [Authorize(Roles = "TenantAdmin,SysAdmin")]
-    public async Task<IActionResult> CreateBlackoutPeriod(Guid id, CreateBlackoutPeriodRequest request, CancellationToken cancellationToken) =>
-        Ok(await mediator.Send(
-            new CreateBlackoutPeriodCommandRequest(id, request.StartUtc, request.EndUtc, request.Reason), cancellationToken));
+    public async Task<IActionResult> CreateBlackoutPeriod(Guid id, CreateBlackoutPeriodRequest request, CancellationToken cancellationToken)
+    {
+        var response = await mediator.Send(
+            new CreateBlackoutPeriodCommandRequest(id, request.StartUtc, request.EndUtc, request.Reason), cancellationToken);
+
+        return StatusCode(StatusCodes.Status201Created, response);
+    }
 
     [HttpPut("{id:guid}/blackout-periods/{blackoutId:guid}")]
     [Authorize(Roles = "TenantAdmin,SysAdmin")]
@@ -92,10 +112,15 @@ public sealed class ResourcesController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetResourceApprovers(Guid id, CancellationToken cancellationToken) =>
         Ok(await mediator.Send(new GetResourceApproversQueryRequest(id), cancellationToken));
 
+    // No single-approver GET endpoint exists to point a Location header at (only the list, above) -
+    // 201 without CreatedAtAction, rather than inventing a route just to satisfy the convention.
     [HttpPost("{id:guid}/approvers")]
     [Authorize(Roles = "TenantAdmin,SysAdmin")]
-    public async Task<IActionResult> AssignResourceApprover(Guid id, AssignResourceApproverRequest request, CancellationToken cancellationToken) =>
-        Ok(await mediator.Send(new AssignResourceApproverCommandRequest(id, request.UserId), cancellationToken));
+    public async Task<IActionResult> AssignResourceApprover(Guid id, AssignResourceApproverRequest request, CancellationToken cancellationToken)
+    {
+        var response = await mediator.Send(new AssignResourceApproverCommandRequest(id, request.UserId), cancellationToken);
+        return StatusCode(StatusCodes.Status201Created, response);
+    }
 
     [HttpDelete("{id:guid}/approvers/{userId:guid}")]
     [Authorize(Roles = "TenantAdmin,SysAdmin")]

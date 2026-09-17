@@ -1,3 +1,4 @@
+using BookSpace.Application.Common;
 using BookSpace.Domain.Entities;
 
 namespace BookSpace.Application.Auth;
@@ -16,6 +17,8 @@ public interface IUserRepository
     Task<IReadOnlyList<string>> GetRolesAsync(Guid userId, CancellationToken cancellationToken);
 
     // Relies on the DbContext's global tenant query filter to scope results - callers must not
-    // add their own TenantId filter on top of this.
-    Task<IReadOnlyList<User>> GetAllAsync(CancellationToken cancellationToken);
+    // add their own TenantId filter on top of this. Paged (unlike ResourceType's GetAllAsync): a
+    // tenant's user roster grows roughly linearly with headcount and is never pruned, unlike small,
+    // human-curated lists such as resource types.
+    Task<PagedResult<User>> GetPagedAsync(int page, int pageSize, CancellationToken cancellationToken);
 }

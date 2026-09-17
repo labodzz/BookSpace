@@ -15,8 +15,11 @@ public sealed class ResourceTypesController(IMediator mediator) : ControllerBase
 {
     [HttpPost]
     [Authorize(Roles = "TenantAdmin,SysAdmin")]
-    public async Task<IActionResult> CreateResourceType(CreateResourceTypeRequest request, CancellationToken cancellationToken) =>
-        Ok(await mediator.Send(new CreateResourceTypeCommandRequest(request.Name), cancellationToken));
+    public async Task<IActionResult> CreateResourceType(CreateResourceTypeRequest request, CancellationToken cancellationToken)
+    {
+        var response = await mediator.Send(new CreateResourceTypeCommandRequest(request.Name), cancellationToken);
+        return CreatedAtAction(nameof(GetResourceType), new { id = response.Id }, response);
+    }
 
     [HttpGet]
     public async Task<IActionResult> GetResourceTypes(CancellationToken cancellationToken) =>

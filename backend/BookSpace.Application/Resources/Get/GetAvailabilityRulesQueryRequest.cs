@@ -15,7 +15,7 @@ public sealed class GetAvailabilityRulesQueryHandler(
     {
         if (await resourceRepository.FindByIdAsync(request.ResourceId, cancellationToken) is null)
         {
-            throw new NotFoundException($"Resource {request.ResourceId} was not found.");
+            throw new NotFoundException($"Resource {request.ResourceId} was not found.", ErrorCodes.ResourceNotFound);
         }
 
         var rules = await availabilityRuleRepository.GetByResourceIdAsync(request.ResourceId, cancellationToken);

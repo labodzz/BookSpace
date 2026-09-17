@@ -26,12 +26,12 @@ public sealed class UsersEndpointsTests : IClassFixture<CustomWebApplicationFact
         var response = await client.GetAsync("/users");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadFromJsonAsync<List<UserSummaryResponse>>(JsonOptions);
-        Assert.Contains(body!, user => user.Email == TestDataSeeder.AcmeAdminEmail);
-        Assert.Contains(body!, user => user.Email == TestDataSeeder.AcmeMemberEmail);
-        Assert.DoesNotContain(body!, user => user.Email == TestDataSeeder.GlobexMemberEmail);
-        Assert.DoesNotContain(body!, user => user.Email == TestDataSeeder.GlobexAdminEmail);
-        Assert.All(body!, user => Assert.Equal(TestDataSeeder.AcmeTenantId, user.TenantId));
+        var body = await response.Content.ReadFromJsonAsync<PagedResponse<UserSummaryResponse>>(JsonOptions);
+        Assert.Contains(body!.Items, user => user.Email == TestDataSeeder.AcmeAdminEmail);
+        Assert.Contains(body.Items, user => user.Email == TestDataSeeder.AcmeMemberEmail);
+        Assert.DoesNotContain(body.Items, user => user.Email == TestDataSeeder.GlobexMemberEmail);
+        Assert.DoesNotContain(body.Items, user => user.Email == TestDataSeeder.GlobexAdminEmail);
+        Assert.All(body.Items, user => Assert.Equal(TestDataSeeder.AcmeTenantId, user.TenantId));
     }
 
     [Fact]
@@ -77,4 +77,6 @@ public sealed class UsersEndpointsTests : IClassFixture<CustomWebApplicationFact
     private sealed record LoginResponse(string AccessToken);
 
     private sealed record UserSummaryResponse(Guid Id, string FirstName, string LastName, string Email, Guid TenantId);
+
+    private sealed record PagedResponse<T>(List<T> Items, int Page, int PageSize, int TotalCount);
 }
