@@ -1,0 +1,131 @@
+.approval-queue {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  max-width: 1120px;
+}
+
+.approval-queue__groups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.approval-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+}
+
+.approval-row__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 240px;
+}
+
+.approval-row__title {
+  font-weight: 600;
+}
+
+.approval-row__time {
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+}
+
+.approval-row__meta {
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
+}
+
+.approval-row__actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+
+.approval-row__note {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  min-width: 200px;
+}
+
+.approval-row__buttons {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* Recurring series group - one card holding N pending occurrences, with a single bulk "approve all"
+   action plus each occurrence's own Approve/Reject for deciding just one individually. */
+.approval-series {
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  border: 1px solid var(--color-primary);
+}
+
+.approval-series__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.approval-series__title {
+  font-weight: 600;
+}
+
+.approval-series__subtitle {
+  color: var(--color-text-secondary);
+  font-size: 0.8125rem;
+}
+
+.approval-series__bulk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.approval-series__occurrences {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-3);
+}
+
+.approval-occurrence {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+}
+
+.approval-occurrence__time {
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+}
+
+.approval-occurrence__actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.approval-occurrence__actions .btn {
+  padding: var(--space-1) var(--space-3);
+  font-size: 0.8125rem;
+}
