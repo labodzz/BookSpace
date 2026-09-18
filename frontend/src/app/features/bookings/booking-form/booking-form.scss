@@ -1,0 +1,42 @@
+.booking-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 560px;
+  padding: var(--space-6);
+}
+
+.booking-form--skeleton {
+  gap: var(--space-3);
+}
+
+.booking-form__eyebrow {
+  color: var(--color-text-secondary);
+  font-size: 0.8125rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: var(--space-1);
+}
+
+.booking-form__row {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 1fr;
+  gap: var(--space-3);
+}
+
+@media (max-width: 560px) {
+  .booking-form__row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.booking-form__quantity {
+  max-width: 160px;
+}
+
+.booking-form__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}

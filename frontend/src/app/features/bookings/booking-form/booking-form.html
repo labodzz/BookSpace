@@ -1,0 +1,79 @@
+@if (!resourceId) {
+  <div class="state-panel card">
+    <p class="state-panel__title">Pick a resource to book</p>
+    <p>Browse resources and choose one, then come back here to book it.</p>
+    <a class="btn btn-primary" routerLink="/resources">Browse resources</a>
+  </div>
+} @else if (loadingResource()) {
+  <div class="card booking-form booking-form--skeleton" aria-busy="true">
+    <span class="skeleton" style="height: 1.5rem; width: 50%;"></span>
+    <span class="skeleton" style="height: 3rem; width: 100%;"></span>
+  </div>
+} @else if (resourceNotFound()) {
+  <div class="state-panel card">
+    <p class="state-panel__title">This resource doesn't exist</p>
+    <p>It may have been removed, or the link isn't correct. Nothing here can be booked.</p>
+    <a class="btn btn-primary" routerLink="/resources">Browse resources</a>
+  </div>
+} @else if (resourceError()) {
+  <div class="state-panel card">
+    <p class="state-panel__title">Couldn't load this resource</p>
+    <p>{{ resourceError()!.detail ?? resourceError()!.title }}</p>
+    <button type="button" class="btn btn-secondary" (click)="retryLoadResource()">Try again</button>
+  </div>
+} @else if (resource(); as resource) {
+  <form class="card booking-form" (ngSubmit)="submit()" novalidate>
+    <div>
+      <p class="booking-form__eyebrow">Book</p>
+      <h1>{{ resource.name }}</h1>
+      <p class="field-hint">
+        Times are in {{ resource.timeZoneId }}. Capacity {{ resource.capacity }}.
+        {{ resource.requiresApproval ? 'This resource requires approval before it is confirmed.' : 'Bookings for this resource are confirmed instantly.' }}
+      </p>
+    </div>
+
+    @if (formError()) {
+      <p class="banner banner-error" role="alert">{{ formError() }}</p>
+    }
+
+    <div class="booking-form__row">
+      <div class="field">
+        <label for="date">Date</label>
+        <input id="date" type="date" [value]="date()" (input)="date.set($any($event.target).value)" required />
+      </div>
+      <div class="field">
+        <label for="start-time">Start time</label>
+        <input id="start-time" type="time" [value]="startTime()" (input)="startTime.set($any($event.target).value)" required />
+      </div>
+      <div class="field">
+        <label for="end-time">End time</label>
+        <input id="end-time" type="time" [value]="endTime()" (input)="endTime.set($any($event.target).value)" required />
+      </div>
+    </div>
+    @if (timeFieldErrors().length) {
+      <span class="field-error-text">{{ timeFieldErrors().join(' ') }}</span>
+    }
+
+    <div class="field booking-form__quantity">
+      <label for="quantity">Quantity</label>
+      <input
+        id="quantity"
+        type="number"
+        min="1"
+        [max]="resource.capacity"
+        [value]="quantity()"
+        (input)="quantity.set($any($event.target).valueAsNumber || 1)"
+      />
+      @if (quantityFieldErrors().length) {
+        <span class="field-error-text">{{ quantityFieldErrors().join(' ') }}</span>
+      }
+    </div>
+
+    <div class="booking-form__actions">
+      <a class="btn btn-secondary" [routerLink]="['/resources', resource.id]">Cancel</a>
+      <button type="submit" class="btn btn-primary" [disabled]="submitting()">
+        {{ submitting() ? 'Booking…' : 'Confirm booking' }}
+      </button>
+    </div>
+  </form>
+}

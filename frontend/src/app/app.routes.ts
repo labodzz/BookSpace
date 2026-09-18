@@ -45,6 +45,10 @@ export const routes: Routes = [
         path: 'bookings',
         loadComponent: () => import('./features/bookings/my-bookings/my-bookings').then((m) => m.MyBookingsComponent),
       },
+      {
+        path: 'bookings/new',
+        loadComponent: () => import('./features/bookings/booking-form/booking-form').then((m) => m.BookingFormComponent),
+      },
     ],
   },
   { path: '**', redirectTo: '' },
