@@ -17,6 +17,14 @@ export interface OwnBooking {
   seriesId: string | null;
 }
 
+// getOwnBookingsInRange's result: `truncated` is true when the safety page cap was hit while the
+// server still reported more results remaining, so a caller can tell "this range's bookings" apart
+// from "the first N of this range's bookings" instead of silently treating the latter as complete.
+export interface RangeBookingsResult {
+  items: OwnBooking[];
+  truncated: boolean;
+}
+
 export interface CreateBookingRequest {
   resourceId: string;
   startUtc: string;

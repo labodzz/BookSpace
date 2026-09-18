@@ -35,7 +35,7 @@ export class ResourceListComponent {
   protected readonly totalPages = computed(() => Math.max(1, Math.ceil(this.totalCount() / PAGE_SIZE)));
 
   constructor() {
-    this.resourceService.getResourceTypes().subscribe();
+    this.resourceService.getResourceTypes().subscribe({ error: () => undefined });
     this.load();
   }
 

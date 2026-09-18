@@ -2,6 +2,9 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using BookSpace.Domain.Enums;
+using BookSpace.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace BookSpace.Api.Tests.Bookings;
@@ -184,6 +187,96 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
         var page = await response.Content.ReadFromJsonAsync<PagedResult<BookingResponse>>(JsonOptions);
         Assert.Contains(page!.Items, booking => booking.Id == inside.Id);
         Assert.DoesNotContain(page.Items, booking => booking.Id == outside.Id);
+    }
+
+    // "Most recently requested" means CreatedAtUtc order, not StartUtc order - `newer` is created SECOND
+    // (so it has the later CreatedAtUtc) but deliberately starts EARLIER than `older`, so a StartUtc-based
+    // sort (the bug this proves is fixed) would put them in the opposite order from what's asserted here.
+    [Fact]
+    public async Task GetOwnBookings_OrdersByCreationTimeDescending_NotByStartTime()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+        var olderRequestLaterStart = AnchorPlusHours(120);
+        var newerRequestEarlierStart = AnchorPlusHours(110);
+        var older = await CreateBookingAsync(client, TestDataSeeder.AcmeResourceId, olderRequestLaterStart, olderRequestLaterStart.AddHours(1));
+        var newer = await CreateBookingAsync(client, TestDataSeeder.AcmeResourceId, newerRequestEarlierStart, newerRequestEarlierStart.AddHours(1));
+
+        var response = await client.GetAsync("/bookings?pageSize=100");
+
+        var page = await response.Content.ReadFromJsonAsync<PagedResult<BookingResponse>>(JsonOptions);
+        var ids = page!.Items.Select(item => item.Id).ToList();
+        Assert.True(ids.IndexOf(newer.Id) < ids.IndexOf(older.Id), "the more recently REQUESTED booking must be listed first, regardless of which one starts sooner");
+    }
+
+    // Global pagination correctness: an older page must never contain a more-recently-requested booking
+    // than a newer page - each of these three is requested strictly after the previous, one page at a time.
+    [Fact]
+    public async Task GetOwnBookings_PreservesCreationOrderAcrossPages()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+        var first = await CreateBookingAsync(client, TestDataSeeder.AcmeResourceId, AnchorPlusHours(130), AnchorPlusHours(131));
+        var second = await CreateBookingAsync(client, TestDataSeeder.AcmeResourceId, AnchorPlusHours(132), AnchorPlusHours(133));
+        var third = await CreateBookingAsync(client, TestDataSeeder.AcmeResourceId, AnchorPlusHours(134), AnchorPlusHours(135));
+
+        var page1 = await (await client.GetAsync("/bookings?page=1&pageSize=1")).Content.ReadFromJsonAsync<PagedResult<BookingResponse>>(JsonOptions);
+        var page2 = await (await client.GetAsync("/bookings?page=2&pageSize=1")).Content.ReadFromJsonAsync<PagedResult<BookingResponse>>(JsonOptions);
+        var page3 = await (await client.GetAsync("/bookings?page=3&pageSize=1")).Content.ReadFromJsonAsync<PagedResult<BookingResponse>>(JsonOptions);
+
+        Assert.Equal(third.Id, Assert.Single(page1!.Items).Id);
+        Assert.Equal(second.Id, Assert.Single(page2!.Items).Id);
+        Assert.Equal(first.Id, Assert.Single(page3!.Items).Id);
+    }
+
+    // Two requests can legitimately land on the same CreatedAtUtc at typical timestamp precision - Id
+    // (guaranteed unique) is the documented tiebreaker, so ordering must still be deterministic rather
+    // than however the database happens to return the tied rows. Ids are random (Guid.NewGuid()), not
+    // creation-ordered, so "which one sorts first" is computed from the actual Ids below rather than
+    // assumed from creation order.
+    [Fact]
+    public async Task GetOwnBookings_WithEqualCreationTimestamps_OrdersDeterministicallyById()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+        var bookingA = await CreateBookingAsync(client, TestDataSeeder.AcmeResourceId, AnchorPlusHours(140), AnchorPlusHours(141));
+        var bookingB = await CreateBookingAsync(client, TestDataSeeder.AcmeResourceId, AnchorPlusHours(142), AnchorPlusHours(143));
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<BookSpaceDbContext>();
+            var tiedTimestamp = DateTimeOffset.UtcNow;
+            foreach (var id in new[] { bookingA.Id, bookingB.Id })
+            {
+                var booking = await dbContext.Bookings.IgnoreQueryFilters().FirstAsync(b => b.Id == id);
+                booking.CreatedAtUtc = tiedTimestamp;
+            }
+            await dbContext.SaveChangesAsync();
+        }
+        var expectedFirst = bookingA.Id.CompareTo(bookingB.Id) > 0 ? bookingA.Id : bookingB.Id;
+        var expectedSecond = expectedFirst == bookingA.Id ? bookingB.Id : bookingA.Id;
+
+        var response = await client.GetAsync("/bookings?pageSize=100");
+
+        var page = await response.Content.ReadFromJsonAsync<PagedResult<BookingResponse>>(JsonOptions);
+        var ids = page!.Items.Select(item => item.Id).ToList();
+        Assert.True(
+            ids.IndexOf(expectedFirst) < ids.IndexOf(expectedSecond),
+            "with tied CreatedAtUtc, the booking with the larger Id must be listed first, deterministically");
+    }
+
+    // Cancelling a booking updates its Status, not its CreatedAtUtc - the list's ordering must be
+    // unaffected by a cancellation happening in between.
+    [Fact]
+    public async Task GetOwnBookings_AfterCancellingOneBooking_PreservesCreationOrderOfTheRest()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+        var older = await CreateBookingAsync(client, TestDataSeeder.AcmeResourceId, AnchorPlusHours(150), AnchorPlusHours(151));
+        var newer = await CreateBookingAsync(client, TestDataSeeder.AcmeResourceId, AnchorPlusHours(152), AnchorPlusHours(153));
+        await client.DeleteAsync($"/bookings/{older.Id}");
+
+        var response = await client.GetAsync("/bookings?pageSize=100");
+
+        var page = await response.Content.ReadFromJsonAsync<PagedResult<BookingResponse>>(JsonOptions);
+        var ids = page!.Items.Select(item => item.Id).ToList();
+        Assert.True(ids.IndexOf(newer.Id) < ids.IndexOf(older.Id));
     }
 
     [Fact]

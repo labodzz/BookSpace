@@ -76,4 +76,32 @@ describe('ResourceListComponent', () => {
 
     expect((fixture.nativeElement as HTMLElement).textContent).toContain('No resources found');
   });
+
+  // getResourceTypes() is a shared, cached request with no built-in catchError - a bare
+  // `.subscribe()` with no error handler would make a failure here an unhandled RxJS error (thrown
+  // synchronously out of flush() below) instead of just leaving type names unresolved.
+  it('does not throw when the resource-types request fails, and still renders the resources list', () => {
+    expect(() => httpTesting.expectOne((r) => r.url === TYPES_URL).flush('boom', { status: 500, statusText: 'Internal Server Error' })).not.toThrow();
+
+    httpTesting.expectOne((r) => r.url === RESOURCES_URL).flush({
+      items: [
+        {
+          id: 'resource-1',
+          resourceTypeId: 'type-1',
+          name: 'Falcon Room',
+          description: null,
+          capacity: 4,
+          requiresApproval: false,
+          status: 0,
+          timeZoneId: 'UTC',
+        },
+      ],
+      page: 1,
+      pageSize: 12,
+      totalCount: 1,
+    });
+    fixture.detectChanges();
+
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain('Falcon Room');
+  });
 });

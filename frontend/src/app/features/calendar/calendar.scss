@@ -2,7 +2,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-  max-width: 980px;
+  width: 100%;
 }
 
 .calendar__header {
@@ -34,6 +34,19 @@
 .calendar__nav {
   display: flex;
   gap: var(--space-2);
+}
+
+.calendar__narrow-range {
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 0;
+  margin-left: var(--space-2);
+  font: inherit;
+  font-weight: 600;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 .calendar-grid {

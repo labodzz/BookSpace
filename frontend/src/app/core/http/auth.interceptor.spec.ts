@@ -36,6 +36,41 @@ describe('isApiRequest', () => {
   it('does NOT match an absolute cross-origin URL when apiUrl is empty', () => {
     expect(isApiRequest('https://analytics.example.test/track', '')).toBe(false);
   });
+
+  // A raw `url.startsWith(apiUrl)` check would wrongly treat this as belonging to the real API, since
+  // one string literally starts with the other - only a real origin comparison catches it.
+  it('does not match a lookalike hostname that merely starts with the configured API origin', () => {
+    expect(isApiRequest('https://real-api.example.com.attacker.example/path', 'https://real-api.example.com')).toBe(false);
+  });
+
+  it('matches a request under the configured API origin AND base path', () => {
+    expect(isApiRequest('http://localhost:5185/api/bookings', 'http://localhost:5185/api')).toBe(true);
+  });
+
+  // Same origin as the configured API, but the path only shares a string prefix with the base path
+  // ('/api') rather than actually falling under it - must not match.
+  it('does not match the correct origin with a base path that only looks like a prefix match', () => {
+    expect(isApiRequest('http://localhost:5185/apiextra/bookings', 'http://localhost:5185/api')).toBe(false);
+  });
+
+  it('does not treat a protocol-relative URL as a safe relative same-origin path', () => {
+    expect(isApiRequest('//attacker.example/path', '')).toBe(false);
+  });
+
+  it('does not treat a protocol-relative URL as matching a configured API origin', () => {
+    expect(isApiRequest('//real-api.example.com/path', 'https://real-api.example.com')).toBe(false);
+  });
+
+  // Some test/embedded environments report no reliable document origin at all (an absent `location`,
+  // or the opaque "null" origin of a sandboxed/non-http(s) document) - classification must fail closed
+  // rather than throw or guess.
+  it('fails closed on an absolute same-origin-shaped URL when the document origin is unavailable', () => {
+    expect(isApiRequest('http://localhost:5185/bookings', '', null)).toBe(false);
+  });
+
+  it('still classifies a genuinely relative URL correctly even when the document origin is unavailable', () => {
+    expect(isApiRequest('/bookings', '', null)).toBe(true);
+  });
 });
 
 // Runs against whatever environment `ng test` actually builds with (environment.development.ts, a

@@ -27,6 +27,16 @@
       <button type="button" class="btn btn-secondary" (click)="retry()">Try again</button>
     </div>
   } @else {
+    @if (calendarService.truncated()) {
+      <p class="banner banner-info" role="status">
+        This period has more bookings than can be shown at once - some are hidden.
+        @if (viewMode() === 'month') {
+          <button type="button" class="calendar__narrow-range" (click)="setViewMode('week')">Switch to Week view</button>
+        } @else {
+          Narrow the date range further to see them all.
+        }
+      </p>
+    }
     <div class="calendar-grid" [class.calendar-grid--week]="viewMode() === 'week'">
       <div class="calendar-grid__weekdays">
         @for (label of ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']; track label) {

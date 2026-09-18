@@ -26,7 +26,7 @@ export class ResourceDetailComponent {
   private readonly resourceId = this.route.snapshot.paramMap.get('id')!;
 
   constructor() {
-    this.resourceService.getResourceTypes().subscribe();
+    this.resourceService.getResourceTypes().subscribe({ error: () => undefined });
     this.load();
   }
 

@@ -97,6 +97,61 @@ describe('MyBookingsComponent', () => {
     expect(root.textContent).toContain("You don't have any bookings yet");
   });
 
+  // Ordering is entirely the backend's responsibility (GetOwnBookingsAsync orders by CreatedAtUtc
+  // descending) - this proves the component renders `bookings()` in exactly the order the server
+  // returned it, without re-sorting by startUtc client-side and undoing that.
+  it('renders bookings in the exact order the server returned, not re-sorted by start time', () => {
+    httpTesting.expectOne((r) => r.url === BOOKINGS_URL && r.method === 'GET').flush({
+      items: [
+        {
+          id: 'booking-newer-request-earlier-start',
+          resourceId: 'resource-1',
+          startUtc: '2026-12-10T10:00:00Z',
+          endUtc: '2026-12-10T11:00:00Z',
+          quantity: 1,
+          status: 1,
+          cancelledAtUtc: null,
+          cancelledByAdmin: false,
+          cancellationReason: null,
+          seriesId: null,
+        },
+        {
+          id: 'booking-older-request-later-start',
+          resourceId: 'resource-1',
+          startUtc: '2026-12-25T10:00:00Z',
+          endUtc: '2026-12-25T11:00:00Z',
+          quantity: 1,
+          status: 1,
+          cancelledAtUtc: null,
+          cancelledByAdmin: false,
+          cancellationReason: null,
+          seriesId: null,
+        },
+      ],
+      page: 1,
+      pageSize: 10,
+      totalCount: 2,
+    });
+    httpTesting.expectOne((r) => r.url === RESOURCE_URL).flush({
+      id: 'resource-1',
+      resourceTypeId: 'type-1',
+      name: 'Falcon Room',
+      description: null,
+      capacity: 4,
+      requiresApproval: false,
+      status: 0,
+      timeZoneId: 'UTC',
+    });
+    fixture.detectChanges();
+
+    const rowTimes = [...(fixture.nativeElement as HTMLElement).querySelectorAll('.booking-row__time')].map((el) => el.textContent);
+    // The newer REQUEST (booking-newer-request-earlier-start, Dec 10) must render first even though it
+    // STARTS before the older request (booking-older-request-later-start, Dec 25) - a client-side sort
+    // by start time would reverse this order.
+    expect(rowTimes[0]).toContain('Dec 10');
+    expect(rowTimes[1]).toContain('Dec 25');
+  });
+
   it('does not offer a Cancel action for a booking that is no longer cancellable', () => {
     httpTesting.expectOne((r) => r.url === BOOKINGS_URL && r.method === 'GET').flush({
       items: [
