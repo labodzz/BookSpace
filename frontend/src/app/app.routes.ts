@@ -58,6 +58,11 @@ export const routes: Routes = [
         path: 'calendar',
         loadComponent: () => import('./features/calendar/calendar').then((m) => m.CalendarComponent),
       },
+      {
+        path: 'approvals',
+        canActivate: [roleGuard('Approver', 'TenantAdmin', 'SysAdmin')],
+        loadComponent: () => import('./features/approvals/approval-queue/approval-queue').then((m) => m.ApprovalQueueComponent),
+      },
     ],
   },
   { path: '**', redirectTo: '' },
