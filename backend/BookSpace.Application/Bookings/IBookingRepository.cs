@@ -18,8 +18,11 @@ public interface IBookingRepository
 
     // Relies on the DbContext's global tenant query filter to scope results, further filtered to the
     // given owner so a member only ever sees their own bookings, never another tenant member's.
-    // seriesId, when given, narrows to that recurring series' own occurrences only.
-    Task<PagedResult<Booking>> GetOwnBookingsAsync(Guid userId, Guid? seriesId, int page, int pageSize, CancellationToken cancellationToken);
+    // seriesId, when given, narrows to that recurring series' own occurrences only. fromUtc/toUtc, when
+    // given, narrow to bookings overlapping that range - added for the frontend calendar, which must be
+    // able to ask for "just this visible month" instead of paging through a user's entire booking history.
+    Task<PagedResult<Booking>> GetOwnBookingsAsync(
+        Guid userId, Guid? seriesId, DateTimeOffset? fromUtc, DateTimeOffset? toUtc, int page, int pageSize, CancellationToken cancellationToken);
 
     // Every occurrence of a series (tenant-filtered, not further filtered by user - a series' occurrences
     // all share its one owning UserId by construction). Used to view a series' full occurrence list and
