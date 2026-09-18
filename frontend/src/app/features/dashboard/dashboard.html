@@ -1,14 +1,37 @@
-<section class="card dashboard-card">
-  <h1>Welcome back</h1>
-  @if (authService.currentUser(); as user) {
-    <p class="dashboard-meta">Signed in as {{ user.email }}</p>
-    @if (user.roles.length) {
-      <div class="dashboard-roles">
-        @for (role of user.roles; track role) {
-          <span class="dashboard-role-pill">{{ role }}</span>
+<section class="dashboard">
+  <header class="dashboard-header">
+    <div>
+      <h1>Welcome back, {{ authService.displayName() }}</h1>
+      <p class="dashboard-header__date">{{ today }} — here's what's happening.</p>
+    </div>
+    <a class="btn btn-primary" routerLink="/resources">Browse resources</a>
+  </header>
+
+  <div class="dashboard-stats">
+    <div class="card stat-card">
+      <span class="stat-card__value">{{ activeResourceCount() }}</span>
+      <span class="stat-card__label">Resources available</span>
+    </div>
+  </div>
+
+  <section class="card dashboard-panel">
+    <div class="dashboard-panel__header">
+      <h2>Available resources</h2>
+      <a routerLink="/resources" class="dashboard-panel__link">Browse all</a>
+    </div>
+
+    @if (availableResources().length === 0) {
+      <p class="field-hint">No active resources yet.</p>
+    } @else {
+      <div class="resource-preview-grid">
+        @for (resource of availableResources(); track resource.id) {
+          <a class="resource-preview-card" [routerLink]="['/resources', resource.id]">
+            <span class="resource-preview-card__type">{{ typeName(resource.resourceTypeId) }}</span>
+            <span class="resource-preview-card__name">{{ resource.name }}</span>
+            <span class="resource-preview-card__meta">Capacity {{ resource.capacity }}</span>
+          </a>
         }
       </div>
     }
-  }
-  <p class="dashboard-note">The booking dashboard lives here next.</p>
+  </section>
 </section>
