@@ -1,0 +1,96 @@
+<section class="availability">
+  @if (resourceLoading()) {
+    <div class="card availability__day" aria-busy="true">
+      <span class="skeleton" style="height: 1.5rem; width: 45%;"></span>
+      <span class="skeleton" style="height: 1rem; width: 30%; margin-top: 8px;"></span>
+    </div>
+  } @else if (resourceNotFound()) {
+    <div class="state-panel card">
+      <p class="state-panel__title">This resource doesn't exist</p>
+      <p>It may have been removed, or the link isn't correct.</p>
+      <a class="btn btn-primary" routerLink="/resources">Browse resources</a>
+    </div>
+  } @else if (resourceError()) {
+    <div class="state-panel card">
+      <p class="state-panel__title">Couldn't load this resource</p>
+      <p>{{ resourceError()!.detail ?? resourceError()!.title }}</p>
+      <button type="button" class="btn btn-secondary" (click)="retryLoadResource()">Try again</button>
+    </div>
+  } @else if (resource(); as resource) {
+    <a class="availability__back" [routerLink]="['/resources', resource.id]">&larr; Back to {{ resource.name }}</a>
+    <header class="availability__header">
+      <h1>Availability &middot; {{ resource.name }}</h1>
+      <p class="field-hint">Shown in {{ resource.timeZoneId }}.</p>
+    </header>
+
+    <form class="availability__controls card" (ngSubmit)="search()" novalidate>
+      <div class="field">
+        <label for="from">From</label>
+        <input id="from" type="date" [value]="fromDate()" (input)="onFromDateChange($event)" required />
+      </div>
+      <div class="field">
+        <label for="to">To</label>
+        <input id="to" type="date" [value]="toDate()" (input)="onToDateChange($event)" required />
+      </div>
+      <button type="submit" class="btn btn-primary">Search</button>
+    </form>
+    @if (rangeError()) {
+      <p class="banner banner-error" role="alert">{{ rangeError() }}</p>
+    }
+
+    @if (loading()) {
+      <div class="availability__days" aria-busy="true">
+        @for (i of [1, 2, 3]; track i) {
+          <div class="card availability__day">
+            <span class="skeleton" style="height: 1rem; width: 30%;"></span>
+            <span class="skeleton" style="height: 2rem; width: 100%; margin-top: 8px;"></span>
+          </div>
+        }
+      </div>
+    } @else if (error()) {
+      <div class="state-panel card">
+        <p class="state-panel__title">Couldn't load availability</p>
+        <p>{{ error()!.detail ?? error()!.title }}</p>
+        <button type="button" class="btn btn-secondary" (click)="retry()">Try again</button>
+      </div>
+    } @else if (availability(); as availability) {
+      @if (availability.openPeriods.length === 0) {
+        <div class="state-panel card">
+          <p class="state-panel__title">No open hours configured</p>
+          <p>This resource has no availability rules set up yet, so it can't be booked in this range.</p>
+        </div>
+      } @else {
+        <div class="availability__days">
+          @for (day of days(); track day.date.toISODate()) {
+            <div class="card availability__day">
+              <h2>{{ formatDayHeading(day.date) }}</h2>
+
+              @if (day.blackouts.length) {
+                <div class="availability__blackouts">
+                  @for (blackout of day.blackouts; track blackout.startUtc) {
+                    <span class="status-pill status-pill--rejected" [title]="blackout.reason">
+                      Blacked out {{ formatBlackoutTime(blackout, availability.timeZoneId) }} — {{ blackout.reason }}
+                    </span>
+                  }
+                </div>
+              }
+
+              @if (day.slots.length) {
+                <div class="availability__slots">
+                  @for (slot of day.slots; track slot.startUtc) {
+                    <button type="button" class="availability__slot" (click)="bookSlot(slot)">
+                      <span>{{ formatSlotTime(slot, availability.timeZoneId) }}</span>
+                      <span class="availability__slot-capacity">{{ slot.availableCapacity }} open</span>
+                    </button>
+                  }
+                </div>
+              } @else if (!day.blackouts.length) {
+                <p class="field-hint">No bookable time on this day.</p>
+              }
+            </div>
+          }
+        </div>
+      }
+    }
+  }
+</section>

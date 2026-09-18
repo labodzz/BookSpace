@@ -1,0 +1,84 @@
+<section class="resource-list">
+  <header class="resource-list__header">
+    <div>
+      <h1>Resources</h1>
+      <p class="resource-list__subtitle">Browse what your team can book.</p>
+    </div>
+
+    <div class="resource-list__filters">
+      <div class="field">
+        <label for="type-filter">Type</label>
+        <select id="type-filter" [value]="resourceTypeId()" (change)="onTypeChange($event)">
+          <option value="">All types</option>
+          @for (type of resourceTypes(); track type.id) {
+            <option [value]="type.id">{{ type.name }}</option>
+          }
+        </select>
+      </div>
+      <div class="field">
+        <label for="status-filter">Status</label>
+        <select id="status-filter" [value]="status()" (change)="onStatusChange($event)">
+          <option value="Active">Active</option>
+          <option value="Inactive">Inactive</option>
+          <option value="Maintenance">Maintenance</option>
+          <option value="Archived">Archived</option>
+          <option value="">All statuses</option>
+        </select>
+      </div>
+    </div>
+  </header>
+
+  @if (loading()) {
+    <div class="resource-grid" aria-busy="true">
+      @for (i of [1, 2, 3, 4, 5, 6]; track i) {
+        <div class="card resource-card resource-card--skeleton">
+          <span class="skeleton" style="height: 1.25rem; width: 65%;"></span>
+          <span class="skeleton" style="height: 0.875rem; width: 40%;"></span>
+          <span class="skeleton" style="height: 0.875rem; width: 90%;"></span>
+        </div>
+      }
+    </div>
+  } @else if (error()) {
+    <div class="state-panel card">
+      <p class="state-panel__title">Couldn't load resources</p>
+      <p>{{ error()!.detail ?? error()!.title }}</p>
+      <button type="button" class="btn btn-secondary" (click)="retry()">Try again</button>
+    </div>
+  } @else if (resources().length === 0) {
+    <div class="state-panel card">
+      <p class="state-panel__title">No resources found</p>
+      <p>Try a different type or status filter.</p>
+    </div>
+  } @else {
+    <div class="resource-grid">
+      @for (resource of resources(); track resource.id) {
+        <button type="button" class="card resource-card" (click)="openResource(resource.id)">
+          <div class="resource-card__top">
+            <h2>{{ resource.name }}</h2>
+            <span class="status-pill" [class.status-pill--confirmed]="resource.status === 'Active'" [class.status-pill--cancelled]="resource.status !== 'Active'">
+              {{ resource.status }}
+            </span>
+          </div>
+          <p class="resource-card__type">{{ typeName(resource.resourceTypeId) }}</p>
+          @if (resource.description) {
+            <p class="resource-card__description">{{ resource.description }}</p>
+          }
+          <div class="resource-card__meta">
+            <span>Capacity {{ resource.capacity }}</span>
+            @if (resource.requiresApproval) {
+              <span>Requires approval</span>
+            }
+          </div>
+        </button>
+      }
+    </div>
+
+    @if (totalPages() > 1) {
+      <nav class="pagination" aria-label="Resource list pages">
+        <button type="button" class="btn btn-secondary" [disabled]="page() === 1" (click)="goToPage(page() - 1)">Previous</button>
+        <span>Page {{ page() }} of {{ totalPages() }}</span>
+        <button type="button" class="btn btn-secondary" [disabled]="page() === totalPages()" (click)="goToPage(page() + 1)">Next</button>
+      </nav>
+    }
+  }
+</section>

@@ -1,0 +1,68 @@
+@if (loading()) {
+  <div class="card resource-detail resource-detail--skeleton" aria-busy="true">
+    <span class="skeleton" style="height: 1.5rem; width: 45%;"></span>
+    <span class="skeleton" style="height: 1rem; width: 30%;"></span>
+    <span class="skeleton" style="height: 4rem; width: 100%;"></span>
+  </div>
+} @else if (notFound()) {
+  <div class="state-panel card">
+    <p class="state-panel__title">This resource doesn't exist</p>
+    <p>It may have been removed, or the link isn't correct.</p>
+    <a class="btn btn-primary" routerLink="/resources">Browse resources</a>
+  </div>
+} @else if (error()) {
+  <div class="state-panel card">
+    <p class="state-panel__title">Couldn't load this resource</p>
+    <p>{{ error()!.detail ?? error()!.title }}</p>
+    <button type="button" class="btn btn-secondary" (click)="retry()">Try again</button>
+  </div>
+} @else if (resource(); as resource) {
+  <article class="card resource-detail">
+    <a class="resource-detail__back" routerLink="/resources">&larr; Back to resources</a>
+
+    <header class="resource-detail__header">
+      <div>
+        <p class="resource-detail__type">{{ typeName(resource.resourceTypeId) }}</p>
+        <h1>{{ resource.name }}</h1>
+      </div>
+      <span
+        class="status-pill"
+        [class.status-pill--confirmed]="resource.status === 'Active'"
+        [class.status-pill--cancelled]="resource.status !== 'Active'"
+      >
+        {{ resource.status }}
+      </span>
+    </header>
+
+    @if (resource.description) {
+      <p class="resource-detail__description">{{ resource.description }}</p>
+    }
+
+    <dl class="resource-detail__facts">
+      <div>
+        <dt>Capacity</dt>
+        <dd>{{ resource.capacity }}</dd>
+      </div>
+      <div>
+        <dt>Approval</dt>
+        <dd>{{ resource.requiresApproval ? 'Requires approval' : 'Instant confirmation' }}</dd>
+      </div>
+      <div>
+        <dt>Time zone</dt>
+        <dd>{{ resource.timeZoneId }}</dd>
+      </div>
+    </dl>
+
+    @if (resource.status === 'Active') {
+      <div class="resource-detail__actions">
+        <a class="btn btn-primary" [routerLink]="['/resources', resource.id, 'availability']">Check availability</a>
+        <a class="btn btn-secondary" [routerLink]="['/bookings/new']" [queryParams]="{ resourceId: resource.id }">Book this resource</a>
+        <a class="btn btn-secondary" [routerLink]="['/bookings/new-recurring']" [queryParams]="{ resourceId: resource.id }">
+          Set up a recurring booking
+        </a>
+      </div>
+    } @else {
+      <p class="banner banner-info" role="status">This resource is {{ resource.status | lowercase }} and can't be booked right now.</p>
+    }
+  </article>
+}
