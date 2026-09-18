@@ -38,6 +38,22 @@ See [authentication.md](authentication.md) for the full token/rotation/reuse mod
 issues an access token (short-lived JWT) + refresh token (long-lived, single-use, family-tracked)
 pair; refresh rotates both; reuse of an already-consumed refresh token revokes the whole family.
 
+## CORS
+
+A named CORS policy (`Program.cs`) is built from the `Cors:AllowedOrigins` configuration array,
+fail-closed like the tenant filter: an empty/unconfigured origin list means `WithOrigins()` gets no
+origins, so no cross-origin request is ever allowed - there is no `AllowAnyOrigin()` fallback.
+`AllowCredentials()` is deliberately not set, since the frontend authenticates via
+`Authorization: Bearer`, never cookies. `app.UseCors(...)` runs before `UseAuthentication`/
+`UseAuthorization` so a browser's CORS preflight (`OPTIONS`, which carries no `Authorization` header)
+is answered before auth would otherwise reject it. Development is configured to the Angular `ng serve`
+default (`http://localhost:4200`, `appsettings.Development.json`); production must supply its own
+`Cors:AllowedOrigins` via configuration/secrets - there is no base-`appsettings.json` default, by
+design, so an unconfigured production deployment fails closed rather than silently allowing nothing
+(itself safe) or everything (which the fail-closed design specifically avoids). See
+`BookSpace.Api.Tests/Cors/CorsEndpointsTests.cs` for the behavior proven against both simple and
+preflight requests.
+
 ## Tenant context flow
 
 See [tenant-isolation.md](tenant-isolation.md) for the full model. In one line: `tenant_id` rides in
@@ -88,8 +104,11 @@ require real SQL Server (LocalDB) and are called out as such in their own file-l
 - Bookings: single-user creation (availability/blackout/capacity-checked, `[Start,End)` semantics reused
   from `IntervalMath`), member self-service view/cancel, and - the hard part - concurrency-safe capacity
   enforcement under real racing requests via a transaction-scoped `Resource`-row lock, proven against
-  real SQL Server/LocalDB. See [bookings-and-concurrency.md](bookings-and-concurrency.md) for the full
-  writeup.
+  real SQL Server/LocalDB. `TenantAdmin`/`SysAdmin` can additionally cancel another user's booking in
+  the tenant with an optional audit-trail reason (`CancelledByUserId`/`CancellationReason`, surfaced to
+  the owner via `GetOwnBookings`) - active notification to the affected owner is still deferred, see
+  [open-questions.md](open-questions.md#tenantadmin-cancellation-of-another-users-booking--interim-implementation-notification-still-open).
+  See [bookings-and-concurrency.md](bookings-and-concurrency.md) for the full writeup.
 - Recurring bookings: `RecurringSeries` (Daily/Weekly/Monthly, DST-safe per-occurrence generation) with
   every occurrence materialized as a real, independently viewable/cancellable `Booking`; conflicts
   surfaced explicitly per occurrence at creation, never silently dropped.
@@ -102,9 +121,12 @@ require real SQL Server (LocalDB) and are called out as such in their own file-l
 **Intentionally deferred** (see [open-questions.md](open-questions.md) for what each depends on):
 database-level composite tenant foreign keys, absolute refresh-token session lifetime, logout/session
 revocation, password-change session revocation, dynamic role-change invalidation, Resource
-reactivation-from-Archived as an explicit action, JWT signing-key git-history rewrite, TenantAdmin
-cancellation of another user's booking, automatic `ApprovalRequest` expiry enforcement, booking
-idempotency keys.
+reactivation-from-Archived as an explicit action, JWT signing-key git-history rewrite, active
+notification for TenantAdmin/SysAdmin booking cancellation, automatic `ApprovalRequest` expiry
+enforcement, booking idempotency keys. `TenantStatus.Suspended` is likewise modeled but deliberately
+unenforced - reserved for a future SysAdmin tenant-suspension feature, not a gap in current scope.
 
-**Not yet implemented at all** - do not assume any of this exists: rate limiting, notification/reminder
-delivery, any scheduled/background job infrastructure.
+**Not yet implemented at all** - do not assume any of this exists: notification/reminder delivery, any
+scheduled/background job infrastructure. `POST /auth/login` is rate-limited (10 attempts/minute per
+client IP, ASP.NET Core's built-in rate limiter); no other endpoint is - the rest of the API is already
+behind bearer-token auth, a much stronger gate than a request-rate ceiling.

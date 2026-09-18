@@ -16,26 +16,26 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
     public ResourceTypesEndpointsTests(CustomWebApplicationFactory factory) => _factory = factory;
 
     [Fact]
-    public async Task CreateResourceType_AsTenantAdmin_ReturnsOkWithCreatedResourceType()
+    public async Task CreateResourceType_AsTenantAdmin_ReturnsCreatedWithCreatedResourceType()
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var name = $"Parking Spot {Guid.NewGuid()}";
 
         var response = await client.PostAsJsonAsync("/resource-types", new { name });
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<ResourceTypeResponse>(JsonOptions);
         Assert.Equal(name, body!.Name);
     }
 
     [Fact]
-    public async Task CreateResourceType_AsSysAdmin_ReturnsOkWithCreatedResourceType()
+    public async Task CreateResourceType_AsSysAdmin_ReturnsCreatedWithCreatedResourceType()
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
 
         var response = await client.PostAsJsonAsync("/resource-types", new { name = $"Parking Spot {Guid.NewGuid()}" });
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     }
 
     [Fact]
@@ -83,7 +83,7 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
         using var acmeClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var response = await acmeClient.PostAsJsonAsync("/resource-types", new { name });
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     }
 
     [Fact]

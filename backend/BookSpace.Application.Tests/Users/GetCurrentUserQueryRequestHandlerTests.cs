@@ -5,7 +5,7 @@ using Xunit;
 
 namespace BookSpace.Application.Tests.Users;
 
-public sealed class GetCurrentUserQueryHandlerTests
+public sealed class GetCurrentUserQueryRequestHandlerTests
 {
     private readonly Mock<ICurrentUserContext> _currentUserContext = new();
 
@@ -18,9 +18,9 @@ public sealed class GetCurrentUserQueryHandlerTests
         _currentUserContext.SetupGet(c => c.UserId).Returns(userId);
         _currentUserContext.SetupGet(c => c.TenantId).Returns(tenantId);
         _currentUserContext.SetupGet(c => c.Roles).Returns(roles);
-        var sut = new GetCurrentUserQueryHandler(_currentUserContext.Object);
+        var sut = new GetCurrentUserQueryRequestHandler(_currentUserContext.Object);
 
-        var result = await sut.Handle(new GetCurrentUserQuery(), CancellationToken.None);
+        var result = await sut.Handle(new GetCurrentUserQueryRequest(), CancellationToken.None);
 
         Assert.Equal(userId, result.UserId);
         Assert.Equal(tenantId, result.TenantId);
@@ -33,9 +33,9 @@ public sealed class GetCurrentUserQueryHandlerTests
         _currentUserContext.SetupGet(c => c.UserId).Returns((Guid?)null);
         _currentUserContext.SetupGet(c => c.TenantId).Returns((Guid?)null);
         _currentUserContext.SetupGet(c => c.Roles).Returns([]);
-        var sut = new GetCurrentUserQueryHandler(_currentUserContext.Object);
+        var sut = new GetCurrentUserQueryRequestHandler(_currentUserContext.Object);
 
-        var result = await sut.Handle(new GetCurrentUserQuery(), CancellationToken.None);
+        var result = await sut.Handle(new GetCurrentUserQueryRequest(), CancellationToken.None);
 
         Assert.Null(result.UserId);
         Assert.Null(result.TenantId);

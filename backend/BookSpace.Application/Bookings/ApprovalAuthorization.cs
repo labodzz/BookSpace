@@ -15,7 +15,7 @@ internal static class ApprovalAuthorization
     public static async Task EnsureCallerCanDecideAsync(
         Guid resourceId, IResourceApproverRepository resourceApproverRepository, ICurrentUserContext currentUserContext, CancellationToken cancellationToken)
     {
-        if (currentUserContext.Roles.Contains("TenantAdmin") || currentUserContext.Roles.Contains("SysAdmin"))
+        if (IsTenantAdminOrSysAdmin(currentUserContext))
         {
             return;
         }
@@ -33,4 +33,10 @@ internal static class ApprovalAuthorization
                 $"You are not an approver for resource {resourceId}.", ErrorCodes.BookingApprovalForbidden);
         }
     }
+
+    // Shared with CancelBookingCommandHandler's owner-or-TenantAdmin check, so the two role names can
+    // never drift out of sync between the two places a Bookings action bypasses an ownership/assignment
+    // check.
+    public static bool IsTenantAdminOrSysAdmin(ICurrentUserContext currentUserContext) =>
+        currentUserContext.Roles.Contains("TenantAdmin") || currentUserContext.Roles.Contains("SysAdmin");
 }

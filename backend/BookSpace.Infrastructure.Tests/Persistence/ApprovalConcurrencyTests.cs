@@ -166,14 +166,14 @@ public sealed class ApprovalConcurrencyTests : IAsyncLifetime
         Assert.Equal(1, committedDemand); // exactly the allowed capacity - no double-booking, no orphan row
     }
 
-    // RejectBookingCommandHandler deliberately does NOT acquire IResourceBookingLock (docs/recurring-
-    // bookings-and-approvals.md §7 - "moving OUT of Pending can only reduce demand, never invalidate the
-    // capacity invariant"), which is true for capacity. This test checks a DIFFERENT invariant that
-    // reasoning doesn't cover: can the SAME booking be decided twice by two different, simultaneous
-    // decisions (one Approve, one Reject) racing each other? Booking also has no RowVersion column (by
-    // design - see docs/optimistic-concurrency.md - Cancel's idempotency was the reason given). Approve
-    // is lock-protected; Reject is not - so unlike the Approve-vs-Approve test above, these two do not
-    // both funnel through the same serialization point.
+    // RejectBookingCommandHandler DOES acquire IResourceBookingLock, same as Approve - not for a
+    // capacity re-check (rejecting only ever reduces demand, which can never invalidate the capacity
+    // invariant - docs/recurring-bookings-and-approvals.md §5/§7), but because Booking has no
+    // RowVersion column (by design - see docs/optimistic-concurrency.md - Cancel's idempotency was the
+    // reason given), so without a shared serialization point two different, simultaneous decisions (one
+    // Approve, one Reject) racing on the SAME booking could both "succeed." This test proves exactly
+    // that race is closed: Approve and Reject both funnel through the same resource-scoped lock, so
+    // exactly one decision wins cleanly.
     [Fact]
     public async Task ConcurrentApproveAndRejectOnTheSameBooking_ExactlyOneDecisionWinsCleanly()
     {

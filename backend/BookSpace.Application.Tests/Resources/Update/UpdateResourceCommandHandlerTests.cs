@@ -81,7 +81,9 @@ public sealed class UpdateResourceCommandHandlerTests
         var sut = CreateSut();
         var request = new UpdateResourceCommandRequest(Guid.NewGuid(), Guid.NewGuid(), "Name", null, 1, false, "UTC", ResourceStatus.Active);
 
-        await Assert.ThrowsAsync<NotFoundException>(() => sut.Handle(request, CancellationToken.None));
+        var exception = await Assert.ThrowsAsync<NotFoundException>(() => sut.Handle(request, CancellationToken.None));
+
+        Assert.Equal(ErrorCodes.ResourceNotFound, exception.ErrorCode);
     }
 
     [Fact]
@@ -93,7 +95,9 @@ public sealed class UpdateResourceCommandHandlerTests
         var sut = CreateSut();
         var request = new UpdateResourceCommandRequest(resource.Id, Guid.NewGuid(), "Name", null, 1, false, "UTC", ResourceStatus.Active);
 
-        await Assert.ThrowsAsync<NotFoundException>(() => sut.Handle(request, CancellationToken.None));
+        var exception = await Assert.ThrowsAsync<NotFoundException>(() => sut.Handle(request, CancellationToken.None));
+
+        Assert.Equal(ErrorCodes.ResourceTypeNotFound, exception.ErrorCode);
     }
 
     [Fact]
@@ -106,7 +110,9 @@ public sealed class UpdateResourceCommandHandlerTests
         var sut = CreateSut();
         var request = new UpdateResourceCommandRequest(resource.Id, resource.ResourceTypeId, "Taken Name", null, 1, false, "UTC", ResourceStatus.Active);
 
-        await Assert.ThrowsAsync<ConflictException>(() => sut.Handle(request, CancellationToken.None));
+        var exception = await Assert.ThrowsAsync<ConflictException>(() => sut.Handle(request, CancellationToken.None));
+
+        Assert.Equal(ErrorCodes.ResourceNameConflict, exception.ErrorCode);
     }
 
     [Fact]

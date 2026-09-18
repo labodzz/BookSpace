@@ -70,6 +70,8 @@ public sealed class GetAvailabilityRulesQueryHandlerTests
         _resourceRepository.Setup(r => r.FindByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync((Resource?)null);
         var sut = CreateSut();
 
-        await Assert.ThrowsAsync<NotFoundException>(() => sut.Handle(new GetAvailabilityRulesQueryRequest(Guid.NewGuid()), CancellationToken.None));
+        var exception = await Assert.ThrowsAsync<NotFoundException>(() => sut.Handle(new GetAvailabilityRulesQueryRequest(Guid.NewGuid()), CancellationToken.None));
+
+        Assert.Equal(ErrorCodes.ResourceNotFound, exception.ErrorCode);
     }
 }

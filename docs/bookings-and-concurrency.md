@@ -33,15 +33,23 @@ A member can only ever create bookings in their own tenant (the parent `Resource
 tenant-filtered `IResourceRepository`, so a cross-tenant `ResourceId` simply isn't found - 404, not a
 403 that would confirm the resource exists), only ever list their own bookings
 (`GetOwnBookingsQueryRequest` has no `UserId` parameter to accept from the client at all - the repository
-call is always `GetOwnBookingsAsync(currentUserContext.UserId, ...)`), and only ever cancel their own
-booking (`CancelBookingCommandHandler` checks `booking.UserId == currentUserContext.UserId`, throwing
-`NotFoundException` - not `ConflictException`/403 - on a mismatch, so cancelling a booking that belongs
-to someone else looks identical to cancelling one that doesn't exist, matching this codebase's existing
-"never leak that another tenant's/user's row exists" convention).
+call is always `GetOwnBookingsAsync(currentUserContext.UserId, ...)`), and can cancel their own booking,
+or - as of the interim implementation below - a `TenantAdmin`/`SysAdmin` can cancel any booking in the
+tenant (`CancelBookingCommandHandler` checks `booking.UserId == currentUserContext.UserId` OR
+`ApprovalAuthorization.IsTenantAdminOrSysAdmin(currentUserContext)`, throwing `NotFoundException` - not
+`ConflictException`/403 - when neither holds, so cancelling a booking that belongs to someone else without
+the privileged role looks identical to cancelling one that doesn't exist, matching this codebase's
+existing "never leak that another tenant's/user's row exists" convention).
 
-There is no `TenantAdmin`-cancels-another-user's-booking capability. See
-[open-questions.md](open-questions.md#tenantadmin-cancellation-of-another-users-booking) - this is an
-open product question, not an oversight.
+A `TenantAdmin`/`SysAdmin` cancelling someone else's booking can supply an optional `reason`, recorded on
+`Booking.CancellationReason` alongside `CancelledByUserId` (the acting admin, not the booking's owner) -
+`GetOwnBookingsQueryRequest` surfaces these as `CancelledByAdmin`/`CancellationReason`/`CancelledAtUtc` so
+the owner can see who cancelled it and why in their own booking history. There is still no *active*
+notification (email/push/in-app) sent at cancellation time - that remains a genuinely open product
+question. See
+[open-questions.md](open-questions.md#tenantadmin-cancellation-of-another-users-booking--interim-implementation-notification-still-open)
+for the full writeup: this cancellation capability was implemented as a proposed interim middle ground,
+not a final product decision.
 
 ## 3. Interval semantics (reused, not reinvented)
 
@@ -103,7 +111,8 @@ proves the boundary: requesting exactly the remaining capacity succeeds, not jus
 
 ## 6. Cancellation semantics
 
-- Only the booking's own `UserId` may cancel it (see §2).
+- The booking's own `UserId`, or a `TenantAdmin`/`SysAdmin` acting on any booking in the tenant, may
+  cancel it (see §2).
 - Cancelling an already-`Cancelled` booking is **idempotent**: it returns the current state without
   writing again. This mirrors `DeleteResourceCommandHandler`'s existing Archive-idempotency pattern
   exactly, applied to the same "soft-terminal-state" shape.
@@ -300,7 +309,9 @@ All three were run five consecutive times during development with zero flaky fai
   creates is `Confirmed` regardless of that flag.
 - No idempotency-key support on `POST /bookings` - a client retrying a timed-out request could create a
   duplicate booking. See [open-questions.md](open-questions.md#idempotency).
-- No `TenantAdmin`-cancels-another-user's-booking capability (§2, §10).
+- `TenantAdmin`/`SysAdmin` can cancel another user's booking (§2), but there is still no *active*
+  notification (email/push/in-app) telling the affected owner it happened - only an audit trail visible
+  if/when they check their own booking history (§10).
 - Booking creation only accepts an already-UTC `DateTimeOffset` window (matching
   `CreateBlackoutPeriodCommandRequest`'s existing precedent), not a local wall-clock time - a client
   showing a resource's schedule in its own timezone must convert client-side using the same policy

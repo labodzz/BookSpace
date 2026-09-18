@@ -159,12 +159,12 @@ without a concrete client retry-behavior requirement to design against would be 
 
 ---
 
-## TenantAdmin Cancellation of Another User's Booking
+## TenantAdmin Cancellation of Another User's Booking — INTERIM IMPLEMENTATION, NOTIFICATION STILL OPEN
 
 **Question**: Can a `TenantAdmin` cancel another user's booking (e.g. to free a resource, or on that
 user's behalf), and if so, how is the affected user notified?
 
-**Context**: The Booking work packet explicitly implemented only member self-cancellation
+**Context**: The Booking work packet originally implemented only member self-cancellation
 (`booking.UserId == currentUserContext.UserId`, else `NotFoundException`) - see
 [bookings-and-concurrency.md](bookings-and-concurrency.md#2-ownership-and-tenant-isolation). This was a
 deliberate scope boundary, not an oversight: the work packet's own instructions called this out as an
@@ -180,12 +180,64 @@ channel currently available to do better.
 
 **Options**: (a) leave as member-only indefinitely; (b) add TenantAdmin override with no notification
 (cheap, but a bad experience); (c) add TenantAdmin override gated behind building a notification
-mechanism first.
+mechanism first; (d) add TenantAdmin override now with an audit trail (who cancelled it and why) recorded
+on the booking, but no *active* notification, as a middle ground between (b) and (c).
 
-**Trigger**: An explicit product requirement for admin-initiated cancellation.
+**Interim implementation (option (d))**: `TenantAdmin`/`SysAdmin` can now cancel any booking in their
+tenant via the same `DELETE /bookings/{id}` endpoint a member uses to cancel their own
+(`CancelBookingCommandHandler` - see
+[bookings-and-concurrency.md](bookings-and-concurrency.md#2-ownership-and-tenant-isolation)). An optional
+`reason` is stored on `Booking.CancellationReason`, and `CancelledByUserId` records the acting admin
+(already-existing columns, previously unpopulated by any handler). `GetOwnBookings` surfaces
+`CancelledByAdmin`/`CancellationReason`/`CancelledAtUtc` so the affected owner can see IN THEIR OWN
+BOOKING HISTORY that a booking was administratively cancelled, and why - instead of it silently
+vanishing with no trace. This deliberately stops short of resolving the question: there is still no
+*active* notification (no email, no in-app alert at cancellation time) telling the owner it happened -
+they only find out if and when they look. That remains genuinely open, and was implemented as a proposed
+middle ground pending product/mentor confirmation, not as a final decision - full notification (option
+(c)) is expected to follow as a separate, later work packet once notification infrastructure exists.
 
-**Current default**: (a) - no TenantAdmin override exists; a TenantAdmin has no more cancellation power
-over another user's booking than any other tenant member (i.e. none).
+**Trigger**: An explicit product requirement for *active* notification (email/push/in-app) at
+cancellation time - the interim audit-trail-only version above is already live.
+
+**Current default**: (d) - a `TenantAdmin`/`SysAdmin` can cancel any booking in their tenant, with the
+reason and acting admin recorded and visible to the owner in booking history, but with no active
+notification sent.
+
+---
+
+## SysAdmin Scope — Cross-Tenant Access
+
+**Question**: Is `SysAdmin` meant to be a cross-tenant, platform-level role (visibility/access across
+every tenant), or is it deliberately just a stronger role scoped to its own tenant, same as
+`TenantAdmin`?
+
+**Context**: Every access token carries exactly one `tenant_id` claim, set unconditionally from
+`user.TenantId` at issuance regardless of role - `SysAdmin` gets one exactly like `TenantAdmin` does
+(see [tenant-isolation.md](tenant-isolation.md#how-tenant-context-is-derived)). The global EF Core query
+filter (`entity.TenantId == currentUserContext.TenantId`) applies without exception, so today `SysAdmin`
+cannot see or act on another tenant's data at all - everywhere `SysAdmin` currently has elevated power
+(e.g. `ApprovalAuthorization.IsTenantAdminOrSysAdmin`, booking cancellation above), that power bypasses a
+per-resource/per-owner check *within* its own tenant, not a cross-tenant boundary.
+
+**Why it matters**: The name "SysAdmin" reads as a platform-wide operator role in most systems, which is
+a different shape of access than "a second TenantAdmin-equivalent." If real cross-tenant access is ever
+needed (e.g. platform support staff troubleshooting a customer's tenant), it requires deliberate design -
+a user with no single `tenant_id`, a way to pick/impersonate a tenant, and its own audit trail - not just
+attaching the role name to more `[Authorize]` checks that stay tenant-scoped underneath.
+
+**Options**: (a) leave `SysAdmin` exactly as-is - elevated, but still confined to its own tenant like
+`TenantAdmin`; (b) build genuine cross-tenant reach for `SysAdmin` (a token/claim shape not tied to one
+tenant, or an explicit tenant-switch mechanism), with its own tenant-isolation review since it would be a
+deliberate hole in the invariant every other role upholds; (c) rename the current role to something that
+doesn't imply platform-wide reach, and introduce a real cross-tenant role separately if and when it's
+needed.
+
+**Trigger**: A concrete need for a role that operates across tenants (platform support/operations,
+cross-tenant reporting, etc.).
+
+**Current default**: (a) - `SysAdmin` is elevated but tenant-scoped; no cross-tenant reach exists for any
+role today.
 
 ---
 

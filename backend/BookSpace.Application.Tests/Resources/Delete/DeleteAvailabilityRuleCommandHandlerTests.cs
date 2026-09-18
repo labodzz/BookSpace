@@ -32,8 +32,10 @@ public sealed class DeleteAvailabilityRuleCommandHandlerTests
         _availabilityRuleRepository.Setup(r => r.FindByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync((AvailabilityRule?)null);
         var sut = CreateSut();
 
-        await Assert.ThrowsAsync<NotFoundException>(() =>
+        var exception = await Assert.ThrowsAsync<NotFoundException>(() =>
             sut.Handle(new DeleteAvailabilityRuleCommandRequest(Guid.NewGuid(), Guid.NewGuid()), CancellationToken.None));
+
+        Assert.Equal(ErrorCodes.AvailabilityRuleNotFound, exception.ErrorCode);
     }
 
     [Fact]
@@ -43,9 +45,10 @@ public sealed class DeleteAvailabilityRuleCommandHandlerTests
         _availabilityRuleRepository.Setup(r => r.FindByIdAsync(rule.Id, It.IsAny<CancellationToken>())).ReturnsAsync(rule);
         var sut = CreateSut();
 
-        await Assert.ThrowsAsync<NotFoundException>(() =>
+        var exception = await Assert.ThrowsAsync<NotFoundException>(() =>
             sut.Handle(new DeleteAvailabilityRuleCommandRequest(Guid.NewGuid(), rule.Id), CancellationToken.None));
 
+        Assert.Equal(ErrorCodes.AvailabilityRuleNotFound, exception.ErrorCode);
         _availabilityRuleRepository.Verify(r => r.RemoveAsync(It.IsAny<AvailabilityRule>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 }

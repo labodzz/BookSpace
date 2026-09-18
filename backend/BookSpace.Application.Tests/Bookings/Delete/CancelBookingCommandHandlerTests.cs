@@ -62,6 +62,7 @@ public sealed class CancelBookingCommandHandlerTests
         var booking = CreateBooking();
         booking.UserId = Guid.NewGuid(); // a different user's booking
         _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
+        _currentUserContext.SetupGet(c => c.Roles).Returns([]); // a plain member, no admin override
         _bookingRepository.Setup(r => r.FindByIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking);
         var sut = CreateSut();
 
@@ -70,6 +71,79 @@ public sealed class CancelBookingCommandHandlerTests
 
         Assert.Equal(ErrorCodes.BookingNotFound, exception.ErrorCode);
         _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Handle_WithNonAdminRoleCancellingAnotherUsersBooking_ThrowsNotFoundException()
+    {
+        // Proves a role that's merely present (not empty, as in the test above) but not privileged still
+        // doesn't bypass the ownership check.
+        var booking = CreateBooking();
+        booking.UserId = Guid.NewGuid();
+        _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
+        _currentUserContext.SetupGet(c => c.Roles).Returns(["Member"]);
+        _bookingRepository.Setup(r => r.FindByIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking);
+        var sut = CreateSut();
+
+        var exception = await Assert.ThrowsAsync<NotFoundException>(() =>
+            sut.Handle(new CancelBookingCommandRequest(booking.Id), CancellationToken.None));
+
+        Assert.Equal(ErrorCodes.BookingNotFound, exception.ErrorCode);
+        _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData("TenantAdmin")]
+    [InlineData("SysAdmin")]
+    public async Task Handle_WithPrivilegedRoleCancellingAnotherUsersBooking_CancelsAndRecordsTheAdminAsCanceller(string role)
+    {
+        var adminUserId = Guid.NewGuid();
+        var booking = CreateBooking(BookingStatus.Confirmed); // owned by UserId, not adminUserId
+        _currentUserContext.SetupGet(c => c.UserId).Returns(adminUserId);
+        _currentUserContext.SetupGet(c => c.Roles).Returns([role]);
+        _bookingRepository.Setup(r => r.FindByIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(
+            new CancelBookingCommandRequest(booking.Id, Reason: "Freeing the resource for maintenance"), CancellationToken.None);
+
+        Assert.Equal(BookingStatus.Cancelled, result.Status);
+        Assert.Equal(adminUserId, booking.CancelledByUserId);
+        Assert.NotEqual(booking.UserId, booking.CancelledByUserId);
+        Assert.Equal("Freeing the resource for maintenance", booking.CancellationReason);
+        _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Handle_TenantAdminCancelRemainingSeriesTrue_AppliesTheSameReasonToCascadedOccurrences()
+    {
+        var adminUserId = Guid.NewGuid();
+        var seriesId = Guid.NewGuid();
+        var anchor = DateTimeOffset.UtcNow.AddDays(5);
+        var booking = CreateBooking();
+        booking.SeriesId = seriesId;
+        booking.StartUtc = anchor;
+        booking.EndUtc = anchor.AddHours(1);
+        var laterOccurrence = new Booking
+        {
+            Id = Guid.NewGuid(), TenantId = TenantId, ResourceId = booking.ResourceId, UserId = UserId, SeriesId = seriesId,
+            StartUtc = anchor.AddDays(1), EndUtc = anchor.AddDays(1).AddHours(1), Quantity = 1, Status = BookingStatus.Confirmed, CreatedAtUtc = anchor,
+        };
+
+        _currentUserContext.SetupGet(c => c.UserId).Returns(adminUserId);
+        _currentUserContext.SetupGet(c => c.Roles).Returns(["TenantAdmin"]);
+        _bookingRepository.Setup(r => r.FindByIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking);
+        _bookingRepository
+            .Setup(r => r.GetBySeriesIdAsync(seriesId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([booking, laterOccurrence]);
+        var sut = CreateSut();
+
+        await sut.Handle(
+            new CancelBookingCommandRequest(booking.Id, CancelRemainingSeries: true, Reason: "Resource decommissioned"), CancellationToken.None);
+
+        Assert.Equal("Resource decommissioned", booking.CancellationReason);
+        Assert.Equal("Resource decommissioned", laterOccurrence.CancellationReason);
+        Assert.Equal(adminUserId, laterOccurrence.CancelledByUserId);
     }
 
     [Fact]

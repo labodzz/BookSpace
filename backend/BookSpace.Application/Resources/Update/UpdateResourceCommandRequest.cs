@@ -65,24 +65,21 @@ public sealed class UpdateResourceCommandHandler(
     {
         // Fresh read, taken only after the lock is held - never a value computed before lock acquisition.
         var resource = await resourceRepository.FindByIdAsync(request.Id, cancellationToken)
-            ?? throw new NotFoundException($"Resource {request.Id} was not found.");
+            ?? throw new NotFoundException($"Resource {request.Id} was not found.", ErrorCodes.ResourceNotFound);
 
         // Archived is terminal: DeleteResourceCommand is the only way in, and there is deliberately no
         // way back out via a general-purpose field edit - a full field rewrite bundled with a status
         // flip would let Update silently "reactivate" a resource nobody asked to reactivate.
-        if (resource.Status == ResourceStatus.Archived)
-        {
-            throw new ConflictException($"Resource {request.Id} is archived and cannot be updated.");
-        }
+        ResourceGuard.EnsureNotArchived(resource);
 
         if (!await resourceRepository.ResourceTypeExistsAsync(request.ResourceTypeId, cancellationToken))
         {
-            throw new NotFoundException($"Resource type {request.ResourceTypeId} was not found.");
+            throw new NotFoundException($"Resource type {request.ResourceTypeId} was not found.", ErrorCodes.ResourceTypeNotFound);
         }
 
         if (await resourceRepository.ExistsByNameAsync(request.Name, excludingResourceId: request.Id, cancellationToken))
         {
-            throw new ConflictException($"A resource named '{request.Name}' already exists.");
+            throw new ConflictException($"A resource named '{request.Name}' already exists.", ErrorCodes.ResourceNameConflict);
         }
 
         if (request.Capacity < resource.Capacity)

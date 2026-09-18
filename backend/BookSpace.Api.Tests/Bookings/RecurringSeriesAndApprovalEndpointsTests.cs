@@ -20,7 +20,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
         DateOnly.FromDateTime(TestDataSeeder.AvailabilityAnchorUtc.UtcDateTime.AddDays(offsetDays));
 
     [Fact]
-    public async Task CreateRecurringSeries_WithAllOccurrencesValid_ReturnsOkWithEveryOccurrenceConfirmedAndNoConflicts()
+    public async Task CreateRecurringSeries_WithAllOccurrencesValid_ReturnsCreatedWithEveryOccurrenceConfirmedAndNoConflicts()
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
         var startDate = SeriesStartDate(30); // far from any seeded fixture window on AcmeResourceId
@@ -31,7 +31,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
             frequency = RecurrenceFrequency.Daily, interval = 1, endDate = (DateOnly?)null, occurrenceCount = 3, quantity = 1,
         });
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<CreateSeriesResponse>(JsonOptions);
         Assert.Equal(3, body!.RequestedOccurrenceCount);
         Assert.Equal(3, body.CreatedOccurrences.Count);
@@ -54,7 +54,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
             frequency = RecurrenceFrequency.Daily, interval = 1, endDate = (DateOnly?)null, occurrenceCount = 2, quantity = 1,
         });
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<CreateSeriesResponse>(JsonOptions);
         Assert.Equal(2, body!.RequestedOccurrenceCount);
         Assert.Single(body.CreatedOccurrences);
@@ -206,7 +206,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     }
 
     [Fact]
-    public async Task CreateBooking_ForResourceRequiringApproval_ReturnsOkWithPendingStatus()
+    public async Task CreateBooking_ForResourceRequiringApproval_ReturnsCreatedWithPendingStatus()
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
         var start = TestDataSeeder.AvailabilityAnchorUtc.AddHours(2).AddDays(60);
@@ -216,7 +216,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
             resourceId = TestDataSeeder.AcmeApprovalRequiredResourceId, startUtc = start, endUtc = start.AddHours(1), quantity = 1,
         });
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
         Assert.Equal(BookingStatus.Pending, body!.Status);
     }

@@ -21,7 +21,7 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
     private static DateTimeOffset AnchorPlusHours(int hours) => TestDataSeeder.AvailabilityAnchorUtc.AddHours(hours);
 
     [Fact]
-    public async Task CreateBooking_AsMember_WithAvailableSlot_ReturnsOkWithConfirmedBooking()
+    public async Task CreateBooking_AsMember_WithAvailableSlot_ReturnsCreatedWithConfirmedBooking()
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
         var start = AnchorPlusHours(1);
@@ -31,7 +31,7 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
             resourceId = TestDataSeeder.AcmeResourceId, startUtc = start, endUtc = start.AddHours(1), quantity = 1,
         });
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
         Assert.Equal(BookingStatus.Confirmed, body!.Status);
         Assert.Equal(TestDataSeeder.AcmeResourceId, body.ResourceId);
@@ -194,16 +194,36 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
     }
 
     [Fact]
-    public async Task CancelBooking_BelongingToAnotherUser_ReturnsNotFound()
+    public async Task CancelBooking_BelongingToAnotherUserWithNoAdminRole_ReturnsNotFound()
     {
         using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
-        using var adminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        // A plain Approver - some role, just not TenantAdmin/SysAdmin - to prove holding SOME role
+        // isn't enough to bypass ownership; only the privileged admin roles are (see the next test).
+        using var approverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
         var start = AnchorPlusHours(6);
         var created = await CreateBookingAsync(memberClient, TestDataSeeder.AcmeResourceId, start, start.AddHours(1));
 
-        var response = await adminClient.DeleteAsync($"/bookings/{created.Id}");
+        var response = await approverClient.DeleteAsync($"/bookings/{created.Id}");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    // TenantAdmin/SysAdmin override - see docs/open-questions.md, "TenantAdmin Cancellation of Another
+    // User's Booking." CancelledByUserId ends up as the admin, not the booking's own owner, which is
+    // exactly the signal GetOwnBookings' CancelledByAdmin flag is built on.
+    [Fact]
+    public async Task CancelBooking_AsTenantAdmin_ForAnotherUsersBooking_CancelsItWithAReason()
+    {
+        using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+        using var adminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var start = AnchorPlusHours(7);
+        var created = await CreateBookingAsync(memberClient, TestDataSeeder.AcmeResourceId, start, start.AddHours(1));
+
+        var response = await adminClient.DeleteAsync($"/bookings/{created.Id}?reason=Freeing%20the%20resource");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
+        Assert.Equal(BookingStatus.Cancelled, body!.Status);
     }
 
     // Tenant isolation on cancel: a Globex user can't even see an Acme booking exists, let alone cancel

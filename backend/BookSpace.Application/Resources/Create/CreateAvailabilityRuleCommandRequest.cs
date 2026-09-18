@@ -2,7 +2,6 @@ using BookSpace.Application.Common;
 using BookSpace.Application.Mediator;
 using BookSpace.Application.Security;
 using BookSpace.Domain.Entities;
-using BookSpace.Domain.Enums;
 using FluentValidation;
 
 namespace BookSpace.Application.Resources;
@@ -33,20 +32,17 @@ public sealed class CreateAvailabilityRuleCommandHandler(
     public async Task<CreateAvailabilityRuleResponse> Handle(CreateAvailabilityRuleCommandRequest request, CancellationToken cancellationToken)
     {
         var resource = await resourceRepository.FindByIdAsync(request.ResourceId, cancellationToken)
-            ?? throw new NotFoundException($"Resource {request.ResourceId} was not found.");
+            ?? throw new NotFoundException($"Resource {request.ResourceId} was not found.", ErrorCodes.ResourceNotFound);
 
         // Archived is terminal - configuring a schedule for a resource that's effectively deleted from
         // the caller's point of view would silently keep it half-alive. Maintenance is deliberately NOT
         // blocked here: it's temporary, and an admin may well want to adjust the schedule while it lasts.
-        if (resource.Status == ResourceStatus.Archived)
-        {
-            throw new ConflictException($"Resource {request.ResourceId} is archived and cannot be modified.");
-        }
+        ResourceGuard.EnsureNotArchived(resource);
 
         if (await availabilityRuleRepository.ExistsAsync(
                 request.ResourceId, request.DayOfWeek, request.StartTime, request.EndTime, cancellationToken))
         {
-            throw new ConflictException("An identical availability rule already exists for this resource.");
+            throw new ConflictException("An identical availability rule already exists for this resource.", ErrorCodes.AvailabilityRuleConflict);
         }
 
         var rule = new AvailabilityRule

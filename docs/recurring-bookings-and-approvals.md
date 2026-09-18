@@ -106,7 +106,8 @@ availability, blackout, capacity), excluding the booking's own row from the capa
 counted as active from `Pending` onward - see §6). If eligibility no longer holds, this throws *before
 any write* - the booking stays exactly `Pending`, never partially approved. `RejectBookingCommandHandler`
 needs no re-check at all: moving a booking **out** of `Pending` can only reduce demand, never invalidate
-anything.
+anything. This is not the same as needing no lock - Reject still acquires `IResourceBookingLock` for
+Approve-vs-Reject serialization, just not for a capacity re-check (see §7).
 
 **What can actually make a previously-eligible `Pending` booking ineligible by approval time?** Given
 `Pending` already fully reserves capacity identically to `Confirmed` from the moment of creation (§6),
@@ -134,7 +135,7 @@ a booking's Pending phase, not just after approval.
 | `CreateRecurringSeriesCommandHandler` | Yes (once, for the whole series) | Same reasoning, applied per-occurrence inside one lock acquisition - see §3. |
 | `UpdateResourceCommandHandler` (capacity reduction) | Yes | See §9 - closes a real race with concurrent booking creation. |
 | `ApproveBookingCommandHandler` | Yes | The re-check (§5) and the `Pending -> Confirmed` write must be atomic - see §8 for the subtle bug this surfaced. |
-| `RejectBookingCommandHandler` | No | Only ever reduces demand - can never invalidate the capacity invariant. |
+| `RejectBookingCommandHandler` | Yes | Not for capacity (rejecting only reduces demand) - to serialize against a concurrent `Approve` decision on the same booking. `Booking` has no `RowVersion`, so without the shared lock two racing Approve/Reject calls could both "succeed," leaving `Booking.Status`/`ApprovalRequest.Status` inconsistent. |
 | `CancelBookingCommandHandler` (single or cascade) | No | Same reasoning as Reject - removing bookings only ever reduces demand, series-wide or not. |
 
 No new locking mechanism was introduced. Every locked operation uses the exact same
@@ -252,13 +253,17 @@ it now overlaps, but the response always reports which currently-active bookings
 (`ConflictingBookingIds` on both `CreateBlackoutPeriodResponse` and `UpdateBlackoutPeriodResponse`) -
 nothing is ever silently lost.
 
-**Why not block creation**: nothing in this codebase today can force-cancel another user's booking (see
-[open-questions.md](open-questions.md#tenantadmin-cancellation-of-another-users-booking)) - blocking
-blackout creation whenever it overlaps an existing booking would create a dead end (a TenantAdmin needing
-to declare "the building has no power next Tuesday" could never do so if anyone already had so much as a
-5-minute booking that day, with no way to clear it). Surfacing the conflict and letting a human decide
-what to do about it is the only option that doesn't create that dead end, given today's other
-capabilities.
+**Why not block creation**: blackout creation itself never force-cancels a conflicting booking
+automatically - blocking blackout creation whenever it overlaps an existing booking would create a dead
+end (a TenantAdmin needing to declare "the building has no power next Tuesday" could never do so if
+anyone already had so much as a 5-minute booking that day, with no way to clear it). Surfacing the
+conflict and letting a human decide what to do about it is the only option that doesn't create that dead
+end. A TenantAdmin/SysAdmin can now follow up by manually cancelling the conflicting bookings listed in
+`ConflictingBookingIds` (`CancelBookingCommandHandler` - see
+[bookings-and-concurrency.md](bookings-and-concurrency.md#2-ownership-and-tenant-isolation)), but that's a
+separate, deliberate action, not something blackout creation does on its own; whether and how the
+affected owner is actively notified of either the blackout or a resulting cancellation remains open (see
+[open-questions.md](open-questions.md#tenantadmin-cancellation-of-another-users-booking--interim-implementation-notification-still-open)).
 
 Since every occurrence is materialized at series-creation time (§1), there is no "future occurrence not
 yet materialized" case to treat differently from an ordinary one-off booking - the exact same overlap
