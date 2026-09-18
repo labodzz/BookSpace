@@ -1,7 +1,7 @@
 import { HttpClient, HttpErrorResponse, provideHttpClient, withInterceptors } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
-import { provideRouter } from '@angular/router';
+import { Router, provideRouter } from '@angular/router';
 import { of, throwError } from 'rxjs';
 import { authInterceptor, isApiRequest } from './auth.interceptor';
 import { AuthService } from '../auth/auth.service';
@@ -107,13 +107,14 @@ describe('authInterceptor', () => {
     expect(result).toEqual({ ok: true });
   });
 
-  it('clears the expired session and redirects to /login when the backend confirms the refresh token is invalid (401)', () => {
+  // AuthService.refreshAccessToken() now tears its own state down internally on a confirmed 401 (see
+  // auth.service.spec.ts) - the interceptor's own job here is purely the UI reaction, navigating away.
+  it('redirects to /login when the backend confirms the refresh token is invalid (401)', () => {
     const refreshAccessToken = vi
       .fn()
       .mockReturnValue(throwError(() => new HttpErrorResponse({ status: 401, statusText: 'Unauthorized' })));
-    const clearExpiredSession = vi.fn();
     (authService as unknown as { refreshAccessToken: typeof refreshAccessToken }).refreshAccessToken = refreshAccessToken;
-    (authService as unknown as { clearExpiredSession: typeof clearExpiredSession }).clearExpiredSession = clearExpiredSession;
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate');
 
     let errored = false;
     httpClient.get(`${environment.apiUrl}/bookings`).subscribe({ error: () => (errored = true) });
@@ -122,7 +123,7 @@ describe('authInterceptor', () => {
     firstAttempt.flush('unauthorized', { status: 401, statusText: 'Unauthorized' });
 
     expect(refreshAccessToken).toHaveBeenCalledOnce();
-    expect(clearExpiredSession).toHaveBeenCalledOnce();
+    expect(navigate).toHaveBeenCalledWith(['/login'], { queryParams: { sessionExpired: true } });
     expect(errored).toBe(true);
     httpTesting.expectNone(`${environment.apiUrl}/bookings`);
   });
@@ -130,14 +131,13 @@ describe('authInterceptor', () => {
   // The scenario this guards against: a refresh can fail for reasons that say nothing about whether the
   // session itself is still good - a network error, a 5xx, or (see AuthService.refreshAccessToken) this
   // call being torn down after losing a cross-tab race. None of those are "the backend rejected this
-  // token," so none of them should wipe the user's local session out from under them.
-  it('does not clear the session on a non-401 refresh failure (network error, 5xx, or a lost race)', () => {
+  // token," so none of them should redirect the user away.
+  it('does not redirect on a non-401 refresh failure (network error, 5xx, or a lost race)', () => {
     const refreshAccessToken = vi
       .fn()
       .mockReturnValue(throwError(() => new HttpErrorResponse({ status: 0, statusText: 'Unknown Error' })));
-    const clearExpiredSession = vi.fn();
     (authService as unknown as { refreshAccessToken: typeof refreshAccessToken }).refreshAccessToken = refreshAccessToken;
-    (authService as unknown as { clearExpiredSession: typeof clearExpiredSession }).clearExpiredSession = clearExpiredSession;
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate');
 
     let errored = false;
     httpClient.get(`${environment.apiUrl}/bookings`).subscribe({ error: () => (errored = true) });
@@ -146,7 +146,7 @@ describe('authInterceptor', () => {
     firstAttempt.flush('unauthorized', { status: 401, statusText: 'Unauthorized' });
 
     expect(refreshAccessToken).toHaveBeenCalledOnce();
-    expect(clearExpiredSession).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
     expect(errored).toBe(true);
   });
 });

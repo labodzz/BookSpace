@@ -121,31 +121,38 @@ describe('AuthService', () => {
     expect(service.currentAccessToken()).toBe(rotatedByOtherTab.accessToken);
   });
 
-  it('clears storage in clearExpiredSession() when nothing newer has replaced the rejected token', () => {
-    service.clearExpiredSession();
+  it('clears the session when the backend confirms the attempted refresh token is invalid (401)', async () => {
+    const attempt = firstValueFrom(service.refreshAccessToken());
+    httpTesting.expectOne(`${environment.apiUrl}/auth/refresh`).flush('unauthorized', { status: 401, statusText: 'Unauthorized' });
 
+    await expect(attempt).rejects.toBeTruthy();
     expect(service.isAuthenticated()).toBe(false);
     expect(localStorage.getItem('bookspace.accessToken')).toBeNull();
   });
 
-  // A losing tab's own rejected refresh says nothing bad about a DIFFERENT, currently-active session a
-  // sibling tab may have just written to the same shared storage - wiping it here would only surface
-  // later (a reload, a new tab) as an inexplicable logout of a session that was never actually revoked.
-  it('does not clear storage in clearExpiredSession() if a newer session already landed there', () => {
+  // The scenario this guards against (see AuthService.clearExpiredSession): a sibling tab's concurrent,
+  // successful refresh gets broadcast and adopted here WHILE this tab's own now-doomed request (using
+  // the OLD, pre-race token) is still in flight. When that old request's rejection finally arrives, it
+  // must be recognized as stale - not treated as "the current session is invalid" - and must not tear
+  // down the newer session that already replaced it, in memory or in storage.
+  it('does not clear the session if a sibling tab already broadcast a newer one before this refresh was rejected', async () => {
+    const attempt = firstValueFrom(service.refreshAccessToken());
+    const refreshRequest = httpTesting.expectOne(`${environment.apiUrl}/auth/refresh`);
+
     const rotatedByOtherTab: AuthTokens = {
       accessToken: 'access-from-other-tab',
       accessTokenExpiresAtUtc: new Date(Date.now() + 60_000).toISOString(),
       refreshToken: 'refresh-from-other-tab',
       refreshTokenExpiresAtUtc: new Date(Date.now() + 86_400_000).toISOString(),
     };
-    TestBed.inject(TokenStorageService).save(rotatedByOtherTab, true);
+    const channel = (service as unknown as AuthServiceInternals).broadcastChannel!;
+    channel.onmessage!({ data: { type: 'tokens-updated', tokens: rotatedByOtherTab } } as MessageEvent);
 
-    service.clearExpiredSession();
+    refreshRequest.flush('unauthorized', { status: 401, statusText: 'Unauthorized' });
 
+    await expect(attempt).rejects.toBeTruthy();
+    expect(service.currentAccessToken()).toBe(rotatedByOtherTab.accessToken);
     expect(localStorage.getItem('bookspace.accessToken')).toBe(rotatedByOtherTab.accessToken);
-    // This tab's own in-memory session is still torn down - it just didn't get to take the shared
-    // storage down with it.
-    expect(service.isAuthenticated()).toBe(false);
   });
 
   // jsdom (this test's environment) doesn't implement navigator.locks, so refreshAccessToken normally
@@ -194,9 +201,9 @@ describe('AuthService', () => {
 
   // The scenario this guards against: without navigator.locks (older browsers, or this test simulating
   // that), two tabs sharing the same refresh token can both attempt to refresh at once. One wins at the
-  // backend's RowVersion check; the other gets a 401 and (per the interceptor) calls
-  // clearExpiredSession() - never logout(), so nothing is broadcast - meaning the winning tab's session
-  // must be completely unaffected by the loser's failure.
+  // backend's RowVersion check; the other gets a 401 and internally tears down only its own state (see
+  // AuthService.clearExpiredSession) - it never calls the server-hitting logout(), so nothing is
+  // broadcast - meaning the winning tab's session must be completely unaffected by the loser's failure.
   it('does not let a losing tab without navigator.locks log out the winning tab', () => {
     delete (navigator as unknown as { locks?: unknown }).locks;
 
@@ -212,7 +219,7 @@ describe('AuthService', () => {
     // re-sync check instead of ever reaching the network, which is correct behavior but would not
     // exercise the "backend already rejected it" path this test is specifically about.
     service.refreshAccessToken().subscribe();
-    tabB.refreshAccessToken().subscribe({ error: () => tabB.clearExpiredSession() });
+    tabB.refreshAccessToken().subscribe({ error: () => undefined });
 
     // Tab A wins the race.
     const winningTokens: AuthTokens = {
@@ -223,15 +230,14 @@ describe('AuthService', () => {
     };
     httpTesting.expectOne(`${environment.apiUrl}/auth/refresh`).flush(winningTokens);
 
-    // Tab B loses: the backend sees its token already rotated and returns 401. The interceptor would
-    // react with clearExpiredSession(), not logout() - simulated directly here since this test targets
-    // AuthService, not the interceptor (already covered in auth.interceptor.spec.ts).
+    // Tab B loses: the backend sees its token already rotated and returns 401, which internally clears
+    // only Tab B's own state (see AuthService.clearExpiredSession) - never the server-hitting logout().
     tabBHttpTesting.expectOne(`${environment.apiUrl}/auth/refresh`).flush('unauthorized', { status: 401, statusText: 'Unauthorized' });
 
     expect(service.isAuthenticated()).toBe(true);
     expect(service.currentAccessToken()).toBe(winningTokens.accessToken);
-    // Tab B's clearExpiredSession() must not have wiped the shared storage Tab A just wrote its
-    // (currently valid) session into - only Tab B's own stale copy of the old token is gone.
+    // Tab B's internal cleanup must not have wiped the shared storage Tab A just wrote its (currently
+    // valid) session into - only Tab B's own stale copy of the old token is gone.
     expect(localStorage.getItem('bookspace.accessToken')).toBe(winningTokens.accessToken);
 
     tabBHttpTesting.verify();
@@ -259,7 +265,11 @@ describe('AuthService', () => {
     expect(localStorage.getItem('bookspace.accessToken')).toBeNull();
   });
 
-  it('adopts tokens broadcast by another tab that just rotated them', () => {
+  // sessionStorage is per-tab, not shared like localStorage - if this tab were on a session-only login,
+  // a broadcast that updated only the in-memory signal (not storage) would leave a stale token sitting
+  // in this tab's own storage, which performRefresh's re-sync check could later mistake for "someone
+  // else's newer" value and wrongly revert to. Persisting on receipt closes that gap.
+  it('adopts tokens broadcast by another tab and persists them to this tab’s own storage', () => {
     const rotatedByOtherTab: AuthTokens = {
       accessToken: 'access-from-other-tab',
       accessTokenExpiresAtUtc: new Date(Date.now() + 60_000).toISOString(),
@@ -272,5 +282,6 @@ describe('AuthService', () => {
 
     expect(service.currentAccessToken()).toBe(rotatedByOtherTab.accessToken);
     expect(service.isAuthenticated()).toBe(true);
+    expect(localStorage.getItem('bookspace.accessToken')).toBe(rotatedByOtherTab.accessToken);
   });
 });

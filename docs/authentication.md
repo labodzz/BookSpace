@@ -112,8 +112,9 @@ backend catching it.
 
 ## Cross-tab refresh coordination
 
-Browser tabs of the same origin share one `localStorage`/`sessionStorage` and, before this fix, each ran
-its own independent copy of `AuthService` with no awareness of the others. Two tabs idle past the access
+Browser tabs of the same origin share one `localStorage`, but each tab has its OWN `sessionStorage` -
+before this fix, each tab also ran its own independent copy of `AuthService` with no awareness of the
+others. Two tabs idle past the access
 token's 15-minute lifetime and then both making a request at once would both hit 401 and both call
 `refreshAccessToken()` - a real race against the *same* refresh token, with only one winner at the
 backend's `RowVersion` check (see "Actual reuse vs. a concurrent legitimate race" above). The loser's
@@ -136,17 +137,23 @@ client, with `RowVersion` kept as the last-resort backend safety net rather than
 A `BroadcastChannel('bookspace-auth')` closes the remaining gap: the tab that actually performs a refresh
 posts the new tokens to every other tab immediately (so they update their in-memory state without waiting
 to be caught out by a stale access token first), and an explicit `logout()` posts a "logged out" message
-so every other tab ends its session too, instead of only the tab the user actually clicked in.
+so every other tab ends its session too, instead of only the tab the user actually clicked in. A receiving
+tab persists a `tokens-updated` broadcast into its OWN active storage, not just its in-memory signal -
+`sessionStorage` isn't shared, so without this a session-only tab would keep a stale copy that the
+storage re-sync check above could later mistake for "someone else's newer" value and wrongly revert to.
 
 Without `navigator.locks` (or in the narrow window before a `BroadcastChannel` message arrives), a losing
 tab's own refresh can still be rejected by the backend at the same moment a sibling tab's concurrent
-refresh wins and writes a fresh session to the same shared storage. `clearExpiredSession()` therefore
-re-reads storage before clearing it, and only wipes it if nothing newer has landed there since - otherwise
-it would silently destroy a sibling tab's still-good, currently-active session the next time it's read
-from storage (a reload, a new tab), even though that tab's own in-memory state was never touched.
-`logout()` has no equivalent check: it always clears storage unconditionally, because an explicit logout
-(and a "logged out" broadcast received from another tab) means the whole family was just revoked
-server-side - there is no "newer session" left to protect at that point.
+refresh wins. `clearExpiredSession(rejectedRefreshToken)` therefore takes the *specific* token that
+attempt used - not "whatever the signal currently holds" - and no-ops entirely (leaving both memory and
+storage untouched) if that token is no longer the current one. This distinction matters because a
+sibling tab's broadcast can arrive and update this tab's in-memory signal WHILE its own now-doomed request
+is still in flight, using the old token; reading "current" state at the moment the rejection resolves would
+see the sibling's newer session and wrongly tear it down - reading the token that was actually attempted,
+captured once before the request was even sent, is immune to that. `logout()` has no equivalent check: it
+always clears unconditionally, because an explicit logout (and a "logged out" broadcast received from
+another tab) means the whole family was just revoked server-side - there is no "newer session" left to
+protect at that point.
 
 ## Deferred session-management decisions
 
