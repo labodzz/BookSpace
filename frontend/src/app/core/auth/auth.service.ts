@@ -73,10 +73,16 @@ export class AuthService {
   // expired minutes ago but whose refresh token is still valid is still a valid session - the
   // interceptor refreshes it transparently on the next request. Route guards need to know "can this
   // session still be revived," not "is the current access token still valid right now."
-  readonly isAuthenticated = computed(() => {
+  //
+  // A plain method, not a computed signal: Angular only reruns a computed when one of the SIGNALS it
+  // read last time changes, and `Date.now()` is not a signal. A computed here would evaluate once,
+  // cache `true`, and keep returning that cached `true` forever afterward - even once the refresh token
+  // has since expired - because nothing ever marks it dirty again. Route guards call this on every
+  // navigation, so it must read the current time fresh each time instead of trusting a stale cache.
+  isAuthenticated(): boolean {
     const tokens = this.tokens();
     return tokens !== null && new Date(tokens.refreshTokenExpiresAtUtc).getTime() > Date.now();
-  });
+  }
 
   // Client-side only - purely for showing/hiding UI (nav links, action buttons, route guards). The API
   // re-enforces every one of these roles server-side on the actual endpoints, so this can never become
@@ -178,12 +184,21 @@ export class AuthService {
       return this.refreshInFlight$;
     }
 
+    // finalize() must sit BEFORE shareReplay(1), not after: shareReplay subscribes to its source only
+    // ONCE (on the first subscriber) and keeps that single inner subscription alive independent of how
+    // many external subscribers come and go, so a finalize() placed here runs exactly once, when the
+    // shared refresh itself completes/errors (or is torn down by loggedOut$) - never when just one of
+    // possibly several callers unsubscribes early. Putting finalize() AFTER shareReplay instead would
+    // attach a separate finalize to every external subscription, so the FIRST subscriber to unsubscribe
+    // (e.g. a component destroyed mid-request) would clear refreshInFlight$ while the real HTTP refresh
+    // is still in flight for everyone else, letting a concurrent caller start a second, redundant
+    // refresh against the same still-valid refresh token.
     const request$ = from(this.refreshWithCrossTabLock()).pipe(
       takeUntil(this.loggedOut$),
-      shareReplay(1),
       finalize(() => {
         this.refreshInFlight$ = null;
       }),
+      shareReplay(1),
     );
 
     this.refreshInFlight$ = request$;

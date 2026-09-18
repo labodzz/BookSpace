@@ -21,6 +21,12 @@ public interface IBookingRepository
     // seriesId, when given, narrows to that recurring series' own occurrences only. fromUtc/toUtc, when
     // given, narrow to bookings overlapping that range - added for the frontend calendar, which must be
     // able to ask for "just this visible month" instead of paging through a user's entire booking history.
+    // Ordered by CreatedAtUtc descending (then Id descending as a deterministic tiebreaker) - most
+    // RECENTLY REQUESTED first, not soonest-starting first. This is what the My Bookings list wants, and
+    // it's a page-order-only concern: both frontend consumers that paginate through fromUtc/toUtc
+    // (Calendar, the dashboard's upcoming-bookings widget) fetch every page in range and re-sort the
+    // union by StartUtc themselves, so this ordering is invisible to them outside of pathological
+    // truncation.
     Task<PagedResult<Booking>> GetOwnBookingsAsync(
         Guid userId, Guid? seriesId, DateTimeOffset? fromUtc, DateTimeOffset? toUtc, int page, int pageSize, CancellationToken cancellationToken);
 

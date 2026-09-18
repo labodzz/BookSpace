@@ -9,7 +9,7 @@
 
   <div class="dashboard-stats">
     <div class="card stat-card">
-      <span class="stat-card__value">{{ upcomingCount() }}</span>
+      <span class="stat-card__value">{{ upcomingCount() }}{{ upcomingCountTruncated() ? '+' : '' }}</span>
       <span class="stat-card__label">Upcoming bookings</span>
     </div>
     <div class="card stat-card">

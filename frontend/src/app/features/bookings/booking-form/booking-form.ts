@@ -10,6 +10,7 @@ import { ResourceSummary } from '../../resources/resource.models';
 import { ResourceService } from '../../resources/resource.service';
 import { resolveLuxonZone } from '../../resources/timezone.util';
 import { BookingService } from '../booking.service';
+import { parseStrictLocalDateTime } from '../local-time.util';
 
 // Friendlier copy than the raw ProblemDetails.detail for the specific conflicts CreateBookingCommandRequest
 // can throw - falls back to apiError.detail/title for anything not in this map.
@@ -83,11 +84,15 @@ export class BookingFormComponent {
     }
 
     const zone = resolveLuxonZone(resource.timeZoneId);
-    const start = DateTime.fromISO(`${this.date()}T${this.startTime()}`, { zone });
-    const end = DateTime.fromISO(`${this.date()}T${this.endTime()}`, { zone });
+    const start = parseStrictLocalDateTime(`${this.date()}T${this.startTime()}`, zone);
+    const end = parseStrictLocalDateTime(`${this.date()}T${this.endTime()}`, zone);
 
-    if (!start.isValid || !end.isValid) {
-      this.formError.set('That date and time combination is not valid.');
+    if (!start || !end) {
+      // Most likely cause of a null here: a spring-forward daylight-saving change means this exact
+      // wall-clock time never happened in the resource's timezone - see parseStrictLocalDateTime.
+      this.formError.set(
+        "That date and time doesn't exist in this resource's timezone (likely a daylight-saving time change). Please choose a different time.",
+      );
       return;
     }
     if (end <= start) {

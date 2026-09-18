@@ -1,3 +1,10 @@
+// The outer page container - always full width, so the shell's content area never shows unused space
+// beside a narrow card. The card itself keeps a readable max-width inside it.
+.resource-detail-page {
+  display: block;
+  width: 100%;
+}
+
 .resource-detail {
   display: flex;
   flex-direction: column;

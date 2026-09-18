@@ -4,7 +4,7 @@ import { DateTime } from 'luxon';
 import { Subject, catchError, finalize, of, switchMap, tap } from 'rxjs';
 import { ApiError, toApiError } from '../../core/http/api-error';
 import { BookingService } from '../bookings/booking.service';
-import { OwnBooking } from '../bookings/booking.models';
+import { OwnBooking, RangeBookingsResult } from '../bookings/booking.models';
 
 interface CalendarRange {
   fromUtc: DateTime;
@@ -19,12 +19,16 @@ interface CalendarRange {
 @Injectable({ providedIn: 'root' })
 export class CalendarService {
   private readonly bookingService = inject(BookingService);
-  private readonly cache = new Map<string, OwnBooking[]>();
+  private readonly cache = new Map<string, RangeBookingsResult>();
   private readonly rangeRequests = new Subject<CalendarRange>();
 
   readonly bookings = signal<OwnBooking[]>([]);
   readonly loading = signal(false);
   readonly error = signal<ApiError | null>(null);
+  // True when the visible range has more bookings than getOwnBookingsInRange's safety cap allows to be
+  // fetched - `bookings` then holds only the first slice, not the whole range, and the UI must say so
+  // rather than presenting it as complete.
+  readonly truncated = signal(false);
 
   constructor() {
     this.rangeRequests
@@ -40,16 +44,19 @@ export class CalendarService {
           this.loading.set(true);
           this.error.set(null);
           return this.bookingService.getOwnBookingsInRange(range.fromUtc.toUTC().toISO()!, range.toUtc.toUTC().toISO()!).pipe(
-            tap((items) => this.cache.set(key, items)),
+            tap((result) => this.cache.set(key, result)),
             catchError((err: unknown) => {
               this.error.set(err instanceof HttpErrorResponse ? toApiError(err) : { status: 0, title: 'Something went wrong.' });
-              return of<OwnBooking[]>([]);
+              return of<RangeBookingsResult>({ items: [], truncated: false });
             }),
             finalize(() => this.loading.set(false)),
           );
         }),
       )
-      .subscribe((items) => this.bookings.set(items));
+      .subscribe((result) => {
+        this.bookings.set(result.items);
+        this.truncated.set(result.truncated);
+      });
   }
 
   loadRange(fromUtc: DateTime, toUtc: DateTime): void {

@@ -118,6 +118,86 @@ describe('BookingFormComponent', () => {
     expect(root.textContent).toContain('Quantity must be at least 1.');
   });
 
+  // America/New_York springs forward on 2027-03-14: clocks jump from 2:00 to 3:00, so every wall-clock
+  // time in [2:00, 3:00) that day never happens. Luxon silently normalizes it instead of marking it
+  // invalid (see local-time.util.ts), so the form must catch this itself via a round-trip check.
+  it('rejects a start time that does not exist because of a spring-forward daylight-saving change', () => {
+    setup({ resourceId: 'resource-1' });
+    flushResource({ timeZoneId: 'America/New_York' });
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    setInputValue(root.querySelector('#date')!, '2027-03-14');
+    setInputValue(root.querySelector('#start-time')!, '02:30');
+    setInputValue(root.querySelector('#end-time')!, '04:00');
+    root.querySelector('form')!.dispatchEvent(new Event('submit'));
+    fixture.detectChanges();
+
+    httpTesting.expectNone((r) => r.url === BOOKINGS_URL);
+    expect(root.textContent).toContain('daylight-saving time change');
+  });
+
+  // America/New_York falls back on 2027-11-07: clocks go from 2:00 to 1:00, so 1:30 AM happens twice.
+  // Both occurrences are real, valid instants - this must submit normally, not be rejected the way a
+  // nonexistent spring-forward time is.
+  it('accepts an ambiguous fall-back local time and submits normally', () => {
+    setup({ resourceId: 'resource-1' });
+    flushResource({ timeZoneId: 'America/New_York' });
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    setInputValue(root.querySelector('#date')!, '2027-11-07');
+    setInputValue(root.querySelector('#start-time')!, '01:30');
+    setInputValue(root.querySelector('#end-time')!, '03:00');
+    root.querySelector('form')!.dispatchEvent(new Event('submit'));
+
+    // 01:30 America/New_York on the fall-back day resolves to the offset in effect just BEFORE the
+    // transition (EDT, -04:00) - 05:30 UTC.
+    const req = httpTesting.expectOne((r) => r.url === BOOKINGS_URL);
+    expect(req.request.body.startUtc).toBe('2027-11-07T05:30:00.000Z');
+    req.flush({ id: 'booking-1', resourceId: 'resource-1', startUtc: req.request.body.startUtc, endUtc: req.request.body.endUtc, quantity: 1, status: 1 });
+  });
+
+  // A resource's configured timezone differs from whatever zone the test runner's own clock is in -
+  // the conversion to UTC must still go through the RESOURCE's zone, not the browser's.
+  it('converts local input to UTC using the resource timezone, not the browser timezone', () => {
+    setup({ resourceId: 'resource-1' });
+    flushResource({ timeZoneId: 'America/New_York' });
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    fillValidFutureBooking(root);
+    root.querySelector('form')!.dispatchEvent(new Event('submit'));
+
+    // 2026-12-20 is standard time in America/New_York (EST, -05:00) - 10:00 local is 15:00 UTC.
+    const req = httpTesting.expectOne((r) => r.url === BOOKINGS_URL);
+    expect(req.request.body.startUtc).toBe('2026-12-20T15:00:00.000Z');
+    req.flush({ id: 'booking-1', resourceId: 'resource-1', startUtc: req.request.body.startUtc, endUtc: req.request.body.endUtc, quantity: 1, status: 1 });
+  });
+
+  // An unrecognized/unmapped timeZoneId falls back to the viewer's own local zone (resolveLuxonZone) -
+  // submission must still work rather than crash or silently produce an "Invalid DateTime".
+  it('still submits using the local zone fallback when the resource timezone is unmapped', () => {
+    setup({ resourceId: 'resource-1' });
+    flushResource({ timeZoneId: 'Nonsense/Zone' });
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    fillValidFutureBooking(root);
+    root.querySelector('form')!.dispatchEvent(new Event('submit'));
+
+    httpTesting.expectOne((r) => r.url === BOOKINGS_URL).flush({
+      id: 'booking-1',
+      resourceId: 'resource-1',
+      startUtc: '2026-12-20T10:00:00.000Z',
+      endUtc: '2026-12-20T11:00:00.000Z',
+      quantity: 1,
+      status: 1,
+    });
+
+    expect(router.navigate).toHaveBeenCalledWith(['/bookings']);
+  });
+
   it('maps a known conflict error code to a friendly inline message', () => {
     setup({ resourceId: 'resource-1' });
     flushResource();

@@ -46,8 +46,16 @@ internal sealed class BookingRepository(BookSpaceDbContext dbContext) : IBooking
             }
 
             var totalCount = await query.CountAsync(cancellationToken);
+            // Ordered by when the request was MADE (CreatedAtUtc), not by the booking's own start time -
+            // "most recent request" and "starts soonest" are unrelated: an old booking for next month and
+            // a booking made five seconds ago for tomorrow are not orderable by StartUtc alone. Id is a
+            // deterministic tiebreaker for the (rare, but possible at typical timestamp precision)
+            // case of two requests recording the same CreatedAtUtc - without it, paging could show the
+            // same tied row twice or skip it, since relational ORDER BY is not guaranteed stable across
+            // otherwise-equal keys.
             var items = await query
-                .OrderByDescending(booking => booking.StartUtc)
+                .OrderByDescending(booking => booking.CreatedAtUtc)
+                .ThenByDescending(booking => booking.Id)
                 .Skip((page - 1) * pageSize)
                 .Take(pageSize)
                 .ToListAsync(cancellationToken);
@@ -60,7 +68,8 @@ internal sealed class BookingRepository(BookSpaceDbContext dbContext) : IBooking
             .Where(booking => toUtc is not { } to || booking.StartUtc < to)
             .ToList();
         var pagedItems = rangeFiltered
-            .OrderByDescending(booking => booking.StartUtc)
+            .OrderByDescending(booking => booking.CreatedAtUtc)
+            .ThenByDescending(booking => booking.Id)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
             .ToList();

@@ -284,4 +284,143 @@ describe('AuthService', () => {
     expect(service.isAuthenticated()).toBe(true);
     expect(localStorage.getItem('bookspace.accessToken')).toBe(rotatedByOtherTab.accessToken);
   });
+
+  // isAuthenticated() must read the CURRENT time on every call, never a value cached from whenever the
+  // `tokens` signal itself last changed - see auth.service.ts for why a `computed` here would go stale.
+  // Each test builds its own AuthService instance (rather than reusing `service` from the outer
+  // beforeEach) because the tokens signal is seeded once, synchronously, from storage in the
+  // constructor - the session under test has to already be in storage before that runs.
+  describe('isAuthenticated freshness against the passage of time', () => {
+    function createServiceWithTokens(tokens: AuthTokens): AuthService {
+      TestBed.inject(TokenStorageService).save(tokens, true);
+      const injector = createEnvironmentInjector([], TestBed.inject(EnvironmentInjector));
+      return runInInjectionContext(injector, () => new AuthService());
+    }
+
+    afterEach(() => vi.useRealTimers());
+
+    it('is authenticated initially, then stops being authenticated once real time passes the refresh token expiry - without the tokens signal ever changing', () => {
+      const soonToExpire: AuthTokens = {
+        accessToken: 'access-1',
+        accessTokenExpiresAtUtc: new Date(Date.now() + 1_000).toISOString(),
+        refreshToken: 'refresh-1',
+        refreshTokenExpiresAtUtc: new Date(Date.now() + 5_000).toISOString(),
+      };
+      const fresh = createServiceWithTokens(soonToExpire);
+
+      expect(fresh.isAuthenticated()).toBe(true);
+
+      // Advances the clock without touching `fresh`'s tokens signal at all - a `computed` keyed only on
+      // that signal would keep returning its stale cached `true` here instead of re-evaluating.
+      vi.setSystemTime(Date.now() + 10_000);
+
+      expect(fresh.isAuthenticated()).toBe(false);
+    });
+
+    it('treats a session with an expired access token but a still-valid refresh token as authenticated (refreshable)', () => {
+      const expiredAccessOnly: AuthTokens = {
+        accessToken: 'access-1',
+        accessTokenExpiresAtUtc: new Date(Date.now() - 1_000).toISOString(),
+        refreshToken: 'refresh-1',
+        refreshTokenExpiresAtUtc: new Date(Date.now() + 86_400_000).toISOString(),
+      };
+      const fresh = createServiceWithTokens(expiredAccessOnly);
+
+      expect(fresh.isAuthenticated()).toBe(true);
+    });
+
+    it('treats a session whose refresh token has also expired as not authenticated', () => {
+      const fullyExpired: AuthTokens = {
+        accessToken: 'access-1',
+        accessTokenExpiresAtUtc: new Date(Date.now() - 60_000).toISOString(),
+        refreshToken: 'refresh-1',
+        refreshTokenExpiresAtUtc: new Date(Date.now() - 1_000).toISOString(),
+      };
+      const fresh = createServiceWithTokens(fullyExpired);
+
+      expect(fresh.isAuthenticated()).toBe(false);
+    });
+  });
+
+  // refreshInFlight$ dedup: finalize() must clear the in-flight flag only when the SHARED refresh
+  // itself terminates, never when just one of several concurrent callers unsubscribes early - see
+  // auth.service.ts for why finalize() has to sit before, not after, shareReplay(1).
+  describe('refreshInFlight$ dedup under partial unsubscription', () => {
+    it('keeps sharing the one in-flight HTTP request even after an earlier subscriber unsubscribes', async () => {
+      const sub1 = service.refreshAccessToken().subscribe();
+      const sub2Values: AuthTokens[] = [];
+      const sub2 = service.refreshAccessToken().subscribe((tokens) => sub2Values.push(tokens));
+
+      // The subscriber that unsubscribes first must not tear down the shared refresh for sub2 - or let
+      // a later caller believe no refresh is in flight and start a redundant one.
+      sub1.unsubscribe();
+
+      const call3Values: AuthTokens[] = [];
+      const sub3 = service.refreshAccessToken().subscribe((tokens) => call3Values.push(tokens));
+
+      // expectOne is itself the assertion: if the unsubscribe above had cleared refreshInFlight$, this
+      // third call would have fired a second, redundant HTTP request.
+      const rotated: AuthTokens = {
+        accessToken: 'access-2',
+        accessTokenExpiresAtUtc: new Date(Date.now() + 60_000).toISOString(),
+        refreshToken: 'refresh-2',
+        refreshTokenExpiresAtUtc: new Date(Date.now() + 86_400_000).toISOString(),
+      };
+      httpTesting.expectOne(`${environment.apiUrl}/auth/refresh`).flush(rotated);
+
+      // performRefresh() resolves through a real Promise (firstValueFrom), so the value reaches these
+      // plain .subscribe() callbacks a couple of microtask ticks after flush() returns, not
+      // synchronously within it.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(sub2Values).toEqual([rotated]);
+      expect(call3Values).toEqual([rotated]);
+      sub2.unsubscribe();
+      sub3.unsubscribe();
+    });
+
+    it('allows a brand new HTTP request once the previous refresh has completed', async () => {
+      const first = firstValueFrom(service.refreshAccessToken());
+      const firstRotated: AuthTokens = {
+        accessToken: 'access-2',
+        accessTokenExpiresAtUtc: new Date(Date.now() + 60_000).toISOString(),
+        refreshToken: 'refresh-2',
+        refreshTokenExpiresAtUtc: new Date(Date.now() + 86_400_000).toISOString(),
+      };
+      httpTesting.expectOne(`${environment.apiUrl}/auth/refresh`).flush(firstRotated);
+      expect(await first).toEqual(firstRotated);
+
+      const second = firstValueFrom(service.refreshAccessToken());
+      const secondRotated: AuthTokens = {
+        accessToken: 'access-3',
+        accessTokenExpiresAtUtc: new Date(Date.now() + 60_000).toISOString(),
+        refreshToken: 'refresh-3',
+        refreshTokenExpiresAtUtc: new Date(Date.now() + 86_400_000).toISOString(),
+      };
+      httpTesting.expectOne(`${environment.apiUrl}/auth/refresh`).flush(secondRotated);
+      expect(await second).toEqual(secondRotated);
+    });
+
+    it('allows a brand new HTTP request after the previous refresh errored', async () => {
+      // A non-401 failure (network error/5xx) deliberately leaves the session itself intact (see
+      // performRefresh's catchError) - only refreshInFlight$ should be reset, so the next call can
+      // still find a session to retry against.
+      const first = firstValueFrom(service.refreshAccessToken());
+      httpTesting.expectOne(`${environment.apiUrl}/auth/refresh`).flush('server error', { status: 500, statusText: 'Server Error' });
+      await expect(first).rejects.toBeTruthy();
+
+      // A stale, already-errored refreshInFlight$ must not still be cached here - this needs a genuine
+      // new request, not the old rejected one replayed.
+      const rotated: AuthTokens = {
+        accessToken: 'access-2',
+        accessTokenExpiresAtUtc: new Date(Date.now() + 60_000).toISOString(),
+        refreshToken: 'refresh-2',
+        refreshTokenExpiresAtUtc: new Date(Date.now() + 86_400_000).toISOString(),
+      };
+      const second = firstValueFrom(service.refreshAccessToken());
+      httpTesting.expectOne(`${environment.apiUrl}/auth/refresh`).flush(rotated);
+      expect(await second).toEqual(rotated);
+    });
+  });
 });

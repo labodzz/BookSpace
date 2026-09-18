@@ -38,6 +38,10 @@ export class DashboardComponent {
   protected readonly loading = signal(true);
   protected readonly upcomingBookings = signal<OwnBooking[]>([]);
   protected readonly upcomingCount = signal(0);
+  // True when getOwnBookingsInRange hit its safety page cap for the 90-day horizon below - upcomingCount
+  // is then a lower bound, not the true count, and the template must say so rather than presenting it
+  // as exact.
+  protected readonly upcomingCountTruncated = signal(false);
   protected readonly upcomingThisWeekCount = signal(0);
   protected readonly resourceNames = signal<Record<string, string>>({});
   protected readonly activeResourceCount = signal(0);
@@ -85,33 +89,50 @@ export class DashboardComponent {
     const now = DateTime.now().toUTC().toISO()!;
     const horizon = DateTime.now().plus({ days: UPCOMING_HORIZON_DAYS }).toUTC().toISO()!;
 
-    this.bookingService.getOwnBookingsInRange(now, horizon).subscribe((bookings) => {
-      const upcoming = bookings
-        .filter((booking) => booking.status === 'Pending' || booking.status === 'Confirmed')
-        .sort((a, b) => a.startUtc.localeCompare(b.startUtc));
-      const weekFromNow = DateTime.now().plus({ days: 7 });
+    // Each dashboard widget fetches independently and degrades on its own failure (leaving its signals
+    // at their initial empty/zero state and letting the global error interceptor's toast be the user
+    // feedback) rather than one failing widget taking down the others or surfacing as an unhandled RxJS
+    // error.
+    this.bookingService.getOwnBookingsInRange(now, horizon).subscribe({
+      next: ({ items: bookings, truncated }) => {
+        const upcoming = bookings
+          .filter((booking) => booking.status === 'Pending' || booking.status === 'Confirmed')
+          .sort((a, b) => a.startUtc.localeCompare(b.startUtc));
+        const weekFromNow = DateTime.now().plus({ days: 7 });
 
-      this.upcomingCount.set(upcoming.length);
-      this.upcomingThisWeekCount.set(upcoming.filter((booking) => toLocalDateTime(booking.startUtc) <= weekFromNow).length);
+        this.upcomingCount.set(upcoming.length);
+        this.upcomingCountTruncated.set(truncated);
+        this.upcomingThisWeekCount.set(upcoming.filter((booking) => toLocalDateTime(booking.startUtc) <= weekFromNow).length);
 
-      const preview = upcoming.slice(0, UPCOMING_PREVIEW_COUNT);
-      this.upcomingBookings.set(preview);
-      this.loadResourceNames(preview);
+        const preview = upcoming.slice(0, UPCOMING_PREVIEW_COUNT);
+        this.upcomingBookings.set(preview);
+        this.loadResourceNames(preview);
+      },
+      error: () => undefined,
     });
 
-    this.bookingService.getOwnBookings(1, 1).subscribe((result) => this.totalBookingCount.set(result.totalCount));
-    this.resourceService.getResources(1, AVAILABLE_RESOURCES_PREVIEW_COUNT, undefined, 'Active').subscribe((result) => {
-      this.activeResourceCount.set(result.totalCount);
-      this.availableResources.set(result.items);
+    this.bookingService.getOwnBookings(1, 1).subscribe({
+      next: (result) => this.totalBookingCount.set(result.totalCount),
+      error: () => undefined,
     });
-    this.resourceService.getResourceTypes().subscribe();
+    this.resourceService.getResources(1, AVAILABLE_RESOURCES_PREVIEW_COUNT, undefined, 'Active').subscribe({
+      next: (result) => {
+        this.activeResourceCount.set(result.totalCount);
+        this.availableResources.set(result.items);
+      },
+      error: () => undefined,
+    });
+    this.resourceService.getResourceTypes().subscribe({ error: () => undefined });
 
     if (this.isApprover) {
-      this.approvalService.getPendingApprovals().subscribe((approvals) => {
-        this.pendingApprovalCount.set(approvals.length);
-        const preview = approvals.slice(0, PENDING_PREVIEW_COUNT);
-        this.pendingApprovals.set(preview);
-        this.loadResourceNames(preview.map((approval) => ({ resourceId: approval.resourceId })));
+      this.approvalService.getPendingApprovals().subscribe({
+        next: (approvals) => {
+          this.pendingApprovalCount.set(approvals.length);
+          const preview = approvals.slice(0, PENDING_PREVIEW_COUNT);
+          this.pendingApprovals.set(preview);
+          this.loadResourceNames(preview.map((approval) => ({ resourceId: approval.resourceId })));
+        },
+        error: () => undefined,
       });
     }
 

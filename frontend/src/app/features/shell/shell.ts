@@ -21,7 +21,12 @@ export class ShellComponent {
 
   constructor() {
     if (this.isApprover) {
-      this.approvalService.getPendingApprovals().subscribe((approvals) => this.pendingApprovalCount.set(approvals.length));
+      this.approvalService.getPendingApprovals().subscribe({
+        next: (approvals) => this.pendingApprovalCount.set(approvals.length),
+        // Leaves the nav badge at its initial 0 rather than throwing an unhandled RxJS error - the
+        // global error interceptor's toast is the user-facing feedback for the failed request itself.
+        error: () => undefined,
+      });
     }
   }
 

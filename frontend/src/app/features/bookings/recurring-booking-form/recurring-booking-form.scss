@@ -1,3 +1,10 @@
+// The outer page container - always full width, so the shell's content area never shows unused space
+// beside a narrow form. The form itself keeps a readable max-width inside it.
+.recurring-form-page {
+  display: block;
+  width: 100%;
+}
+
 .recurring-form {
   display: flex;
   flex-direction: column;

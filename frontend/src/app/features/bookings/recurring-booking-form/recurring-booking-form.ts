@@ -9,6 +9,7 @@ import { ResourceSummary } from '../../resources/resource.models';
 import { ResourceService } from '../../resources/resource.service';
 import { resolveLuxonZone } from '../../resources/timezone.util';
 import { BookingService } from '../booking.service';
+import { parseStrictLocalDateTime } from '../local-time.util';
 import { CreateRecurringSeriesResponse, RecurrenceFrequency } from '../booking.models';
 
 const CONFLICT_MESSAGES: Record<string, string> = {
@@ -127,8 +128,21 @@ export class RecurringBookingFormComponent {
     }
 
     const zone = resolveLuxonZone(resource.timeZoneId);
-    const start = DateTime.fromISO(this.startDate(), { zone });
-    if (!start.isValid || start.startOf('day') < DateTime.now().setZone(zone).startOf('day')) {
+
+    // Only the FIRST occurrence's start/end can be checked here - later occurrences depend on
+    // frequency/interval math the backend owns, and it already reports a per-occurrence
+    // "NonexistentLocalTime" conflict for any later one that lands in a DST gap (see
+    // OCCURRENCE_CONFLICT_LABELS below). This still catches the common case - and gives immediate
+    // inline feedback instead of a round trip - when the series' own start already doesn't exist.
+    const firstOccurrenceStart = parseStrictLocalDateTime(`${this.startDate()}T${this.startTime()}`, zone);
+    const firstOccurrenceEnd = parseStrictLocalDateTime(`${this.startDate()}T${this.endTime()}`, zone);
+    if (!firstOccurrenceStart || !firstOccurrenceEnd) {
+      this.formError.set(
+        "The first occurrence's time doesn't exist in this resource's timezone (likely a daylight-saving time change). Please choose a different time or start date.",
+      );
+      return;
+    }
+    if (firstOccurrenceStart.startOf('day') < DateTime.now().setZone(zone).startOf('day')) {
       this.formError.set('Start date must be today or later.');
       return;
     }

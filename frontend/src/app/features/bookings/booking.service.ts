@@ -11,6 +11,7 @@ import {
   CreateRecurringSeriesRequest,
   CreateRecurringSeriesResponse,
   OwnBooking,
+  RangeBookingsResult,
 } from './booking.models';
 import {
   CancelBookingResponseWire,
@@ -30,8 +31,10 @@ const MAX_PAGE_SIZE = 100;
 
 // A hard ceiling on how many pages getOwnBookingsInRange will ever follow, so a pathological account
 // can never turn one calendar navigation into an unbounded request chain - see CalendarService for why
-// this matters.
-const MAX_RANGE_PAGES = 5;
+// this matters. Set high enough (5,000 bookings) that hitting it in practice means something is
+// genuinely pathological, not just a busy week - and when it IS hit, `truncated` tells the caller so
+// the UI can say so, rather than the range silently rendering as if it were complete.
+const MAX_RANGE_PAGES = 50;
 
 @Injectable({ providedIn: 'root' })
 export class BookingService {
@@ -52,13 +55,21 @@ export class BookingService {
   // recurring occurrences and one-off bookings come back as flat rows, so no client-side recurrence
   // expansion is needed. expand() follows subsequent pages only while more remain, bounded by
   // MAX_RANGE_PAGES so a request never turns into an unbounded chain for a pathological account.
-  getOwnBookingsInRange(fromUtc: string, toUtc: string): Observable<OwnBooking[]> {
+  // `truncated` is true only when the cap itself was the reason pagination stopped (the server was
+  // still reporting more results) - callers must surface that rather than presenting `items` as the
+  // complete range.
+  getOwnBookingsInRange(fromUtc: string, toUtc: string): Observable<RangeBookingsResult> {
     return this.fetchRangePage(fromUtc, toUtc, 1).pipe(
       expand((state) => (state.page < MAX_RANGE_PAGES && state.page * MAX_PAGE_SIZE < state.totalCount
         ? this.fetchRangePage(fromUtc, toUtc, state.page + 1)
         : EMPTY)),
-      reduce<{ items: OwnBooking[]; page: number; totalCount: number }, OwnBooking[]>(
-        (acc, state) => [...acc, ...state.items], []),
+      reduce<{ items: OwnBooking[]; page: number; totalCount: number }, RangeBookingsResult>(
+        (acc, state) => ({
+          items: [...acc.items, ...state.items],
+          truncated: acc.truncated || (state.page === MAX_RANGE_PAGES && state.page * MAX_PAGE_SIZE < state.totalCount),
+        }),
+        { items: [], truncated: false },
+      ),
     );
   }
 

@@ -8,8 +8,10 @@ import { BlackoutWindow, BookableSlot, ResourceAvailability, ResourceSummary } f
 import { ResourceService } from '../resource.service';
 import { resolveLuxonZone } from '../timezone.util';
 
-// The API caps a single availability query to a 92-day span - this default window (14 days) stays
-// comfortably inside that, and the date pickers below re-validate the same cap client-side so a user
+// The API caps a single availability query to a 92-day span - GetResourceAvailabilityQueryRequestValidator
+// rejects a range once ToDate.DayNumber - FromDate.DayNumber reaches 92, so the largest ACCEPTED
+// difference is 91 (a 92-calendar-date-inclusive span). This default window (14 days) stays comfortably
+// inside that, and the date pickers below re-validate the exact same boundary client-side so a user
 // gets an immediate, friendly message instead of waiting on a round trip to fail.
 const DEFAULT_WINDOW_DAYS = 13;
 const MAX_RANGE_DAYS = 92;
@@ -130,7 +132,10 @@ export class ResourceAvailabilityComponent {
       this.rangeError.set('End date must be on or after the start date.');
       return;
     }
-    if (to.diff(from, 'days').days > MAX_RANGE_DAYS) {
+    // Strictly `>=`, matching the backend's `ToDate.DayNumber - FromDate.DayNumber < MaxRangeDays`: a
+    // difference of exactly 92 is the first value the backend rejects, so accepting it here would let
+    // the frontend submit a range the API is guaranteed to 400 on.
+    if (to.diff(from, 'days').days >= MAX_RANGE_DAYS) {
       this.rangeError.set(`The date range can't span more than ${MAX_RANGE_DAYS} days.`);
       return;
     }
@@ -165,9 +170,22 @@ export class ResourceAvailabilityComponent {
       const localDay = DateTime.fromISO(slot.startUtc, { zone: 'utc' }).setZone(zone).startOf('day');
       days.find((day) => day.date.hasSame(localDay, 'day'))?.slots.push(slot);
     }
+
+    // Unlike bookable slots (which never cross midnight), a blackout can span several calendar dates -
+    // it must show up on EVERY date it overlaps, not just the one its startUtc happens to fall on. For
+    // each already-built (and therefore range-clipped) day, endUtc is treated as exclusive - matching
+    // the backend's own half-open [Start, End) interval convention (see the range-overlap check in
+    // GetResourceAvailabilityQueryHandler) - so a blackout ending exactly at a day's local midnight
+    // occupies every day up to that boundary but never the day that starts at it.
     for (const blackout of availability.blackouts) {
-      const localDay = DateTime.fromISO(blackout.startUtc, { zone: 'utc' }).setZone(zone).startOf('day');
-      days.find((day) => day.date.hasSame(localDay, 'day'))?.blackouts.push(blackout);
+      const localStart = DateTime.fromISO(blackout.startUtc, { zone: 'utc' }).setZone(zone);
+      const localEnd = DateTime.fromISO(blackout.endUtc, { zone: 'utc' }).setZone(zone);
+      for (const day of days) {
+        const dayEnd = day.date.plus({ days: 1 });
+        if (localStart < dayEnd && localEnd > day.date) {
+          day.blackouts.push(blackout);
+        }
+      }
     }
 
     return days;
