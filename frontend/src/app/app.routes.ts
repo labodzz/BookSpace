@@ -54,6 +54,10 @@ export const routes: Routes = [
         loadComponent: () =>
           import('./features/bookings/recurring-booking-form/recurring-booking-form').then((m) => m.RecurringBookingFormComponent),
       },
+      {
+        path: 'calendar',
+        loadComponent: () => import('./features/calendar/calendar').then((m) => m.CalendarComponent),
+      },
     ],
   },
   { path: '**', redirectTo: '' },

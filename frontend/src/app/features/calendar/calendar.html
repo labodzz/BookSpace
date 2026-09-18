@@ -1,0 +1,98 @@
+<section class="calendar">
+  <header class="calendar__header">
+    <div class="calendar__title-row">
+      <h1>{{ title() }}</h1>
+      @if (calendarService.loading()) {
+        <span class="calendar__loading" aria-live="polite">Loading…</span>
+      }
+    </div>
+
+    <div class="calendar__controls">
+      <div class="calendar__view-toggle">
+        <button type="button" class="btn btn-secondary" [class.btn-primary]="viewMode() === 'month'" (click)="setViewMode('month')">Month</button>
+        <button type="button" class="btn btn-secondary" [class.btn-primary]="viewMode() === 'week'" (click)="setViewMode('week')">Week</button>
+      </div>
+      <div class="calendar__nav">
+        <button type="button" class="btn btn-secondary" (click)="previous()" aria-label="Previous">&larr;</button>
+        <button type="button" class="btn btn-secondary" (click)="today()">Today</button>
+        <button type="button" class="btn btn-secondary" (click)="next()" aria-label="Next">&rarr;</button>
+      </div>
+    </div>
+  </header>
+
+  @if (calendarService.error()) {
+    <div class="state-panel card">
+      <p class="state-panel__title">Couldn't load your calendar</p>
+      <p>{{ calendarService.error()!.detail ?? calendarService.error()!.title }}</p>
+      <button type="button" class="btn btn-secondary" (click)="retry()">Try again</button>
+    </div>
+  } @else {
+    <div class="calendar-grid" [class.calendar-grid--week]="viewMode() === 'week'">
+      <div class="calendar-grid__weekdays">
+        @for (label of ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']; track label) {
+          <span>{{ label }}</span>
+        }
+      </div>
+
+      <div class="calendar-grid__cells">
+        @for (cell of cells(); track cell.date.toISODate()) {
+          <div class="calendar-cell" [class.calendar-cell--outside]="!cell.inCurrentMonth" [class.calendar-cell--today]="cell.isToday">
+            <span class="calendar-cell__date">{{ cell.date.toFormat('d') }}</span>
+
+            <div class="calendar-cell__events">
+              @for (booking of cell.bookings.slice(0, viewMode() === 'month' ? monthCellEventCap : cell.bookings.length); track booking.id) {
+                <button type="button" [class]="'calendar-event ' + statusPillClass(booking.status)" (click)="selectBooking(booking)">
+                  <span class="calendar-event__time">{{ formatTime(booking.startUtc) }}</span>
+                  <span class="calendar-event__title">{{ resourceNameFor(booking.resourceId) }}</span>
+                </button>
+              }
+              @if (viewMode() === 'month' && cell.bookings.length > monthCellEventCap) {
+                <button type="button" class="calendar-cell__more" (click)="showFullDay(cell.date)">
+                  +{{ cell.bookings.length - monthCellEventCap }} more
+                </button>
+              }
+            </div>
+          </div>
+        }
+      </div>
+    </div>
+  }
+</section>
+
+@if (selectedBooking(); as booking) {
+  @if (!cancelDialogOpen()) {
+    <div class="dialog-backdrop" (click)="closeDetail()">
+      <div class="card dialog" role="dialog" aria-modal="true" (click)="$event.stopPropagation()">
+        <div class="dialog__header">
+          <h2>{{ resourceNameFor(booking.resourceId) }}</h2>
+          <span [class]="statusPillClass(booking.status)">{{ statusLabel(booking.status) }}</span>
+        </div>
+        <p class="dialog__summary">{{ formatDetailRange(booking) }}</p>
+        @if (booking.quantity > 1) {
+          <p class="field-hint">Quantity {{ booking.quantity }}</p>
+        }
+        @if (booking.seriesId) {
+          <p class="field-hint">Part of a recurring series</p>
+        }
+        @if (booking.status === 'Cancelled' && booking.cancellationReason) {
+          <p class="field-hint">Cancelled{{ booking.cancelledByAdmin ? ' by an administrator' : '' }} — {{ booking.cancellationReason }}</p>
+        }
+
+        <div class="dialog__actions">
+          <button type="button" class="btn btn-secondary" (click)="closeDetail()">Close</button>
+          @if (canCancel(booking)) {
+            <button type="button" class="btn btn-primary" (click)="openCancelDialog()">Cancel booking</button>
+          }
+        </div>
+      </div>
+    </div>
+  } @else {
+    <app-cancel-booking-dialog
+      [booking]="booking"
+      [resourceName]="resourceNameFor(booking.resourceId)"
+      [submitting]="cancelling()"
+      (confirmed)="confirmCancel($event)"
+      (closed)="closeCancelDialog()"
+    />
+  }
+}
