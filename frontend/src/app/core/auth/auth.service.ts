@@ -1,7 +1,7 @@
-import { HttpClient, HttpContext } from '@angular/common/http';
+import { HttpClient, HttpContext, HttpErrorResponse } from '@angular/common/http';
 import { Injectable, computed, inject, signal } from '@angular/core';
 import { Router } from '@angular/router';
-import { Observable, Subject, finalize, firstValueFrom, from, map, shareReplay, takeUntil, tap } from 'rxjs';
+import { Observable, Subject, catchError, finalize, firstValueFrom, from, map, shareReplay, takeUntil, tap, throwError } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import { SKIP_GLOBAL_ERROR_TOAST } from '../http/api-error';
 import { AuthTokens, CurrentUser } from './auth.models';
@@ -49,6 +49,10 @@ export class AuthService {
       this.broadcastChannel.onmessage = ({ data }: MessageEvent<AuthBroadcastMessage>) => {
         if (data.type === 'tokens-updated') {
           this.tokens.set(data.tokens);
+          // sessionStorage is per-tab, not shared like localStorage - without persisting here too, a
+          // session-only tab would keep a stale copy that performRefresh's own re-sync check could
+          // later mistake for "not yet caught up" and wrongly revert to.
+          this.tokenStorage.saveToActiveStorage(data.tokens);
         } else {
           // Another tab's logout() already told the server to revoke the whole family - unlike
           // clearExpiredSession(), there is no "maybe a newer session already landed" case to protect
@@ -135,12 +139,20 @@ export class AuthService {
     this.loggedOut$.next();
   }
 
-  // Called when the interceptor gets a definitive "this refresh token is no longer valid" response (a
-  // 401 from /auth/refresh) - the session really is over for THIS tab, but nothing is sent to the
-  // server: a token the backend just rejected has nothing left to revoke, and this path isn't the
-  // user's own request to end the session (see docs/authentication.md).
-  clearExpiredSession(): void {
-    const rejectedRefreshToken = this.tokens()?.refreshToken;
+  // Called when a specific refresh attempt gets a definitive "this token is no longer valid" response
+  // (a 401 from /auth/refresh) FOR `rejectedRefreshToken` - not "whatever the signal currently holds",
+  // which a sibling tab's BroadcastChannel message could already have moved on from since this attempt
+  // was dispatched. Comparing against the exact token that failed (rather than re-reading current
+  // state) is what makes this immune to that race.
+  private clearExpiredSession(rejectedRefreshToken: string): void {
+    const current = this.tokens();
+    if (current && current.refreshToken !== rejectedRefreshToken) {
+      // Something else (a sibling tab's successful, concurrent refresh, broadcast in the meantime)
+      // already moved this tab onto a newer, valid session - that is not what just got rejected, so
+      // leave it alone entirely, in memory and in storage.
+      return;
+    }
+
     this.tokens.set(null);
     this.refreshInFlight$ = null;
     this.loggedOut$.next();
@@ -205,13 +217,24 @@ export class AuthService {
       return Promise.resolve(stored);
     }
 
+    const attemptedRefreshToken = current.refreshToken;
     const context = new HttpContext().set(SKIP_GLOBAL_ERROR_TOAST, true);
     return firstValueFrom(
-      this.http.post<AuthTokens>(`${environment.apiUrl}/auth/refresh`, { refreshToken: current.refreshToken }, { context }).pipe(
+      this.http.post<AuthTokens>(`${environment.apiUrl}/auth/refresh`, { refreshToken: attemptedRefreshToken }, { context }).pipe(
         tap((tokens) => {
           this.tokens.set(tokens);
           this.tokenStorage.saveToActiveStorage(tokens);
           this.broadcastChannel?.postMessage({ type: 'tokens-updated', tokens } satisfies AuthBroadcastMessage);
+        }),
+        catchError((error: unknown) => {
+          // Only a confirmed 401 means the backend actually rejected THIS token - a network error or a
+          // 5xx says nothing about whether the session is still good (the interceptor leaves those
+          // alone too), and `attemptedRefreshToken` is a plain local value, immune to a sibling tab's
+          // broadcast updating `this.tokens` in the meantime (see clearExpiredSession).
+          if (error instanceof HttpErrorResponse && error.status === 401) {
+            this.clearExpiredSession(attemptedRefreshToken);
+          }
+          return throwError(() => error);
         }),
         // If the session ends (logout, or a sibling call already failing this one via loggedOut$) while
         // this HTTP call is still in flight, tear the subscription down - HttpClient aborts the
