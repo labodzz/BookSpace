@@ -19,6 +19,7 @@
         Dashboard
       </a>
       <a routerLink="/resources" routerLinkActive="shell-nav__link--active" class="shell-nav__link">Resources</a>
+      <a routerLink="/bookings" routerLinkActive="shell-nav__link--active" class="shell-nav__link">My bookings</a>
       @if (authService.hasAnyRole('TenantAdmin', 'SysAdmin')) {
         <a routerLink="/users" routerLinkActive="shell-nav__link--active" class="shell-nav__link">Users</a>
       }
