@@ -4,13 +4,115 @@
       <h1>Welcome back, {{ authService.displayName() }}</h1>
       <p class="dashboard-header__date">{{ today }} — here's what's happening.</p>
     </div>
-    <a class="btn btn-primary" routerLink="/resources">Browse resources</a>
+    <a class="btn btn-primary" routerLink="/resources">New booking</a>
   </header>
 
   <div class="dashboard-stats">
     <div class="card stat-card">
+      <span class="stat-card__value">{{ upcomingCount() }}</span>
+      <span class="stat-card__label">Upcoming bookings</span>
+    </div>
+    <div class="card stat-card">
+      <span class="stat-card__value">{{ upcomingThisWeekCount() }}</span>
+      <span class="stat-card__label">This week</span>
+    </div>
+    <div class="card stat-card">
       <span class="stat-card__value">{{ activeResourceCount() }}</span>
       <span class="stat-card__label">Resources available</span>
+    </div>
+    @if (isApprover) {
+      <div class="card stat-card">
+        <span class="stat-card__value">{{ pendingApprovalCount() }}</span>
+        <span class="stat-card__label">Pending approvals</span>
+      </div>
+    } @else {
+      <div class="card stat-card">
+        <span class="stat-card__value">{{ totalBookingCount() }}</span>
+        <span class="stat-card__label">Total bookings</span>
+      </div>
+    }
+  </div>
+
+  <div class="dashboard-columns">
+    <section class="card dashboard-panel">
+      <div class="dashboard-panel__header">
+        <h2>Upcoming bookings</h2>
+        <a routerLink="/bookings" class="dashboard-panel__link">View all</a>
+      </div>
+
+      @if (upcomingBookings().length === 0) {
+        <p class="field-hint">Nothing coming up. <a routerLink="/resources">Browse resources</a> to book something.</p>
+      } @else {
+        <ul class="upcoming-list">
+          @for (booking of upcomingBookings(); track booking.id) {
+            <li class="upcoming-list__item">
+              <span class="upcoming-list__dot" [class]="'upcoming-list__dot--' + booking.status.toLowerCase()"></span>
+              <div class="upcoming-list__body">
+                <span class="upcoming-list__title">{{ resourceNameFor(booking.resourceId) }}</span>
+                <span class="upcoming-list__time">
+                  {{ formatRange(booking.startUtc, booking.endUtc) }}
+                  @if (booking.status === 'Pending') {
+                    &middot; pending
+                  }
+                </span>
+              </div>
+            </li>
+          }
+        </ul>
+      }
+    </section>
+
+    <div class="dashboard-side">
+      <section class="card dashboard-panel">
+        <h2>Quick actions</h2>
+        <div class="quick-actions">
+          <a class="quick-actions__button" routerLink="/resources">Browse resources</a>
+          <a class="quick-actions__button" routerLink="/calendar">View calendar</a>
+          <a class="quick-actions__button" routerLink="/bookings">My bookings</a>
+        </div>
+      </section>
+
+      @if (isApprover) {
+        <section class="card dashboard-panel">
+          <div class="dashboard-panel__header">
+            <h2>Pending approvals</h2>
+            <a routerLink="/approvals" class="dashboard-panel__link">View all</a>
+          </div>
+
+          @if (pendingApprovals().length === 0) {
+            <p class="field-hint">Nothing waiting on you.</p>
+          } @else {
+            <ul class="approval-preview-list">
+              @for (approval of pendingApprovals(); track approval.bookingId) {
+                <li class="approval-preview-list__item">
+                  <div class="approval-preview-list__body">
+                    <span class="approval-preview-list__title">{{ resourceNameFor(approval.resourceId) }}</span>
+                    <span class="approval-preview-list__time">{{ formatRange(approval.startUtc, approval.endUtc) }}</span>
+                  </div>
+                  <div class="approval-preview-list__actions">
+                    <button
+                      type="button"
+                      class="btn btn-primary"
+                      [disabled]="decidingBookingId() === approval.bookingId"
+                      (click)="decide(approval, 'approve')"
+                    >
+                      Approve
+                    </button>
+                    <button
+                      type="button"
+                      class="btn btn-secondary"
+                      [disabled]="decidingBookingId() === approval.bookingId"
+                      (click)="decide(approval, 'reject')"
+                    >
+                      Reject
+                    </button>
+                  </div>
+                </li>
+              }
+            </ul>
+          }
+        </section>
+      }
     </div>
   </div>
 
