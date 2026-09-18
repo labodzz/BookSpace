@@ -1,0 +1,154 @@
+@if (!resourceId) {
+  <div class="state-panel card">
+    <p class="state-panel__title">Pick a resource to book</p>
+    <p>Browse resources and choose one, then come back here to set up a recurring booking.</p>
+    <a class="btn btn-primary" routerLink="/resources">Browse resources</a>
+  </div>
+} @else if (loadingResource()) {
+  <div class="card recurring-form recurring-form--skeleton" aria-busy="true">
+    <span class="skeleton" style="height: 1.5rem; width: 50%;"></span>
+    <span class="skeleton" style="height: 3rem; width: 100%;"></span>
+  </div>
+} @else if (resourceNotFound()) {
+  <div class="state-panel card">
+    <p class="state-panel__title">This resource doesn't exist</p>
+    <p>It may have been removed, or the link isn't correct. Nothing here can be booked.</p>
+    <a class="btn btn-primary" routerLink="/resources">Browse resources</a>
+  </div>
+} @else if (resourceError()) {
+  <div class="state-panel card">
+    <p class="state-panel__title">Couldn't load this resource</p>
+    <p>{{ resourceError()!.detail ?? resourceError()!.title }}</p>
+    <button type="button" class="btn btn-secondary" (click)="retryLoadResource()">Try again</button>
+  </div>
+} @else if (result(); as result) {
+  <div class="card recurring-form">
+    <h1>Recurring booking created</h1>
+    <p>
+      {{ result.createdOccurrences.length }} of {{ result.requestedOccurrenceCount }} occurrence(s) booked
+      {{ result.createdOccurrences.length && result.createdOccurrences[0].status === 'Pending' ? '(awaiting approval)' : '' }}.
+    </p>
+
+    @if (result.conflicts.length) {
+      <div class="recurring-form__conflicts">
+        <p class="field-hint">{{ result.conflicts.length }} occurrence(s) could not be booked:</p>
+        <ul>
+          @for (conflict of result.conflicts; track conflict.date) {
+            <li>{{ conflict.date }} — {{ conflictLabels[conflict.reason] ?? conflict.reason }}</li>
+          }
+        </ul>
+      </div>
+    }
+
+    <div class="recurring-form__actions">
+      <a class="btn btn-secondary" routerLink="/bookings">View my bookings</a>
+      <a class="btn btn-primary" routerLink="/calendar">Open calendar</a>
+    </div>
+  </div>
+} @else if (resource(); as resource) {
+  <form class="card recurring-form" (ngSubmit)="submit()" novalidate>
+    <div>
+      <p class="recurring-form__eyebrow">Recurring booking</p>
+      <h1>{{ resource.name }}</h1>
+      <p class="field-hint">
+        Times are in {{ resource.timeZoneId }}. Up to {{ maxOccurrences }} occurrences per series.
+        {{ resource.requiresApproval ? 'This resource requires approval - each occurrence is submitted for review.' : '' }}
+      </p>
+    </div>
+
+    @if (formError()) {
+      <p class="banner banner-error" role="alert">{{ formError() }}</p>
+    }
+
+    <div class="recurring-form__row">
+      <div class="field">
+        <label for="start-date">Start date</label>
+        <input id="start-date" type="date" [value]="startDate()" (input)="startDate.set($any($event.target).value)" required />
+        @if (startDateErrors().length) {
+          <span class="field-error-text">{{ startDateErrors().join(' ') }}</span>
+        }
+      </div>
+      <div class="field">
+        <label for="r-start-time">Start time</label>
+        <input id="r-start-time" type="time" [value]="startTime()" (input)="startTime.set($any($event.target).value)" required />
+      </div>
+      <div class="field">
+        <label for="r-end-time">End time</label>
+        <input id="r-end-time" type="time" [value]="endTime()" (input)="endTime.set($any($event.target).value)" required />
+      </div>
+    </div>
+    @if (timeErrors().length) {
+      <span class="field-error-text">{{ timeErrors().join(' ') }}</span>
+    }
+
+    <div class="recurring-form__row">
+      <div class="field">
+        <label for="frequency">Repeats</label>
+        <select id="frequency" [value]="frequency()" (change)="frequency.set($any($event.target).value)">
+          <option value="Daily">Daily</option>
+          <option value="Weekly">Weekly</option>
+          <option value="Monthly">Monthly</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="interval">Every</label>
+        <input id="interval" type="number" min="1" [value]="interval()" (input)="interval.set($any($event.target).valueAsNumber || 1)" />
+        @if (intervalErrors().length) {
+          <span class="field-error-text">{{ intervalErrors().join(' ') }}</span>
+        }
+      </div>
+      <div class="field">
+        <label for="quantity">Quantity</label>
+        <input
+          id="quantity"
+          type="number"
+          min="1"
+          [max]="resource.capacity"
+          [value]="quantity()"
+          (input)="quantity.set($any($event.target).valueAsNumber || 1)"
+        />
+        @if (quantityErrors().length) {
+          <span class="field-error-text">{{ quantityErrors().join(' ') }}</span>
+        }
+      </div>
+    </div>
+
+    <fieldset class="recurring-form__end">
+      <legend>Ends</legend>
+      <label class="recurring-form__radio">
+        <input type="radio" name="end-condition" [checked]="endCondition() === 'count'" (change)="setEndCondition('count')" />
+        <span>After</span>
+        <input
+          type="number"
+          min="1"
+          class="recurring-form__inline-input"
+          [value]="occurrenceCount()"
+          [disabled]="endCondition() !== 'count'"
+          (input)="occurrenceCount.set($any($event.target).valueAsNumber || 1)"
+        />
+        <span>occurrences</span>
+      </label>
+      <label class="recurring-form__radio">
+        <input type="radio" name="end-condition" [checked]="endCondition() === 'date'" (change)="setEndCondition('date')" />
+        <span>On date</span>
+        <input
+          type="date"
+          class="recurring-form__inline-input"
+          [value]="endDate()"
+          [disabled]="endCondition() !== 'date'"
+          (input)="endDate.set($any($event.target).value)"
+        />
+      </label>
+      @if (endErrors().length) {
+        <span class="field-error-text">{{ endErrors().join(' ') }}</span>
+      }
+    </fieldset>
+
+    <div class="recurring-form__actions">
+      <a class="btn btn-secondary" [routerLink]="['/resources', resource.id]">Cancel</a>
+      <button type="submit" class="btn btn-primary" [disabled]="submitting()">
+        {{ submitting() ? 'Creating…' : 'Create recurring booking' }}
+      </button>
+    </div>
+  </form>
+}

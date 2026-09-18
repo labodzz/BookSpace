@@ -49,6 +49,11 @@ export const routes: Routes = [
         path: 'bookings/new',
         loadComponent: () => import('./features/bookings/booking-form/booking-form').then((m) => m.BookingFormComponent),
       },
+      {
+        path: 'bookings/new-recurring',
+        loadComponent: () =>
+          import('./features/bookings/recurring-booking-form/recurring-booking-form').then((m) => m.RecurringBookingFormComponent),
+      },
     ],
   },
   { path: '**', redirectTo: '' },
