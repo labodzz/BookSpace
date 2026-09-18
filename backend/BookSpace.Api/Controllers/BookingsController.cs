@@ -67,8 +67,8 @@ public sealed class BookingsController(IMediator mediator) : ControllerBase
 
     [HttpPost("{id:guid}/approve")]
     [Authorize(Roles = "Approver,TenantAdmin,SysAdmin")]
-    public async Task<IActionResult> ApproveBooking(Guid id, DecideBookingApprovalRequest request, CancellationToken cancellationToken) =>
-        Ok(await mediator.Send(new ApproveBookingCommandRequest(id, request.DecisionNote), cancellationToken));
+    public async Task<IActionResult> ApproveBooking(Guid id, ApproveBookingRequest request, CancellationToken cancellationToken) =>
+        Ok(await mediator.Send(new ApproveBookingCommandRequest(id, request.DecisionNote, request.ApproveRemainingSeries), cancellationToken));
 
     [HttpPost("{id:guid}/reject")]
     [Authorize(Roles = "Approver,TenantAdmin,SysAdmin")]
@@ -88,5 +88,9 @@ public sealed record CreateRecurringSeriesRequest(
     DateOnly? EndDate,
     int? OccurrenceCount,
     int Quantity = 1);
+
+// ApproveRemainingSeries=false (default): only this occurrence. true: this occurrence AND every other
+// still-Pending occurrence in the same recurring series - see ApproveBookingCommandRequest.
+public sealed record ApproveBookingRequest(string? DecisionNote, bool ApproveRemainingSeries = false);
 
 public sealed record DecideBookingApprovalRequest(string? DecisionNote);

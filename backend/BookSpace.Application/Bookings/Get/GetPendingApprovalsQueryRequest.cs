@@ -6,8 +6,12 @@ namespace BookSpace.Application.Bookings;
 
 public sealed record GetPendingApprovalsQueryRequest : IRequest<IReadOnlyList<GetPendingApprovalsResponseItem>>;
 
+// SeriesId lets the client group an approver's queue by recurring series (e.g. to offer "approve every
+// pending occurrence in this series at once") instead of only ever showing 100 flat, unrelated-looking
+// rows for one series.
 public sealed record GetPendingApprovalsResponseItem(
-    Guid BookingId, Guid ResourceId, Guid UserId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, int Quantity, DateTimeOffset ExpiresAtUtc);
+    Guid BookingId, Guid ResourceId, Guid UserId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, int Quantity, DateTimeOffset ExpiresAtUtc,
+    Guid? SeriesId);
 
 // The approver's own queue: TenantAdmin/SysAdmin see every Pending booking in the tenant; a plain
 // Approver sees only bookings for resources they're a ResourceApprover for - never another approver's
@@ -37,7 +41,7 @@ public sealed class GetPendingApprovalsQueryHandler(
         return bookings
             .Select(booking => new GetPendingApprovalsResponseItem(
                 booking.Id, booking.ResourceId, booking.UserId, booking.StartUtc, booking.EndUtc, booking.Quantity,
-                expiryByBookingId.GetValueOrDefault(booking.Id)))
+                expiryByBookingId.GetValueOrDefault(booking.Id), booking.SeriesId))
             .OrderBy(item => item.StartUtc)
             .ToList();
     }
