@@ -164,6 +164,28 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
         Assert.DoesNotContain(page.Items, booking => booking.StartUtc == adminStart);
     }
 
+    // fromUtc/toUtc exist for the frontend calendar - proves the range filter is wired end-to-end through
+    // the controller, not just unit-tested at the handler/repository level.
+    [Fact]
+    public async Task GetOwnBookings_WithDateRangeFilter_OnlyReturnsBookingsOverlappingTheRange()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+        var insideStart = AnchorPlusHours(50);
+        var outsideStart = AnchorPlusHours(100);
+        var inside = await CreateBookingAsync(client, TestDataSeeder.AcmeResourceId, insideStart, insideStart.AddHours(1));
+        var outside = await CreateBookingAsync(client, TestDataSeeder.AcmeResourceId, outsideStart, outsideStart.AddHours(1));
+        var fromUtc = AnchorPlusHours(49);
+        var toUtc = AnchorPlusHours(52);
+
+        var response = await client.GetAsync(
+            $"/bookings?pageSize=100&fromUtc={Uri.EscapeDataString(fromUtc.ToString("O"))}&toUtc={Uri.EscapeDataString(toUtc.ToString("O"))}");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var page = await response.Content.ReadFromJsonAsync<PagedResult<BookingResponse>>(JsonOptions);
+        Assert.Contains(page!.Items, booking => booking.Id == inside.Id);
+        Assert.DoesNotContain(page.Items, booking => booking.Id == outside.Id);
+    }
+
     [Fact]
     public async Task CancelBooking_AsOwner_ReturnsOkWithCancelledStatus()
     {

@@ -17,7 +17,8 @@ internal sealed class BookingRepository(BookSpaceDbContext dbContext) : IBooking
     public async Task<Guid?> FindResourceIdAsync(Guid bookingId, CancellationToken cancellationToken) =>
         await dbContext.Bookings.Where(booking => booking.Id == bookingId).Select(booking => (Guid?)booking.ResourceId).FirstOrDefaultAsync(cancellationToken);
 
-    public async Task<PagedResult<Booking>> GetOwnBookingsAsync(Guid userId, Guid? seriesId, int page, int pageSize, CancellationToken cancellationToken)
+    public async Task<PagedResult<Booking>> GetOwnBookingsAsync(
+        Guid userId, Guid? seriesId, DateTimeOffset? fromUtc, DateTimeOffset? toUtc, int page, int pageSize, CancellationToken cancellationToken)
     {
         var query = dbContext.Bookings.Where(booking => booking.UserId == userId);
         if (seriesId is { } series)
@@ -25,14 +26,26 @@ internal sealed class BookingRepository(BookSpaceDbContext dbContext) : IBooking
             query = query.Where(booking => booking.SeriesId == series);
         }
 
-        var totalCount = await query.CountAsync(cancellationToken);
-
-        // SQLite (fast integration tests only) cannot translate ORDER BY on a DateTimeOffset column -
-        // the same limitation BookingAvailabilityRepository already works around for range filters -
-        // so it orders/pages in memory instead; a single user's own booking count is never large enough
-        // for that to matter. SQL Server orders/pages in the database as usual.
+        // SQLite (fast integration tests only) cannot translate the DateTimeOffset `<`/`>` range
+        // comparisons, or ORDER BY on a DateTimeOffset column, into SQL - the same limitation
+        // BookingAvailabilityRepository already works around - so both the range filter and the
+        // ordering fall back to an in-memory pass there; a single user's own booking count is never
+        // large enough for that to matter. SQL Server does the range filter, ordering, and paging in
+        // the database as usual, bounded by the range so a calendar view never has to page through a
+        // user's entire booking history just to render one visible month.
         if (dbContext.Database.IsSqlServer())
         {
+            if (fromUtc is { } from)
+            {
+                query = query.Where(booking => booking.EndUtc > from);
+            }
+
+            if (toUtc is { } to)
+            {
+                query = query.Where(booking => booking.StartUtc < to);
+            }
+
+            var totalCount = await query.CountAsync(cancellationToken);
             var items = await query
                 .OrderByDescending(booking => booking.StartUtc)
                 .Skip((page - 1) * pageSize)
@@ -42,12 +55,16 @@ internal sealed class BookingRepository(BookSpaceDbContext dbContext) : IBooking
         }
 
         var allItems = await query.ToListAsync(cancellationToken);
-        var pagedItems = allItems
+        var rangeFiltered = allItems
+            .Where(booking => fromUtc is not { } from || booking.EndUtc > from)
+            .Where(booking => toUtc is not { } to || booking.StartUtc < to)
+            .ToList();
+        var pagedItems = rangeFiltered
             .OrderByDescending(booking => booking.StartUtc)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
             .ToList();
-        return new PagedResult<Booking>(pagedItems, page, pageSize, totalCount);
+        return new PagedResult<Booking>(pagedItems, page, pageSize, rangeFiltered.Count);
     }
 
     public async Task<IReadOnlyList<Booking>> GetBySeriesIdAsync(Guid seriesId, CancellationToken cancellationToken) =>

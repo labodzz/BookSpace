@@ -54,4 +54,30 @@ public sealed class GetOwnBookingsQueryRequestValidatorTests
 
         Assert.True(result.IsValid);
     }
+
+    [Fact]
+    public void Validate_WithToUtcAfterFromUtc_HasNoErrors()
+    {
+        var fromUtc = DateTimeOffset.UtcNow;
+        var result = _sut.Validate(new GetOwnBookingsQueryRequest(FromUtc: fromUtc, ToUtc: fromUtc.AddDays(1)));
+
+        Assert.True(result.IsValid);
+    }
+
+    [Fact]
+    public void Validate_WithToUtcNotAfterFromUtc_HasErrors()
+    {
+        var fromUtc = DateTimeOffset.UtcNow;
+        var result = _sut.Validate(new GetOwnBookingsQueryRequest(FromUtc: fromUtc, ToUtc: fromUtc));
+
+        Assert.False(result.IsValid);
+    }
+
+    [Fact]
+    public void Validate_WithOnlyFromUtc_HasNoErrors()
+    {
+        var result = _sut.Validate(new GetOwnBookingsQueryRequest(FromUtc: DateTimeOffset.UtcNow));
+
+        Assert.True(result.IsValid);
+    }
 }

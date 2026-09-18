@@ -29,10 +29,13 @@ public sealed class BookingsController(IMediator mediator) : ControllerBase
         return StatusCode(StatusCodes.Status201Created, response);
     }
 
+    // fromUtc/toUtc are optional and exist for the frontend calendar, which needs to ask for just the
+    // currently-visible date range rather than paging through a user's entire booking history.
     [HttpGet]
     public async Task<IActionResult> GetOwnBookings(
-        int page = 1, int pageSize = 20, Guid? seriesId = null, CancellationToken cancellationToken = default) =>
-        Ok(await mediator.Send(new GetOwnBookingsQueryRequest(page, pageSize, seriesId), cancellationToken));
+        int page = 1, int pageSize = 20, Guid? seriesId = null, DateTimeOffset? fromUtc = null, DateTimeOffset? toUtc = null,
+        CancellationToken cancellationToken = default) =>
+        Ok(await mediator.Send(new GetOwnBookingsQueryRequest(page, pageSize, seriesId, fromUtc, toUtc), cancellationToken));
 
     // cancelRemainingSeries=false (default): only this occurrence. true: this occurrence AND every
     // later still-cancellable occurrence in the same series - see docs/recurring-bookings-and-approvals.md.
