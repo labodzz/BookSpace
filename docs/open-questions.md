@@ -54,22 +54,33 @@ the key was never used outside local development.
 
 ---
 
-## Session Security
+## Session Security — PARTIALLY RESOLVED (logout)
 
 **Question**: What should the absolute refresh-token/session lifetime be (today it slides indefinitely
 as long as refresh keeps happening)? Should logout revoke one session, every session for the user, or
 offer both? When should a password change revoke outstanding refresh-token families?
 
-**Context**: None of logout, absolute session lifetime, or password-change revocation exist in the
-codebase today - see [authentication.md](authentication.md)'s "Deferred session-management decisions."
+**Resolved part**: `POST /auth/logout` exists and revokes the calling device's token family (single-session
+logout, not "log out everywhere"), with cross-tab races handled correctly - a client-side lock
+(`navigator.locks`) plus a `BroadcastChannel` mean tabs of the same browser coordinate refreshes and share
+logout instead of racing each other, and the automatic client reaction to a failed refresh never calls
+this endpoint at all (`AuthService.clearExpiredSession()` is local-only), so a race loser can't trigger a
+server-side revocation by accident. See [authentication.md](authentication.md)'s "Logout" and "Cross-tab
+refresh coordination" sections.
+
+**Still unresolved**: absolute session lifetime (today it slides indefinitely as long as refresh keeps
+happening), an explicit "log out every device" option (today logout only ever revokes the calling
+device's family), and whether a password change should revoke all outstanding refresh-token families (no
+password-change feature exists yet at all).
 
 **Why it matters**: These are genuine security-policy decisions with real UX tradeoffs (a hard session
 ceiling improves security but forces periodic re-login even for active users; single- vs. all-session
 logout affects multi-device users differently).
 
-**Trigger**: A session management / logout / account-security Work Packet.
+**Trigger**: A session management / account-security Work Packet.
 
-**Current default**: none - these behaviors are simply absent, not defaulted to a particular answer.
+**Current default**: none - these remaining behaviors are simply absent, not defaulted to a particular
+answer.
 
 ---
 

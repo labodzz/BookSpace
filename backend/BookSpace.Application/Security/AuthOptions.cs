@@ -1,8 +1,8 @@
 namespace BookSpace.Application.Security;
 
-// Bound from configuration ("Auth" section). The dev appsettings ships a real signing key so the
-// app runs out of the box - that key is dev-only and must never be reused as-is in production, where
-// it belongs in a secret manager instead.
+// Bound from configuration ("Auth" section). SigningKey is deliberately absent from the tracked
+// appsettings files (including Development) - it lives in local user secrets in dev and belongs in a
+// real secret manager in production. Startup fails fast (see Program.cs) if it's missing.
 public sealed class AuthOptions
 {
     public required string Issuer { get; init; }

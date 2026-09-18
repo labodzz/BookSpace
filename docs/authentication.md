@@ -72,10 +72,87 @@ and translates it to `ConflictException`. Because EF Core wraps the insert (new 
 (revoking the presented token) in one transaction, a losing request's entire attempt - including its
 half-built child token - rolls back atomically. No orphan token is ever left behind.
 
+## Logout
+
+`POST /auth/logout` (`LogoutCommandRequest` -> `AuthenticationService.LogoutAsync`) takes the caller's
+raw refresh token, hashes it, looks it up, and - if found, active or already rotated - calls the same
+`RevokeFamilyAsync` reuse detection already uses, revoking every still-active token descended from that
+one login. A voluntary logout and a detected theft both end the same way: every token in that lineage
+stops working.
+
+This revokes only the *calling session's* family - "log out this device," not "log out every device the
+user is signed into." Always returns 204, even for an unknown/already-invalid token: logout never
+reveals that distinction (same "don't leak state" reasoning as login/refresh's identical failure
+messages), and the client clears its own local tokens unconditionally regardless of the response.
+
+Revocation deliberately does not require the presented token to still be the family's current one: this
+endpoint only ever runs from an explicit user action (a real "Log out" click) - the frontend's automatic
+reaction to a failed refresh calls `AuthService.clearExpiredSession()` instead (local-only, no server
+call; see "Cross-tab refresh coordination" below), never this endpoint. That means a tab that's fallen
+behind - still holding a pre-rotation token because it missed a `BroadcastChannel` update, or was asleep
+through a sibling tab's refresh - can still authoritatively end "this device's" session via logout, which
+is exactly what a deliberate Logout click should do. An earlier version of this endpoint required the
+presented token to still be current, to guard against the *automatic* interceptor-triggered logout the
+old design had; that guard became unnecessary (and actively wrong for the sleepy-tab case) once the
+automatic path was moved to `clearExpiredSession()` instead.
+
+The frontend (`AuthService.logout()`) sends this best-effort - local state is cleared first and always,
+whether or not the request reaches the server or succeeds. It also emits an internal `loggedOut$` signal
+that cancels any `refreshAccessToken()` call still in flight at that moment (`takeUntil`) - without this,
+a refresh that started just before logout could complete afterward and silently write fresh tokens back
+into storage, undoing the logout the user just performed.
+
+`logout()` is reserved for one thing: the user actually asked to end the session (a "Log out" click).
+Every other place a session ends locally - most notably the interceptor's reaction to a refresh that
+comes back 401 - calls `AuthService.clearExpiredSession()` instead, which tears down local state exactly
+like `logout()` but never calls the server. A token the backend just rejected has nothing left to revoke,
+and (before the fix below) calling the server here at all was how an innocent client-side race turned into
+a cross-tab outage - `clearExpiredSession()` removes the temptation entirely, rather than relying on the
+backend catching it.
+
+## Cross-tab refresh coordination
+
+Browser tabs of the same origin share one `localStorage`/`sessionStorage` and, before this fix, each ran
+its own independent copy of `AuthService` with no awareness of the others. Two tabs idle past the access
+token's 15-minute lifetime and then both making a request at once would both hit 401 and both call
+`refreshAccessToken()` - a real race against the *same* refresh token, with only one winner at the
+backend's `RowVersion` check (see "Actual reuse vs. a concurrent legitimate race" above). The loser's
+failed refresh used to be treated as "this session is over," which - combined with the interceptor
+calling the server-side `logout()` on any refresh failure - is exactly how one tab losing an innocent race
+could revoke the *other* tab's brand-new, actively-used session. Three mechanisms now prevent this at the
+client, with `RowVersion` kept as the last-resort backend safety net rather than the primary defense:
+
+1. **Single-tab dedup** (`refreshInFlight$`): several requests failing 401 at once in the *same* tab share
+   one in-flight refresh, unchanged from before.
+2. **Cross-tab lock** (`navigator.locks.request('bookspace-auth-refresh', ...)`): only one tab of the
+   browser may have a refresh actually in flight against the backend at a time; others queue for the same
+   lock instead of racing it. Browsers without the Web Locks API fall back to running the refresh directly
+   - no cross-tab dedup, but still correct, still backed by `RowVersion`.
+3. **Storage re-sync on lock acquisition**: the moment a queued tab's turn comes up, it re-reads storage
+   before doing anything else. If a sibling tab already rotated the token while this one was waiting, its
+   result is sitting there already - this tab adopts it and skips the network call entirely, rather than
+   firing a now-redundant request of its own.
+
+A `BroadcastChannel('bookspace-auth')` closes the remaining gap: the tab that actually performs a refresh
+posts the new tokens to every other tab immediately (so they update their in-memory state without waiting
+to be caught out by a stale access token first), and an explicit `logout()` posts a "logged out" message
+so every other tab ends its session too, instead of only the tab the user actually clicked in.
+
+Without `navigator.locks` (or in the narrow window before a `BroadcastChannel` message arrives), a losing
+tab's own refresh can still be rejected by the backend at the same moment a sibling tab's concurrent
+refresh wins and writes a fresh session to the same shared storage. `clearExpiredSession()` therefore
+re-reads storage before clearing it, and only wipes it if nothing newer has landed there since - otherwise
+it would silently destroy a sibling tab's still-good, currently-active session the next time it's read
+from storage (a reload, a new tab), even though that tab's own in-memory state was never touched.
+`logout()` has no equivalent check: it always clears storage unconditionally, because an explicit logout
+(and a "logged out" broadcast received from another tab) means the whole family was just revoked
+server-side - there is no "newer session" left to protect at that point.
+
 ## Deferred session-management decisions
 
 Explicitly out of scope for this remediation pass, tracked in [open-questions.md](open-questions.md):
-absolute refresh-token/session lifetime (today it slides indefinitely as long as the token keeps
-getting refreshed), what logout should revoke (one session vs. every session for the user), and
-whether a password change should revoke all outstanding refresh-token families. None of these are
-implemented today; do not assume a specific answer to any of them without opening that question.
+whether logout should also offer an "every session for this user" option (today it only revokes the
+calling device), absolute refresh-token/session lifetime (today it slides indefinitely as long as the
+token keeps getting refreshed), and whether a password change should revoke all outstanding
+refresh-token families (no password-change feature exists yet at all). Do not assume a specific answer
+to any of these without opening that question.

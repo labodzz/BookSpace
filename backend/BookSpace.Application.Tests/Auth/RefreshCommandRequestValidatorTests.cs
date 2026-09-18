@@ -3,14 +3,14 @@ using Xunit;
 
 namespace BookSpace.Application.Tests.Auth;
 
-public sealed class RefreshCommandValidatorTests
+public sealed class RefreshCommandRequestValidatorTests
 {
-    private readonly RefreshCommandValidator _sut = new();
+    private readonly RefreshCommandRequestValidator _sut = new();
 
     [Fact]
     public void Validate_WithNonEmptyToken_HasNoErrors()
     {
-        var result = _sut.Validate(new RefreshCommand("some-refresh-token"));
+        var result = _sut.Validate(new RefreshCommandRequest("some-refresh-token"));
 
         Assert.True(result.IsValid);
     }
@@ -18,7 +18,7 @@ public sealed class RefreshCommandValidatorTests
     [Fact]
     public void Validate_WithEmptyToken_HasErrors()
     {
-        var result = _sut.Validate(new RefreshCommand(""));
+        var result = _sut.Validate(new RefreshCommandRequest(""));
 
         Assert.False(result.IsValid);
     }
