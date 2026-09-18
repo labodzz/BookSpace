@@ -1,0 +1,42 @@
+.user-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  max-width: 640px;
+}
+
+.user-list__table {
+  display: flex;
+  flex-direction: column;
+}
+
+.user-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.user-row:last-child {
+  border-bottom: none;
+}
+
+.user-row__name {
+  font-weight: 600;
+}
+
+.user-row__email {
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+}

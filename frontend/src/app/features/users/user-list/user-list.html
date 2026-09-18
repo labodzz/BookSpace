@@ -1,0 +1,44 @@
+<section class="user-list">
+  <header>
+    <h1>Users</h1>
+    <p class="field-hint">Everyone in your organization.</p>
+  </header>
+
+  @if (loading()) {
+    <div class="card user-list__table" aria-busy="true">
+      @for (i of [1, 2, 3, 4]; track i) {
+        <div class="user-row">
+          <span class="skeleton" style="height: 1rem; width: 40%;"></span>
+          <span class="skeleton" style="height: 0.875rem; width: 30%;"></span>
+        </div>
+      }
+    </div>
+  } @else if (error()) {
+    <div class="state-panel card">
+      <p class="state-panel__title">Couldn't load users</p>
+      <p>{{ error()!.detail ?? error()!.title }}</p>
+      <button type="button" class="btn btn-secondary" (click)="retry()">Try again</button>
+    </div>
+  } @else if (users().length === 0) {
+    <div class="state-panel card">
+      <p class="state-panel__title">No users found</p>
+    </div>
+  } @else {
+    <div class="card user-list__table">
+      @for (user of users(); track user.id) {
+        <div class="user-row">
+          <span class="user-row__name">{{ user.firstName }} {{ user.lastName }}</span>
+          <span class="user-row__email">{{ user.email }}</span>
+        </div>
+      }
+    </div>
+
+    @if (totalPages() > 1) {
+      <nav class="pagination" aria-label="User list pages">
+        <button type="button" class="btn btn-secondary" [disabled]="page() === 1" (click)="goToPage(page() - 1)">Previous</button>
+        <span>Page {{ page() }} of {{ totalPages() }}</span>
+        <button type="button" class="btn btn-secondary" [disabled]="page() === totalPages()" (click)="goToPage(page() + 1)">Next</button>
+      </nav>
+    }
+  }
+</section>
