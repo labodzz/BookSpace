@@ -275,6 +275,54 @@ a {
   }
 }
 
+/* Modal dialog shell - shared by the cancel-booking confirmation and the calendar's booking detail
+   popover, so both look and behave identically rather than drifting apart as two local copies. */
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgb(42 31 35 / 45%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-5);
+  z-index: 50;
+}
+
+.dialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-6);
+  max-width: 420px;
+  width: 100%;
+}
+
+.dialog__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.dialog__summary {
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+}
+
+.dialog__checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+}
+
+.dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
+
 .banner {
   display: flex;
   align-items: flex-start;

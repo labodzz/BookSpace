@@ -1,0 +1,83 @@
+<section class="my-bookings">
+  <header class="my-bookings__header">
+    <div>
+      <h1>My bookings</h1>
+      <p class="my-bookings__subtitle">Everything you've booked, across every resource.</p>
+    </div>
+    <a class="btn btn-primary" routerLink="/resources">Book a resource</a>
+  </header>
+
+  @if (loading()) {
+    <div class="card my-bookings__list" aria-busy="true">
+      @for (i of [1, 2, 3, 4]; track i) {
+        <div class="booking-row">
+          <span class="skeleton" style="height: 1rem; width: 50%;"></span>
+          <span class="skeleton" style="height: 0.875rem; width: 30%;"></span>
+        </div>
+      }
+    </div>
+  } @else if (error()) {
+    <div class="state-panel card">
+      <p class="state-panel__title">Couldn't load your bookings</p>
+      <p>{{ error()!.detail ?? error()!.title }}</p>
+      <button type="button" class="btn btn-secondary" (click)="retry()">Try again</button>
+    </div>
+  } @else if (bookings().length === 0) {
+    <div class="state-panel card">
+      <p class="state-panel__title">You don't have any bookings yet</p>
+      <p>Browse resources to make your first booking.</p>
+      <a class="btn btn-primary" routerLink="/resources">Browse resources</a>
+    </div>
+  } @else {
+    <div class="card my-bookings__list">
+      @for (booking of bookings(); track booking.id) {
+        <div class="booking-row">
+          <div class="booking-row__main">
+            <div class="booking-row__title">
+              <span>{{ resourceNameFor(booking.resourceId) }}</span>
+              @if (booking.seriesId) {
+                <span class="booking-row__recurring" title="Part of a recurring series">&#8635; recurring</span>
+              }
+            </div>
+            <p class="booking-row__time">{{ formatRange(booking.startUtc, booking.endUtc) }}</p>
+            @if (booking.quantity > 1) {
+              <p class="booking-row__quantity">Quantity {{ booking.quantity }}</p>
+            }
+            @if (booking.status === 'Cancelled' && booking.cancelledAtUtc) {
+              <p class="booking-row__cancellation">
+                Cancelled{{ booking.cancelledByAdmin ? ' by an administrator' : '' }}
+                @if (booking.cancellationReason) {
+                  — {{ booking.cancellationReason }}
+                }
+              </p>
+            }
+          </div>
+          <div class="booking-row__end">
+            <span [class]="statusPillClass(booking.status)">{{ statusLabel(booking.status) }}</span>
+            @if (canCancel(booking)) {
+              <button type="button" class="btn btn-secondary" (click)="openCancelDialog(booking)">Cancel</button>
+            }
+          </div>
+        </div>
+      }
+    </div>
+
+    @if (totalPages() > 1) {
+      <nav class="pagination" aria-label="My bookings pages">
+        <button type="button" class="btn btn-secondary" [disabled]="page() === 1" (click)="goToPage(page() - 1)">Previous</button>
+        <span>Page {{ page() }} of {{ totalPages() }}</span>
+        <button type="button" class="btn btn-secondary" [disabled]="page() === totalPages()" (click)="goToPage(page() + 1)">Next</button>
+      </nav>
+    }
+  }
+</section>
+
+@if (cancelTarget(); as target) {
+  <app-cancel-booking-dialog
+    [booking]="target"
+    [resourceName]="resourceNameFor(target.resourceId)"
+    [submitting]="cancelSubmitting()"
+    (confirmed)="confirmCancel($event)"
+    (closed)="closeCancelDialog()"
+  />
+}

@@ -1,0 +1,25 @@
+<div class="dialog-backdrop" (click)="closed.emit()">
+  <div class="card dialog" role="dialog" aria-modal="true" aria-labelledby="cancel-dialog-title" (click)="$event.stopPropagation()">
+    <h2 id="cancel-dialog-title">Cancel this booking?</h2>
+    <p class="dialog__summary">{{ resourceName() }} &middot; {{ formatRange(booking().startUtc, booking().endUtc) }}</p>
+
+    <div class="field">
+      <label for="cancel-reason">Reason (optional)</label>
+      <input id="cancel-reason" type="text" [value]="reason()" (input)="reason.set($any($event.target).value)" maxlength="500" placeholder="Optional note" />
+    </div>
+
+    @if (booking().seriesId) {
+      <label class="dialog__checkbox">
+        <input type="checkbox" [checked]="cancelRemainingSeries()" (change)="cancelRemainingSeries.set($any($event.target).checked)" />
+        <span>Also cancel every later booking in this recurring series</span>
+      </label>
+    }
+
+    <div class="dialog__actions">
+      <button type="button" class="btn btn-secondary" [disabled]="submitting()" (click)="closed.emit()">Keep booking</button>
+      <button type="button" class="btn btn-primary" [disabled]="submitting()" (click)="submit()">
+        {{ submitting() ? 'Cancelling…' : 'Cancel booking' }}
+      </button>
+    </div>
+  </div>
+</div>
