@@ -1,13 +1,14 @@
 import { Component, inject, signal } from '@angular/core';
 import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { AuthService } from '../../core/auth/auth.service';
+import { ThemeToggleComponent } from '../../core/theme/theme-toggle/theme-toggle';
 import { ApprovalService } from '../approvals/approval.service';
 
 // The authenticated layout every protected page renders inside of - a sidebar shell (brand, primary
 // nav, user/logout) wrapping a <router-outlet>.
 @Component({
   selector: 'app-shell',
-  imports: [RouterOutlet, RouterLink, RouterLinkActive],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, ThemeToggleComponent],
   templateUrl: './shell.html',
   styleUrl: './shell.scss',
 })

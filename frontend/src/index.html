@@ -2,6 +2,22 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <!-- Sets data-theme before first paint so the app never flashes the wrong theme while Angular loads.
+       Keep the storage key ('bookspace.theme') and the light/dark resolution logic here in sync with
+       ThemeService - this script only exists to apply the same decision earlier than Angular can. -->
+  <script>
+    (function () {
+      try {
+        var stored = localStorage.getItem('bookspace.theme');
+        var theme = stored === 'light' || stored === 'dark'
+          ? stored
+          : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-theme', theme);
+      } catch (e) {
+        document.documentElement.setAttribute('data-theme', 'light');
+      }
+    })();
+  </script>
   <title>BookspaceWeb</title>
   <base href="/">
   <meta name="viewport" content="width=device-width, initial-scale=1">

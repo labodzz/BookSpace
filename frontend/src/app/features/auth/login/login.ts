@@ -4,10 +4,11 @@ import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 import { ApiError, toApiError } from '../../../core/http/api-error';
 import { AuthService } from '../../../core/auth/auth.service';
+import { ThemeToggleComponent } from '../../../core/theme/theme-toggle/theme-toggle';
 
 @Component({
   selector: 'app-login',
-  imports: [ReactiveFormsModule],
+  imports: [ReactiveFormsModule, ThemeToggleComponent],
   templateUrl: './login.html',
   styleUrl: './login.scss',
 })

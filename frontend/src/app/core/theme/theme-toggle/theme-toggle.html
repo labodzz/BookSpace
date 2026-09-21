@@ -1,0 +1,29 @@
+<button
+  type="button"
+  class="theme-toggle"
+  (click)="toggle()"
+  [attr.aria-pressed]="isDark()"
+  [attr.aria-label]="isDark() ? 'Switch to light theme' : 'Switch to dark theme'"
+  [title]="isDark() ? 'Switch to light theme' : 'Switch to dark theme'"
+>
+  @if (isDark()) {
+    <svg class="theme-toggle__icon" viewBox="0 0 20 20" aria-hidden="true">
+      <path d="M15.8 12.3A6.3 6.3 0 0 1 7.7 4.2a6.3 6.3 0 1 0 8.1 8.1Z" fill="currentColor" />
+    </svg>
+  } @else {
+    <svg class="theme-toggle__icon" viewBox="0 0 20 20" aria-hidden="true">
+      <circle cx="10" cy="10" r="3.5" fill="currentColor" />
+      <g stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+        <path d="M10 2.5v2.2" />
+        <path d="M10 15.3v2.2" />
+        <path d="M2.5 10h2.2" />
+        <path d="M15.3 10h2.2" />
+        <path d="M4.8 4.8l1.6 1.6" />
+        <path d="M13.6 13.6l1.6 1.6" />
+        <path d="M15.2 4.8l-1.6 1.6" />
+        <path d="M6.4 13.6l-1.6 1.6" />
+      </g>
+    </svg>
+  }
+  <span class="theme-toggle__label">{{ isDark() ? 'Dark' : 'Light' }}</span>
+</button>
