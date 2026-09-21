@@ -28,8 +28,19 @@ export const routes: Routes = [
         loadComponent: () => import('./features/resources/resource-list/resource-list').then((m) => m.ResourceListComponent),
       },
       {
+        // Must come before 'resources/:id' - otherwise ':id' would greedily match the literal "new".
+        path: 'resources/new',
+        canActivate: [roleGuard('TenantAdmin', 'SysAdmin')],
+        loadComponent: () => import('./features/resources/resource-form/resource-form').then((m) => m.ResourceFormComponent),
+      },
+      {
         path: 'resources/:id',
         loadComponent: () => import('./features/resources/resource-detail/resource-detail').then((m) => m.ResourceDetailComponent),
+      },
+      {
+        path: 'resources/:id/edit',
+        canActivate: [roleGuard('TenantAdmin', 'SysAdmin')],
+        loadComponent: () => import('./features/resources/resource-form/resource-form').then((m) => m.ResourceFormComponent),
       },
       {
         path: 'resources/:id/availability',

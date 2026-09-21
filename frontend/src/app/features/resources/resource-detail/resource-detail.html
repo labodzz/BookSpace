@@ -35,6 +35,13 @@
       </span>
     </header>
 
+    @if (authService.hasAnyRole('TenantAdmin', 'SysAdmin') && resource.status !== 'Archived') {
+      <div class="resource-detail__admin-actions">
+        <a class="btn btn-secondary" [routerLink]="['/resources', resource.id, 'edit']">Edit</a>
+        <button type="button" class="btn btn-secondary resource-detail__archive-btn" (click)="openArchiveDialog()">Archive</button>
+      </div>
+    }
+
     @if (resource.description) {
       <p class="resource-detail__description">{{ resource.description }}</p>
     }
@@ -66,5 +73,28 @@
       <p class="banner banner-info" role="status">This resource is {{ resource.status | lowercase }} and can't be booked right now.</p>
     }
   </article>
+
+  @if (archiveDialogOpen()) {
+    <div class="dialog-backdrop" (click)="closeArchiveDialog()">
+      <div class="card dialog" role="dialog" aria-modal="true" aria-labelledby="archive-dialog-title" (click)="$event.stopPropagation()">
+        <h2 id="archive-dialog-title">Archive {{ resource.name }}?</h2>
+        <p class="dialog__summary">
+          Archiving is permanent - there's no way to reactivate this resource afterward. Its existing bookings, availability rules,
+          blackout periods, and approvers stay untouched and remain visible, but no new bookings or edits will be possible.
+        </p>
+
+        @if (archiveError()) {
+          <p class="banner banner-error" role="alert">{{ archiveError() }}</p>
+        }
+
+        <div class="dialog__actions">
+          <button type="button" class="btn btn-secondary" [disabled]="archiving()" (click)="closeArchiveDialog()">Keep resource</button>
+          <button type="button" class="btn btn-primary" [disabled]="archiving()" (click)="confirmArchive()">
+            {{ archiving() ? 'Archiving…' : 'Archive resource' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  }
 }
 </div>

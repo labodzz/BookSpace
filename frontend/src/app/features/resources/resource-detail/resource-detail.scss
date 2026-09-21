@@ -74,3 +74,25 @@
   flex-wrap: wrap;
   gap: var(--space-3);
 }
+
+.resource-detail__admin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.resource-detail__admin-actions .btn {
+  padding: var(--space-2) var(--space-4);
+  font-size: 0.8125rem;
+}
+
+.resource-detail__archive-btn {
+  color: var(--color-error);
+  border-color: var(--color-error-bg);
+}
+
+.resource-detail__archive-btn:hover {
+  background: var(--color-error-bg);
+}

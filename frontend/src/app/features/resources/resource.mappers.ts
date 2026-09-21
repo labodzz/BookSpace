@@ -12,6 +12,12 @@ export function toResourceStatus(code: number): ResourceStatus {
   return RESOURCE_STATUS_BY_CODE[code] ?? 'Active';
 }
 
+// The reverse direction, needed when SENDING a request body: System.Text.Json expects the same raw
+// number on the way in as it produces on the way out, since no JsonStringEnumConverter is registered.
+export function fromResourceStatus(status: ResourceStatus): number {
+  return RESOURCE_STATUS_BY_CODE.indexOf(status);
+}
+
 export interface ResourceSummaryWire extends Omit<ResourceSummary, 'status'> {
   status: number;
 }

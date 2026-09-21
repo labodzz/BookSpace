@@ -1,0 +1,118 @@
+<div class="resource-form-page">
+@if (loadingResource()) {
+  <div class="card resource-form resource-form--skeleton" aria-busy="true">
+    <span class="skeleton" style="height: 1.5rem; width: 45%;"></span>
+    <span class="skeleton" style="height: 2.5rem; width: 100%;"></span>
+    <span class="skeleton" style="height: 2.5rem; width: 100%;"></span>
+    <span class="skeleton" style="height: 2.5rem; width: 100%;"></span>
+  </div>
+} @else if (resourceNotFound()) {
+  <div class="state-panel card">
+    <p class="state-panel__title">This resource doesn't exist</p>
+    <p>It may have been removed, or the link isn't correct.</p>
+    <a class="btn btn-primary" routerLink="/resources">Browse resources</a>
+  </div>
+} @else if (resourceError()) {
+  <div class="state-panel card">
+    <p class="state-panel__title">Couldn't load this resource</p>
+    <p>{{ resourceError()!.detail ?? resourceError()!.title }}</p>
+    <button type="button" class="btn btn-secondary" (click)="retryLoadResource()">Try again</button>
+  </div>
+} @else {
+  <form class="card resource-form" (ngSubmit)="submit()" novalidate>
+    <a class="resource-form__back" [routerLink]="backLink()">&larr; Back</a>
+    <h1>{{ isEditMode() ? 'Edit resource' : 'New resource' }}</h1>
+
+    @if (formError()) {
+      <p class="banner banner-error" role="alert">{{ formError() }}</p>
+    }
+
+    <div class="field">
+      <label for="resource-type">Resource type</label>
+      <select id="resource-type" [value]="resourceTypeId()" (change)="resourceTypeId.set($any($event.target).value)">
+        <option value="">Select a type</option>
+        @for (type of resourceTypes(); track type.id) {
+          <option [value]="type.id">{{ type.name }}</option>
+        }
+      </select>
+      @if (resourceTypeFieldErrors().length) {
+        <span class="field-error-text">{{ resourceTypeFieldErrors().join(' ') }}</span>
+      }
+    </div>
+
+    <div class="field">
+      <label for="name">Name</label>
+      <input id="name" type="text" [value]="name()" (input)="name.set($any($event.target).value)" maxlength="200" required />
+      @if (nameFieldErrors().length) {
+        <span class="field-error-text">{{ nameFieldErrors().join(' ') }}</span>
+      }
+    </div>
+
+    <div class="field">
+      <label for="description">Description (optional)</label>
+      <textarea
+        id="description"
+        rows="3"
+        maxlength="2000"
+        [value]="description()"
+        (input)="description.set($any($event.target).value)"
+      ></textarea>
+      @if (descriptionFieldErrors().length) {
+        <span class="field-error-text">{{ descriptionFieldErrors().join(' ') }}</span>
+      }
+    </div>
+
+    <div class="field">
+      <label for="capacity">Capacity</label>
+      <input
+        id="capacity"
+        type="number"
+        min="1"
+        [value]="capacity()"
+        (input)="capacity.set($any($event.target).valueAsNumber || 1)"
+      />
+      @if (capacityFieldErrors().length) {
+        <span class="field-error-text">{{ capacityFieldErrors().join(' ') }}</span>
+      }
+    </div>
+
+    <div class="field">
+      <label for="time-zone">Time zone</label>
+      <input
+        id="time-zone"
+        type="text"
+        placeholder="e.g. Europe/Sarajevo"
+        [value]="timeZoneId()"
+        (input)="timeZoneId.set($any($event.target).value)"
+      />
+      <span class="field-hint">An IANA time zone identifier, such as Europe/Sarajevo or America/New_York.</span>
+      @if (timeZoneFieldErrors().length) {
+        <span class="field-error-text">{{ timeZoneFieldErrors().join(' ') }}</span>
+      }
+    </div>
+
+    @if (isEditMode()) {
+      <div class="field">
+        <label for="status">Status</label>
+        <select id="status" [value]="status()" (change)="status.set($any($event.target).value)">
+          <option value="Active">Active</option>
+          <option value="Inactive">Inactive</option>
+          <option value="Maintenance">Maintenance</option>
+        </select>
+      </div>
+    }
+
+    <label class="resource-form__checkbox">
+      <input type="checkbox" [checked]="requiresApproval()" (change)="requiresApproval.set($any($event.target).checked)" />
+      <span>Requires approval before a booking is confirmed</span>
+    </label>
+
+    <div class="resource-form__actions">
+      <a class="btn btn-secondary" [routerLink]="backLink()">Cancel</a>
+      <button type="submit" class="btn btn-primary" [disabled]="submitting()">
+        {{ submitting() ? 'Saving…' : (isEditMode() ? 'Save changes' : 'Create resource') }}
+      </button>
+    </div>
+  </form>
+}
+</div>
