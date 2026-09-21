@@ -1,6 +1,7 @@
 using BookSpace.Application.Common;
 using BookSpace.Application.Resources;
 using BookSpace.Domain.Entities;
+using BookSpace.Domain.Enums;
 using Moq;
 using Xunit;
 
@@ -9,11 +10,24 @@ namespace BookSpace.Application.Tests.Resources;
 public sealed class RemoveResourceApproverCommandHandlerTests
 {
     private readonly Mock<IResourceApproverRepository> _resourceApproverRepository = new();
+    private readonly Mock<IResourceRepository> _resourceRepository = new();
 
-    private RemoveResourceApproverCommandHandler CreateSut() => new(_resourceApproverRepository.Object);
+    private RemoveResourceApproverCommandHandler CreateSut() => new(_resourceApproverRepository.Object, _resourceRepository.Object);
+
+    private static Resource CreateResource(Guid id, bool requiresApproval) => new()
+    {
+        Id = id,
+        TenantId = Guid.NewGuid(),
+        ResourceTypeId = Guid.NewGuid(),
+        Name = "Desk 1",
+        Capacity = 1,
+        RequiresApproval = requiresApproval,
+        Status = ResourceStatus.Active,
+        TimeZoneId = "UTC",
+    };
 
     [Fact]
-    public async Task Handle_WithMatchingApprover_RemovesItAndSaves()
+    public async Task Handle_WithMatchingApproverOnAResourceThatDoesNotRequireApproval_RemovesItAndSaves()
     {
         var resourceId = Guid.NewGuid();
         var userId = Guid.NewGuid();
@@ -21,6 +35,7 @@ public sealed class RemoveResourceApproverCommandHandlerTests
         _resourceApproverRepository
             .Setup(r => r.FindByResourceAndUserAsync(resourceId, userId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(approver);
+        _resourceRepository.Setup(r => r.FindByIdAsync(resourceId, It.IsAny<CancellationToken>())).ReturnsAsync(CreateResource(resourceId, false));
         var sut = CreateSut();
 
         await sut.Handle(new RemoveResourceApproverCommandRequest(resourceId, userId), CancellationToken.None);
@@ -42,5 +57,50 @@ public sealed class RemoveResourceApproverCommandHandlerTests
 
         Assert.Equal("ResourceApprover.NotFound", exception.ErrorCode);
         _resourceApproverRepository.Verify(r => r.RemoveAsync(It.IsAny<ResourceApprover>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Handle_WhenRemovingTheLastApproverOfAResourceThatRequiresApproval_ThrowsConflictExceptionWithoutRemoving()
+    {
+        var resourceId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        var approver = new ResourceApprover { Id = Guid.NewGuid(), TenantId = Guid.NewGuid(), ResourceId = resourceId, UserId = userId };
+        _resourceApproverRepository
+            .Setup(r => r.FindByResourceAndUserAsync(resourceId, userId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(approver);
+        _resourceRepository.Setup(r => r.FindByIdAsync(resourceId, It.IsAny<CancellationToken>())).ReturnsAsync(CreateResource(resourceId, true));
+        _resourceApproverRepository
+            .Setup(r => r.GetByResourceIdAsync(resourceId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[] { approver });
+        var sut = CreateSut();
+
+        var exception = await Assert.ThrowsAsync<ConflictException>(() =>
+            sut.Handle(new RemoveResourceApproverCommandRequest(resourceId, userId), CancellationToken.None));
+
+        Assert.Equal("ResourceApprover.LastRemaining", exception.ErrorCode);
+        _resourceApproverRepository.Verify(r => r.RemoveAsync(It.IsAny<ResourceApprover>(), It.IsAny<CancellationToken>()), Times.Never);
+        _resourceApproverRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Handle_WhenRemovingOneOfSeveralApproversOfAResourceThatRequiresApproval_RemovesAndSaves()
+    {
+        var resourceId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        var approver = new ResourceApprover { Id = Guid.NewGuid(), TenantId = Guid.NewGuid(), ResourceId = resourceId, UserId = userId };
+        var otherApprover = new ResourceApprover { Id = Guid.NewGuid(), TenantId = approver.TenantId, ResourceId = resourceId, UserId = Guid.NewGuid() };
+        _resourceApproverRepository
+            .Setup(r => r.FindByResourceAndUserAsync(resourceId, userId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(approver);
+        _resourceRepository.Setup(r => r.FindByIdAsync(resourceId, It.IsAny<CancellationToken>())).ReturnsAsync(CreateResource(resourceId, true));
+        _resourceApproverRepository
+            .Setup(r => r.GetByResourceIdAsync(resourceId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[] { approver, otherApprover });
+        var sut = CreateSut();
+
+        await sut.Handle(new RemoveResourceApproverCommandRequest(resourceId, userId), CancellationToken.None);
+
+        _resourceApproverRepository.Verify(r => r.RemoveAsync(approver, It.IsAny<CancellationToken>()), Times.Once);
+        _resourceApproverRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 }

@@ -41,6 +41,9 @@ public sealed class AssignResourceApproverCommandHandlerTests
         CreatedAtUtc = DateTimeOffset.UtcNow,
     };
 
+    private void SetUpApprovalCapableRoles(Guid userId, params string[] roles) =>
+        _userRepository.Setup(r => r.GetRolesAsync(userId, It.IsAny<CancellationToken>())).ReturnsAsync(roles);
+
     [Fact]
     public async Task Handle_WithValidCommand_CreatesAndReturnsApprover()
     {
@@ -50,6 +53,7 @@ public sealed class AssignResourceApproverCommandHandlerTests
         _currentUserContext.SetupGet(c => c.TenantId).Returns(tenantId);
         _resourceRepository.Setup(r => r.FindByIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(resource);
         _userRepository.Setup(r => r.FindByIdAsync(user.Id, It.IsAny<CancellationToken>())).ReturnsAsync(user);
+        SetUpApprovalCapableRoles(user.Id, "Approver");
         _resourceApproverRepository
             .Setup(r => r.FindByResourceAndUserAsync(resource.Id, user.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync((ResourceApprover?)null);
@@ -101,6 +105,7 @@ public sealed class AssignResourceApproverCommandHandlerTests
         var user = CreateUser(resource.TenantId);
         _resourceRepository.Setup(r => r.FindByIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(resource);
         _userRepository.Setup(r => r.FindByIdAsync(user.Id, It.IsAny<CancellationToken>())).ReturnsAsync(user);
+        SetUpApprovalCapableRoles(user.Id, "Approver");
         _resourceApproverRepository
             .Setup(r => r.FindByResourceAndUserAsync(resource.Id, user.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ResourceApprover { Id = Guid.NewGuid(), TenantId = resource.TenantId, ResourceId = resource.Id, UserId = user.Id });
@@ -111,5 +116,47 @@ public sealed class AssignResourceApproverCommandHandlerTests
 
         Assert.Equal("ResourceApprover.Conflict", exception.ErrorCode);
         _resourceApproverRepository.Verify(r => r.AddAsync(It.IsAny<ResourceApprover>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Handle_WithUserHoldingNoApprovalCapableRole_ThrowsConflictExceptionWithoutSaving()
+    {
+        var resource = CreateResource();
+        var user = CreateUser(resource.TenantId);
+        _resourceRepository.Setup(r => r.FindByIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(resource);
+        _userRepository.Setup(r => r.FindByIdAsync(user.Id, It.IsAny<CancellationToken>())).ReturnsAsync(user);
+        SetUpApprovalCapableRoles(user.Id, "Member");
+        var sut = CreateSut();
+        var request = new AssignResourceApproverCommandRequest(resource.Id, user.Id);
+
+        var exception = await Assert.ThrowsAsync<ConflictException>(() => sut.Handle(request, CancellationToken.None));
+
+        Assert.Equal("ResourceApprover.RoleRequired", exception.ErrorCode);
+        _resourceApproverRepository.Verify(r => r.AddAsync(It.IsAny<ResourceApprover>(), It.IsAny<CancellationToken>()), Times.Never);
+        _resourceApproverRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData("TenantAdmin")]
+    [InlineData("SysAdmin")]
+    public async Task Handle_WithTenantAdminOrSysAdminRole_IsAllowedEvenWithoutTheApproverRole(string adminRole)
+    {
+        var resource = CreateResource();
+        var tenantId = Guid.NewGuid();
+        var user = CreateUser(tenantId);
+        _currentUserContext.SetupGet(c => c.TenantId).Returns(tenantId);
+        _resourceRepository.Setup(r => r.FindByIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(resource);
+        _userRepository.Setup(r => r.FindByIdAsync(user.Id, It.IsAny<CancellationToken>())).ReturnsAsync(user);
+        SetUpApprovalCapableRoles(user.Id, adminRole);
+        _resourceApproverRepository
+            .Setup(r => r.FindByResourceAndUserAsync(resource.Id, user.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((ResourceApprover?)null);
+        var sut = CreateSut();
+        var request = new AssignResourceApproverCommandRequest(resource.Id, user.Id);
+
+        var result = await sut.Handle(request, CancellationToken.None);
+
+        Assert.Equal(user.Id, result.UserId);
+        _resourceApproverRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 }
