@@ -1,7 +1,40 @@
 <section class="user-list">
-  <header>
-    <h1>Users</h1>
-    <p class="field-hint">Everyone in your organization.</p>
+  <header class="user-list__header">
+    <div>
+      <h1>Users</h1>
+      <p class="field-hint">Everyone in your organization.</p>
+    </div>
+
+    <div class="user-list__filters">
+      <div class="field">
+        <label for="user-search">Search</label>
+        <input
+          id="user-search"
+          type="text"
+          placeholder="Search by name or email…"
+          [value]="searchTerm()"
+          (input)="onSearchInput($any($event.target).value)"
+        />
+      </div>
+      <div class="field">
+        <label for="role-filter">Role</label>
+        <select id="role-filter" [value]="role()" (change)="onRoleChange($event)">
+          <option value="">All roles</option>
+          @for (r of allRoles; track r) {
+            <option [value]="r">{{ r }}</option>
+          }
+        </select>
+      </div>
+      <div class="field">
+        <label for="status-filter">Status</label>
+        <select id="status-filter" [value]="status()" (change)="onStatusChange($event)">
+          <option value="">All statuses</option>
+          <option value="Active">Active</option>
+          <option value="Invited">Invited</option>
+          <option value="Inactive">Inactive</option>
+        </select>
+      </div>
+    </div>
   </header>
 
   @if (loading()) {
@@ -22,14 +55,40 @@
   } @else if (users().length === 0) {
     <div class="state-panel card">
       <p class="state-panel__title">No users found</p>
+      <p>Try a different search term, role, or status filter.</p>
     </div>
   } @else {
-    <div class="card user-list__table">
+    <div class="card user-list__table" role="table" aria-label="Users">
       @for (user of users(); track user.id) {
-        <div class="user-row">
-          <span class="user-row__name">{{ user.firstName }} {{ user.lastName }}</span>
-          <span class="user-row__email">{{ user.email }}</span>
-        </div>
+        <a class="user-row" role="row" [routerLink]="['/users', user.id]" [queryParams]="currentQueryParams()">
+          <div class="user-row__identity" role="cell">
+            <span class="user-row__name">
+              {{ user.firstName }} {{ user.lastName }}
+              @if (isYou(user)) {
+                <span class="user-row__you">(You)</span>
+              }
+            </span>
+            <span class="user-row__email">{{ user.email }}</span>
+          </div>
+          <div class="user-row__roles" role="cell">
+            @if (user.roles.length === 0) {
+              <span class="field-hint">No roles</span>
+            } @else {
+              @for (r of user.roles; track r) {
+                <span class="role-chip">{{ r }}</span>
+              }
+            }
+          </div>
+          <span
+            class="status-pill"
+            role="cell"
+            [class.status-pill--confirmed]="user.status === 'Active'"
+            [class.status-pill--pending]="user.status === 'Invited'"
+            [class.status-pill--cancelled]="user.status === 'Inactive'"
+          >
+            {{ user.status }}
+          </span>
+        </a>
       }
     </div>
 

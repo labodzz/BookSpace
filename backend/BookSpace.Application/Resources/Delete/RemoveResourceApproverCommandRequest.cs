@@ -1,3 +1,4 @@
+using BookSpace.Application.Bookings;
 using BookSpace.Application.Common;
 using BookSpace.Application.Mediator;
 
@@ -5,11 +6,22 @@ namespace BookSpace.Application.Resources;
 
 public sealed record RemoveResourceApproverCommandRequest(Guid ResourceId, Guid UserId) : IRequest<Unit>;
 
+// Wrapped in the same IResourceBookingLock boundary UpdateResourceCommandHandler's own capacity check
+// uses, keyed by the same Resources.Id - the "count remaining approvers, reject if this removal would
+// leave none" check below is a cross-row invariant over the WHOLE ResourceApprover set for this
+// resource, not something a single row's constraint can express. Without the lock, two admins removing
+// two DIFFERENT approvers from the same two-approver, RequiresApproval=true resource at the same moment
+// could both read "2 remaining" before either commits, both pass the <=1 check, and both succeed -
+// leaving zero approvers despite the guard existing. The lock serializes them: the second removal's
+// count is always read fresh, after the first either committed or rolled back.
 public sealed class RemoveResourceApproverCommandHandler(
-    IResourceApproverRepository resourceApproverRepository, IResourceRepository resourceRepository)
+    IResourceApproverRepository resourceApproverRepository, IResourceRepository resourceRepository, IResourceBookingLock resourceBookingLock)
     : IRequestHandler<RemoveResourceApproverCommandRequest, Unit>
 {
-    public async Task<Unit> Handle(RemoveResourceApproverCommandRequest request, CancellationToken cancellationToken)
+    public Task<Unit> Handle(RemoveResourceApproverCommandRequest request, CancellationToken cancellationToken) =>
+        resourceBookingLock.RunExclusiveAsync(request.ResourceId, ct => RemoveUnderLockAsync(request, ct), cancellationToken);
+
+    private async Task<Unit> RemoveUnderLockAsync(RemoveResourceApproverCommandRequest request, CancellationToken cancellationToken)
     {
         var approver = await resourceApproverRepository.FindByResourceAndUserAsync(request.ResourceId, request.UserId, cancellationToken)
             ?? throw new NotFoundException(
@@ -21,6 +33,10 @@ public sealed class RemoveResourceApproverCommandHandler(
         // with zero approvers - every future booking against it would then 409 with
         // Booking.NoApproverConfigured (see CreateBookingCommandHandler), silently making the resource
         // unbookable with no signal at the moment the removal actually happened.
+        //
+        // Fresh read, taken only after the lock is held - never a value computed before lock
+        // acquisition, so this is guaranteed current with respect to any concurrent
+        // Assign/RemoveResourceApproverCommandHandler call for the same resource.
         var resource = await resourceRepository.FindByIdAsync(request.ResourceId, cancellationToken);
         if (resource is { RequiresApproval: true })
         {

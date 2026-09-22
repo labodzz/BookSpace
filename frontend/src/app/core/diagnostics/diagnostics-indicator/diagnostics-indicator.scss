@@ -1,0 +1,21 @@
+:host {
+  // position: fixed removes this from the document flow entirely, so it can never shift layout or
+  // consume space any other element would otherwise occupy.
+  position: fixed;
+  bottom: 4px;
+  left: 4px;
+  z-index: 2147483647; // max safe CSS z-index - only relevant for this indicator's own visibility.
+  pointer-events: none; // must never intercept a click meant for the application underneath it.
+}
+
+.diagnostics-indicator {
+  font-family: ui-monospace, monospace;
+  font-size: 10px;
+  line-height: 1.4;
+  color: #fff;
+  background: rgb(0 0 0 / 65%);
+  padding: 2px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+  user-select: none;
+}

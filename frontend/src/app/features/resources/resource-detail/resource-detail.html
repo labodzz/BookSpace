@@ -35,10 +35,18 @@
       </span>
     </header>
 
-    @if (authService.hasAnyRole('TenantAdmin', 'SysAdmin') && resource.status !== 'Archived') {
+    @if (authService.hasAnyRole('TenantAdmin', 'SysAdmin')) {
       <div class="resource-detail__admin-actions">
-        <a class="btn btn-secondary" [routerLink]="['/resources', resource.id, 'edit']">Edit</a>
-        <button type="button" class="btn btn-secondary resource-detail__archive-btn" (click)="openArchiveDialog()">Archive</button>
+        @if (resource.status !== 'Archived') {
+          <a class="btn btn-secondary" [routerLink]="['/resources', resource.id, 'edit']">Edit</a>
+        }
+        <!-- Always shown, even once Archived: the management page still lets an admin delete existing
+             rules/blackouts on an archived resource, even though it can no longer add new ones. -->
+        <a class="btn btn-secondary" [routerLink]="['/resources', resource.id, 'manage-availability']">Manage availability</a>
+        <a class="btn btn-secondary" [routerLink]="['/resources', resource.id, 'manage-approvers']">Manage approvers</a>
+        @if (resource.status !== 'Archived') {
+          <button type="button" class="btn btn-secondary resource-detail__archive-btn" (click)="openArchiveDialog()">Archive</button>
+        }
       </div>
     }
 

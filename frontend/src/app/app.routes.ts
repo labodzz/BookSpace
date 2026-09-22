@@ -48,9 +48,36 @@ export const routes: Routes = [
           import('./features/resources/resource-availability/resource-availability').then((m) => m.ResourceAvailabilityComponent),
       },
       {
+        path: 'resources/:id/manage-availability',
+        canActivate: [roleGuard('TenantAdmin', 'SysAdmin')],
+        loadComponent: () =>
+          import('./features/resources/resource-availability-manage/resource-availability-manage').then(
+            (m) => m.ResourceAvailabilityManageComponent,
+          ),
+      },
+      {
+        path: 'resources/:id/manage-approvers',
+        canActivate: [roleGuard('TenantAdmin', 'SysAdmin')],
+        loadComponent: () =>
+          import('./features/resources/resource-approvers-manage/resource-approvers-manage').then(
+            (m) => m.ResourceApproversManageComponent,
+          ),
+      },
+      {
         path: 'users',
         canActivate: [roleGuard('TenantAdmin', 'SysAdmin')],
         loadComponent: () => import('./features/users/user-list/user-list').then((m) => m.UserListComponent),
+      },
+      {
+        path: 'users/:id',
+        canActivate: [roleGuard('TenantAdmin', 'SysAdmin')],
+        loadComponent: () => import('./features/users/user-detail/user-detail').then((m) => m.UserDetailComponent),
+      },
+      {
+        path: 'resource-types',
+        canActivate: [roleGuard('TenantAdmin', 'SysAdmin')],
+        loadComponent: () =>
+          import('./features/resource-types/resource-type-list/resource-type-list').then((m) => m.ResourceTypeListComponent),
       },
       {
         path: 'bookings',

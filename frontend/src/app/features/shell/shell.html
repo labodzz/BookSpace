@@ -15,14 +15,15 @@
         routerLinkActive="shell-nav__link--active"
         [routerLinkActiveOptions]="{ exact: true }"
         class="shell-nav__link"
+        draggable="false"
       >
         Dashboard
       </a>
-      <a routerLink="/resources" routerLinkActive="shell-nav__link--active" class="shell-nav__link">Resources</a>
-      <a routerLink="/bookings" routerLinkActive="shell-nav__link--active" class="shell-nav__link">My bookings</a>
-      <a routerLink="/calendar" routerLinkActive="shell-nav__link--active" class="shell-nav__link">Calendar</a>
+      <a routerLink="/resources" routerLinkActive="shell-nav__link--active" class="shell-nav__link" draggable="false">Resources</a>
+      <a routerLink="/bookings" routerLinkActive="shell-nav__link--active" class="shell-nav__link" draggable="false">My bookings</a>
+      <a routerLink="/calendar" routerLinkActive="shell-nav__link--active" class="shell-nav__link" draggable="false">Calendar</a>
       @if (isApprover) {
-        <a routerLink="/approvals" routerLinkActive="shell-nav__link--active" class="shell-nav__link">
+        <a routerLink="/approvals" routerLinkActive="shell-nav__link--active" class="shell-nav__link" draggable="false">
           <span>Approvals</span>
           @if (pendingApprovalCount() > 0) {
             <span class="shell-nav__badge">{{ pendingApprovalCount() }}</span>
@@ -30,7 +31,8 @@
         </a>
       }
       @if (authService.hasAnyRole('TenantAdmin', 'SysAdmin')) {
-        <a routerLink="/users" routerLinkActive="shell-nav__link--active" class="shell-nav__link">Users</a>
+        <a routerLink="/users" routerLinkActive="shell-nav__link--active" class="shell-nav__link" draggable="false">Users</a>
+        <a routerLink="/resource-types" routerLinkActive="shell-nav__link--active" class="shell-nav__link" draggable="false">Resource types</a>
       }
       <button type="button" class="shell-nav__link shell-nav__link--disabled" disabled title="Settings are coming soon">
         Settings

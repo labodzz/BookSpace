@@ -1,8 +1,9 @@
 import { HttpClient, HttpContext, HttpErrorResponse } from '@angular/common/http';
 import { Injectable, computed, inject, signal } from '@angular/core';
 import { Router } from '@angular/router';
-import { Observable, Subject, catchError, finalize, firstValueFrom, from, map, shareReplay, takeUntil, tap, throwError } from 'rxjs';
+import { Observable, Subject, TimeoutError, catchError, finalize, firstValueFrom, from, map, shareReplay, takeUntil, tap, throwError, timeout } from 'rxjs';
 import { environment } from '../../../environments/environment';
+import { DiagnosticsService } from '../diagnostics/diagnostics.service';
 import { SKIP_GLOBAL_ERROR_TOAST } from '../http/api-error';
 import { AuthTokens, CurrentUser } from './auth.models';
 import { decodeAccessToken } from './jwt.util';
@@ -10,6 +11,17 @@ import { TokenStorageService } from './token-storage.service';
 
 const REFRESH_LOCK_NAME = 'bookspace-auth-refresh';
 const BROADCAST_CHANNEL_NAME = 'bookspace-auth';
+
+// No HTTP call anywhere in this app is otherwise bounded (confirmed: no `timeout(` operator exists
+// outside this one). That is uniquely dangerous here specifically, because this call runs inside
+// navigator.locks.request() (see refreshWithCrossTabLock) and is shared app-wide through
+// refreshInFlight$ - a request that never settles holds the cross-tab lock forever and leaves every
+// other component/button that also needed a token refresh (i.e. every authenticated request made from
+// the moment the access token expires onward) waiting on that same never-resolving Observable, with no
+// error for any of them to ever react to. 15s is generous for a same-datacenter API call but still
+// bounded - see auth.interceptor.spec.ts's "stalled /auth/refresh cascades..." suite for the mechanism
+// this guards against.
+const REFRESH_TIMEOUT_MS = 15_000;
 
 type AuthBroadcastMessage = { type: 'tokens-updated'; tokens: AuthTokens } | { type: 'logged-out' };
 
@@ -22,6 +34,10 @@ export class AuthService {
   private readonly http = inject(HttpClient);
   private readonly tokenStorage = inject(TokenStorageService);
   private readonly router = inject(Router);
+  // TEMPORARY, development-only (no-ops entirely in production) - records the refresh lifecycle phases
+  // below purely as diagnostic evidence for the still-unresolved app-wide freeze investigation. Never
+  // records token values - see diagnostics.service.ts's own privacy rules.
+  private readonly diagnostics = inject(DiagnosticsService);
 
   private readonly tokens = signal<AuthTokens | null>(this.tokenStorage.load());
 
@@ -180,7 +196,9 @@ export class AuthService {
   }
 
   refreshAccessToken(): Observable<AuthTokens> {
+    this.diagnostics.recordAuthRefresh('requested');
     if (this.refreshInFlight$) {
+      this.diagnostics.recordAuthRefresh('reusing-in-flight');
       return this.refreshInFlight$;
     }
 
@@ -197,6 +215,7 @@ export class AuthService {
       takeUntil(this.loggedOut$),
       finalize(() => {
         this.refreshInFlight$ = null;
+        this.diagnostics.recordAuthRefresh('in-flight-cleared');
       }),
       shareReplay(1),
     );
@@ -212,8 +231,15 @@ export class AuthService {
   // Environments without the Web Locks API (older browsers, some test runners) fall back to running the
   // refresh directly - no cross-tab dedup, but everything still works, backed by the same RowVersion net.
   private refreshWithCrossTabLock(): Promise<AuthTokens> {
-    const run = () => this.performRefresh();
-    return typeof navigator !== 'undefined' && navigator.locks ? navigator.locks.request(REFRESH_LOCK_NAME, run) : run();
+    if (typeof navigator === 'undefined' || !navigator.locks) {
+      return this.performRefresh();
+    }
+
+    this.diagnostics.recordAuthRefresh('waiting-for-lock');
+    return navigator.locks.request(REFRESH_LOCK_NAME, () => {
+      this.diagnostics.recordAuthRefresh('lock-acquired');
+      return this.performRefresh().finally(() => this.diagnostics.recordAuthRefresh('lock-released'));
+    });
   }
 
   private performRefresh(): Promise<AuthTokens> {
@@ -234,18 +260,23 @@ export class AuthService {
 
     const attemptedRefreshToken = current.refreshToken;
     const context = new HttpContext().set(SKIP_GLOBAL_ERROR_TOAST, true);
+    this.diagnostics.recordAuthRefresh('http-started');
     return firstValueFrom(
       this.http.post<AuthTokens>(`${environment.apiUrl}/auth/refresh`, { refreshToken: attemptedRefreshToken }, { context }).pipe(
+        timeout(REFRESH_TIMEOUT_MS),
         tap((tokens) => {
+          this.diagnostics.recordAuthRefresh('completed');
           this.tokens.set(tokens);
           this.tokenStorage.saveToActiveStorage(tokens);
           this.broadcastChannel?.postMessage({ type: 'tokens-updated', tokens } satisfies AuthBroadcastMessage);
         }),
         catchError((error: unknown) => {
-          // Only a confirmed 401 means the backend actually rejected THIS token - a network error or a
-          // 5xx says nothing about whether the session is still good (the interceptor leaves those
-          // alone too), and `attemptedRefreshToken` is a plain local value, immune to a sibling tab's
-          // broadcast updating `this.tokens` in the meantime (see clearExpiredSession).
+          this.diagnostics.recordAuthRefresh(error instanceof TimeoutError ? 'timed-out' : 'failed');
+          // Only a confirmed 401 means the backend actually rejected THIS token - a network error, a
+          // 5xx, or the timeout() above firing says nothing about whether the session is still good (the
+          // interceptor leaves those alone too), and `attemptedRefreshToken` is a plain local value,
+          // immune to a sibling tab's broadcast updating `this.tokens` in the meantime (see
+          // clearExpiredSession).
           if (error instanceof HttpErrorResponse && error.status === 401) {
             this.clearExpiredSession(attemptedRefreshToken);
           }

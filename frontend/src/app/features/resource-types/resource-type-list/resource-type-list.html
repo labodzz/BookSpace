@@ -1,0 +1,91 @@
+<section class="resource-type-list-page">
+  <header class="resource-type-list__header">
+    <div>
+      <h1>Resource types</h1>
+      <p class="field-hint">The categories resources are created under, such as "Meeting Room" or "Desk".</p>
+    </div>
+    <button type="button" class="btn btn-primary" (click)="openCreateDialog()">Add resource type</button>
+  </header>
+
+  @if (loading()) {
+    <div class="card resource-type-list__table" aria-busy="true">
+      @for (i of [1, 2, 3]; track i) {
+        <div class="resource-type-row">
+          <span class="skeleton" style="height: 1rem; width: 40%;"></span>
+        </div>
+      }
+    </div>
+  } @else if (error()) {
+    <div class="state-panel card">
+      <p class="state-panel__title">Couldn't load resource types</p>
+      <p>{{ error()!.detail ?? error()!.title }}</p>
+      <button type="button" class="btn btn-secondary" (click)="retry()">Try again</button>
+    </div>
+  } @else if (resourceTypes().length === 0) {
+    <div class="state-panel card">
+      <p class="state-panel__title">No resource types yet</p>
+      <p>Add one before creating a resource - every resource needs a type.</p>
+    </div>
+  } @else {
+    <div class="card resource-type-list__table">
+      @for (type of resourceTypes(); track type.id) {
+        <div class="resource-type-row">
+          <span class="resource-type-row__name">{{ type.name }}</span>
+          <div class="resource-type-row__actions">
+            <button type="button" class="btn btn-secondary" (click)="openEditDialog(type)">Edit</button>
+            <button type="button" class="btn btn-secondary resource-type-row__delete-btn" (click)="askDelete(type)">Delete</button>
+          </div>
+        </div>
+      }
+    </div>
+  }
+
+  @if (dialog(); as dialogState) {
+    <div class="dialog-backdrop" (click)="closeDialog()">
+      <div class="card dialog" role="dialog" aria-modal="true" aria-labelledby="type-dialog-title" (click)="$event.stopPropagation()">
+        <h2 id="type-dialog-title">{{ dialogState.mode === 'create' ? 'Add resource type' : 'Edit resource type' }}</h2>
+
+        @if (dialogFormError()) {
+          <p class="banner banner-error" role="alert">{{ dialogFormError() }}</p>
+        }
+
+        <div class="field">
+          <label for="type-name">Name</label>
+          <input id="type-name" type="text" maxlength="100" [value]="dialogName()" (input)="dialogName.set($any($event.target).value)" />
+          @if (dialogNameFieldErrors().length) {
+            <span class="field-error-text">{{ dialogNameFieldErrors().join(' ') }}</span>
+          }
+        </div>
+
+        <div class="dialog__actions">
+          <button type="button" class="btn btn-secondary" [disabled]="saving()" (click)="closeDialog()">Cancel</button>
+          <button type="button" class="btn btn-primary" [disabled]="saving()" (click)="submitDialog()">
+            {{ saving() ? 'Saving…' : dialogState.mode === 'create' ? 'Add type' : 'Save changes' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  }
+
+  @if (deleteTarget(); as target) {
+    <div class="dialog-backdrop" (click)="cancelDelete()">
+      <div class="card dialog" role="dialog" aria-modal="true" aria-labelledby="delete-type-dialog-title" (click)="$event.stopPropagation()">
+        <h2 id="delete-type-dialog-title">Delete "{{ target.name }}"?</h2>
+        <p class="dialog__summary">
+          This cannot be undone. If any resource - active or archived - still uses this type, deletion will be rejected.
+        </p>
+
+        @if (deleteError()) {
+          <p class="banner banner-error" role="alert">{{ deleteError() }}</p>
+        }
+
+        <div class="dialog__actions">
+          <button type="button" class="btn btn-secondary" [disabled]="deleting()" (click)="cancelDelete()">Keep it</button>
+          <button type="button" class="btn btn-primary" [disabled]="deleting()" (click)="confirmDelete()">
+            {{ deleting() ? 'Deleting…' : 'Delete' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  }
+</section>

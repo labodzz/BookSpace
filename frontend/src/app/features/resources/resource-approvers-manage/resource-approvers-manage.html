@@ -1,0 +1,201 @@
+<div class="manage-approvers-page">
+@if (resourceLoading()) {
+  <div class="card manage-approvers manage-approvers--skeleton" aria-busy="true">
+    <span class="skeleton" style="height: 1.5rem; width: 45%;"></span>
+    <span class="skeleton" style="height: 1rem; width: 30%;"></span>
+    <span class="skeleton" style="height: 6rem; width: 100%;"></span>
+  </div>
+} @else if (resourceNotFound()) {
+  <div class="state-panel card">
+    <p class="state-panel__title">This resource doesn't exist</p>
+    <p>It may have been removed, or the link isn't correct.</p>
+    <a class="btn btn-primary" routerLink="/resources">Browse resources</a>
+  </div>
+} @else if (resourceError()) {
+  <div class="state-panel card">
+    <p class="state-panel__title">Couldn't load this resource</p>
+    <p>{{ resourceError()!.detail ?? resourceError()!.title }}</p>
+    <button type="button" class="btn btn-secondary" (click)="retryLoadResource()">Try again</button>
+  </div>
+} @else if (resource(); as resource) {
+  <a class="manage-approvers__back" [routerLink]="['/resources', resource.id]">&larr; Back to {{ resource.name }}</a>
+
+  <header class="manage-approvers__header">
+    <div>
+      <h1>Manage approvers &middot; {{ resource.name }}</h1>
+      <p class="field-hint">
+        {{ resource.requiresApproval ? 'This resource requires approval before a booking is confirmed.' : 'This resource confirms bookings instantly - it does not require approval.' }}
+      </p>
+    </div>
+    <span
+      class="status-pill"
+      [class.status-pill--confirmed]="resource.status === 'Active'"
+      [class.status-pill--cancelled]="resource.status !== 'Active'"
+    >
+      {{ resource.status }}
+    </span>
+  </header>
+
+  @if (isArchived()) {
+    <p class="banner banner-info" role="status">
+      This resource is archived. No new approvers can be assigned, but existing assignments can still be removed as cleanup.
+    </p>
+  }
+
+  @if (noApproverConfigured()) {
+    <p class="banner banner-error" role="alert">
+      This resource requires approval but has no approver assigned. New booking requests cannot be approved until at least one
+      approver is added below.
+    </p>
+  }
+
+  @if (approversHaveNoWork()) {
+    <p class="banner banner-info" role="status">
+      This resource does not currently require approval, so the approvers assigned below have nothing to do here. Their
+      assignments are kept in case approval is turned back on for this resource.
+    </p>
+  }
+
+  <section class="card manage-approvers__section">
+    <h2>Current approvers</h2>
+
+    @if (approversLoading()) {
+      <div class="manage-approvers__list" aria-busy="true">
+        <span class="skeleton" style="height: 2.5rem; width: 100%;"></span>
+        <span class="skeleton" style="height: 2.5rem; width: 100%;"></span>
+      </div>
+    } @else if (approversError()) {
+      <div class="state-panel card">
+        <p class="state-panel__title">Couldn't load approvers</p>
+        <p>{{ approversError()!.detail ?? approversError()!.title }}</p>
+        <button type="button" class="btn btn-secondary" (click)="retryLoadApprovers()">Try again</button>
+      </div>
+    } @else if (approvers().length === 0) {
+      <p class="field-hint">No approvers are assigned to this resource yet.</p>
+    } @else {
+      <ul class="manage-approvers__list">
+        @for (approver of approvers(); track approver.assignmentId) {
+          <li class="manage-approvers__row">
+            <div class="manage-approvers__identity">
+              <span class="manage-approvers__name">{{ displayName(approver) }}</span>
+              @if (approver.email) {
+                <span class="manage-approvers__email">{{ approver.email }}</span>
+              }
+              @if (approver.resolution === 'unresolved') {
+                <span class="banner banner-error manage-approvers__warning" role="alert">
+                  This user could no longer be found (id: {{ approver.userId }}). The assignment may be left over from a
+                  deleted account - consider removing it.
+                </span>
+              } @else if (approver.resolution === 'missing-role') {
+                <span class="banner banner-error manage-approvers__warning" role="alert">
+                  This user no longer holds a role that can approve bookings. They cannot act on this resource's approvals
+                  until their role is restored or this assignment is removed.
+                </span>
+              } @else if (approver.roles.length > 0) {
+                <span class="manage-approvers__roles">{{ approver.roles.join(', ') }}</span>
+              }
+            </div>
+            <button
+              type="button"
+              class="btn btn-secondary manage-approvers__remove-btn"
+              [attr.aria-label]="'Remove ' + displayName(approver) + ' as an approver'"
+              (click)="askRemoveApprover(approver)"
+            >
+              Remove
+            </button>
+          </li>
+        }
+      </ul>
+    }
+  </section>
+
+  @if (!isArchived()) {
+    <section class="card manage-approvers__section">
+      <h2>Add an approver</h2>
+      <p class="field-hint">Only users who hold the Approver role in this tenant can be assigned.</p>
+
+      @if (assignError()) {
+        <p class="banner banner-error" role="alert">{{ assignError() }}</p>
+      }
+
+      <div class="field">
+        <label for="approver-search">Search by name or email</label>
+        <input
+          id="approver-search"
+          type="text"
+          placeholder="Start typing a name or email…"
+          [value]="searchTerm()"
+          (input)="onSearchInput($any($event.target).value)"
+        />
+      </div>
+
+      @if (searching()) {
+        <div class="manage-approvers__list" aria-busy="true">
+          <span class="skeleton" style="height: 2.5rem; width: 100%;"></span>
+        </div>
+      } @else if (searchError()) {
+        <p class="banner banner-error" role="alert">{{ searchError()!.detail ?? searchError()!.title }}</p>
+      } @else if (eligibleSearchResults().length === 0) {
+        <p class="field-hint">
+          @if (searchTerm()) {
+            No matching Approver-role users found.
+          } @else {
+            No Approver-role candidates available - everyone eligible is already assigned, or no one in this tenant holds
+            the Approver role yet.
+          }
+        </p>
+      } @else {
+        <ul class="manage-approvers__list">
+          @for (user of eligibleSearchResults(); track user.id) {
+            <li class="manage-approvers__row">
+              <div class="manage-approvers__identity">
+                <span class="manage-approvers__name">{{ user.firstName }} {{ user.lastName }}</span>
+                <span class="manage-approvers__email">{{ user.email }}</span>
+              </div>
+              <button
+                type="button"
+                class="btn btn-primary"
+                [attr.aria-label]="'Add ' + user.firstName + ' ' + user.lastName + ' as an approver'"
+                [disabled]="assigningUserId() === user.id"
+                (click)="assignCandidate(user)"
+              >
+                {{ assigningUserId() === user.id ? 'Adding…' : 'Add' }}
+              </button>
+            </li>
+          }
+        </ul>
+      }
+    </section>
+  }
+
+  @if (removeConfirmation(); as target) {
+    <div class="dialog-backdrop" (click)="cancelRemove()">
+      <div class="card dialog" role="dialog" aria-modal="true" aria-labelledby="remove-approver-dialog-title" (click)="$event.stopPropagation()">
+        <h2 id="remove-approver-dialog-title">Remove {{ displayName(target) }} as an approver?</h2>
+        <p class="dialog__summary">
+          {{ displayName(target) }} will no longer be able to approve or reject bookings for {{ resource.name }}.
+        </p>
+
+        @if (removalWouldLeaveNoApprover()) {
+          <p class="banner banner-error" role="alert">
+            {{ displayName(target) }} appears to be the only approver assigned to this resource, which still requires
+            approval. Removing them would make it impossible to approve future booking requests until a replacement is
+            assigned. Consider assigning another approver first, or turning off "Requires approval" for this resource.
+          </p>
+        }
+
+        @if (removeError()) {
+          <p class="banner banner-error" role="alert">{{ removeError() }}</p>
+        }
+
+        <div class="dialog__actions">
+          <button type="button" class="btn btn-secondary" [disabled]="removing()" (click)="cancelRemove()">Keep approver</button>
+          <button type="button" class="btn btn-primary" [disabled]="removing()" (click)="confirmRemove()">
+            {{ removing() ? 'Removing…' : 'Remove approver' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  }
+}
+</div>
