@@ -1,7 +1,8 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { Component, computed, inject, signal } from '@angular/core';
-import { Router } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import { ApiError, toApiError } from '../../../core/http/api-error';
+import { AuthService } from '../../../core/auth/auth.service';
 import { ResourceService } from '../resource.service';
 import { ResourceStatus, ResourceSummary } from '../resource.models';
 
@@ -12,13 +13,14 @@ const PAGE_SIZE = 12;
 // PagedResult, not a client-side slice of an unbounded fetch.
 @Component({
   selector: 'app-resource-list',
-  imports: [],
+  imports: [RouterLink],
   templateUrl: './resource-list.html',
   styleUrl: './resource-list.scss',
 })
 export class ResourceListComponent {
   private readonly resourceService = inject(ResourceService);
   private readonly router = inject(Router);
+  protected readonly authService = inject(AuthService);
 
   protected readonly resourceTypes = this.resourceService.resourceTypes;
   protected readonly resources = signal<ResourceSummary[]>([]);

@@ -5,6 +5,10 @@
       <p class="resource-list__subtitle">Browse what your team can book.</p>
     </div>
 
+    @if (authService.hasAnyRole('TenantAdmin', 'SysAdmin')) {
+      <a class="btn btn-primary" routerLink="/resources/new">New resource</a>
+    }
+
     <div class="resource-list__filters">
       <div class="field">
         <label for="type-filter">Type</label>

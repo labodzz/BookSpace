@@ -3,8 +3,8 @@ import { Injectable, inject, signal } from '@angular/core';
 import { Observable, map, of, shareReplay, tap } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import { PagedResult } from '../../core/http/paged-result';
-import { ResourceAvailability, ResourceStatus, ResourceSummary, ResourceType } from './resource.models';
-import { ResourceSummaryWire, mapResourceSummary } from './resource.mappers';
+import { CreateResourceRequest, ResourceAvailability, ResourceStatus, ResourceSummary, ResourceType, UpdateResourceRequest } from './resource.models';
+import { ResourceSummaryWire, fromResourceStatus, mapResourceSummary } from './resource.mappers';
 
 @Injectable({ providedIn: 'root' })
 export class ResourceService {
@@ -31,6 +31,27 @@ export class ResourceService {
 
   getResource(id: string): Observable<ResourceSummary> {
     return this.http.get<ResourceSummaryWire>(`${environment.apiUrl}/resources/${id}`).pipe(map(mapResourceSummary));
+  }
+
+  createResource(request: CreateResourceRequest): Observable<ResourceSummary> {
+    return this.http
+      .post<ResourceSummaryWire>(`${environment.apiUrl}/resources`, request)
+      .pipe(map(mapResourceSummary), tap((resource) => this.resourceCache.set(resource.id, resource)));
+  }
+
+  updateResource(id: string, request: UpdateResourceRequest): Observable<ResourceSummary> {
+    const wireRequest = { ...request, status: fromResourceStatus(request.status) };
+    return this.http
+      .put<ResourceSummaryWire>(`${environment.apiUrl}/resources/${id}`, wireRequest)
+      .pipe(map(mapResourceSummary), tap((resource) => this.resourceCache.set(resource.id, resource)));
+  }
+
+  // Soft-delete (archive) - the backend flips Status to Archived rather than removing the row, so the
+  // response is still a full resource, not an empty body.
+  archiveResource(id: string): Observable<ResourceSummary> {
+    return this.http
+      .delete<ResourceSummaryWire>(`${environment.apiUrl}/resources/${id}`)
+      .pipe(map(mapResourceSummary), tap((resource) => this.resourceCache.set(resource.id, resource)));
   }
 
   // Booking lists (My Bookings, Calendar, Approval queue) only ever get a ResourceId back from the API,

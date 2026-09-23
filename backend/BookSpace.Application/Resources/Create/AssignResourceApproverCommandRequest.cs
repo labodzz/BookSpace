@@ -40,6 +40,19 @@ public sealed class AssignResourceApproverCommandHandler(
             throw new NotFoundException($"User {request.UserId} was not found.", ErrorCodes.UserNotFound);
         }
 
+        // A per-resource approver assignment is meaningless for a user who can never actually decide an
+        // approval - ApprovalAuthorization only ever lets a plain Approver, TenantAdmin, or SysAdmin
+        // through. Without this check, assigning e.g. a plain Member as an approver would silently
+        // create a ResourceApprover row that ApprovalAuthorization would still reject at decision time,
+        // leaving the resource's approval queue with an assignee who can never actually approve anything.
+        var targetRoles = await userRepository.GetRolesAsync(request.UserId, cancellationToken);
+        if (!targetRoles.Contains("Approver") && !targetRoles.Contains("TenantAdmin") && !targetRoles.Contains("SysAdmin"))
+        {
+            throw new ConflictException(
+                $"User {request.UserId} does not hold a role that can approve bookings (Approver, TenantAdmin, or SysAdmin).",
+                ErrorCodes.ResourceApproverRoleRequired);
+        }
+
         if (await resourceApproverRepository.FindByResourceAndUserAsync(request.ResourceId, request.UserId, cancellationToken) is not null)
         {
             throw new ConflictException(

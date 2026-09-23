@@ -1,0 +1,59 @@
+// The outer page container - always full width, so the shell's content area never shows unused space
+// beside a narrow card. The card itself keeps a readable max-width inside it.
+.resource-form-page {
+  display: block;
+  width: 100%;
+}
+
+.resource-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 640px;
+  padding: var(--space-6);
+}
+
+.resource-form--skeleton {
+  gap: var(--space-3);
+}
+
+.resource-form__back {
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  width: fit-content;
+}
+
+.resource-form__back:hover {
+  color: var(--color-primary);
+}
+
+.resource-form textarea {
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: inherit;
+  resize: vertical;
+}
+
+.resource-form textarea:focus-visible {
+  border-color: var(--color-primary);
+}
+
+.resource-form__checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.resource-form__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}

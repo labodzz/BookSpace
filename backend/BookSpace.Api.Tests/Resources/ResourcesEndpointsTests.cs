@@ -256,9 +256,11 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"ApproverRemoveHost {Guid.NewGuid()}");
-        await client.PostAsJsonAsync($"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeMemberUserId });
+        var assignResponse = await client.PostAsJsonAsync(
+            $"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
+        Assert.Equal(HttpStatusCode.Created, assignResponse.StatusCode);
 
-        var response = await client.DeleteAsync($"/resources/{resource.Id}/approvers/{TestDataSeeder.AcmeMemberUserId}");
+        var response = await client.DeleteAsync($"/resources/{resource.Id}/approvers/{TestDataSeeder.AcmeUnassignedApproverUserId}");
 
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
     }
@@ -383,7 +385,8 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         var resource = await CreateResourceAsync(client, $"SysAdminApproverAssign {Guid.NewGuid()}");
         using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
 
-        var response = await sysAdminClient.PostAsJsonAsync($"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeMemberUserId });
+        var response = await sysAdminClient.PostAsJsonAsync(
+            $"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     }
@@ -393,10 +396,10 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"SysAdminApproverRemove {Guid.NewGuid()}");
-        await client.PostAsJsonAsync($"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeMemberUserId });
+        await client.PostAsJsonAsync($"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
         using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
 
-        var response = await sysAdminClient.DeleteAsync($"/resources/{resource.Id}/approvers/{TestDataSeeder.AcmeMemberUserId}");
+        var response = await sysAdminClient.DeleteAsync($"/resources/{resource.Id}/approvers/{TestDataSeeder.AcmeUnassignedApproverUserId}");
 
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
     }
@@ -612,10 +615,10 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"ApproverDeniedApproverRemove {Guid.NewGuid()}");
-        await client.PostAsJsonAsync($"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeMemberUserId });
+        await client.PostAsJsonAsync($"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
         using var approverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
 
-        var response = await approverClient.DeleteAsync($"/resources/{resource.Id}/approvers/{TestDataSeeder.AcmeMemberUserId}");
+        var response = await approverClient.DeleteAsync($"/resources/{resource.Id}/approvers/{TestDataSeeder.AcmeUnassignedApproverUserId}");
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -625,10 +628,10 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"MemberDeniedApproverRemove {Guid.NewGuid()}");
-        await client.PostAsJsonAsync($"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeMemberUserId });
+        await client.PostAsJsonAsync($"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
         using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
 
-        var response = await memberClient.DeleteAsync($"/resources/{resource.Id}/approvers/{TestDataSeeder.AcmeMemberUserId}");
+        var response = await memberClient.DeleteAsync($"/resources/{resource.Id}/approvers/{TestDataSeeder.AcmeUnassignedApproverUserId}");
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -799,12 +802,85 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"ApproverHost {Guid.NewGuid()}");
-        var assignRequest = new { userId = TestDataSeeder.AcmeMemberUserId };
-        await client.PostAsJsonAsync($"/resources/{resource.Id}/approvers", assignRequest);
+        var assignRequest = new { userId = TestDataSeeder.AcmeUnassignedApproverUserId };
+        var firstResponse = await client.PostAsJsonAsync($"/resources/{resource.Id}/approvers", assignRequest);
+        Assert.Equal(HttpStatusCode.Created, firstResponse.StatusCode);
 
         var response = await client.PostAsJsonAsync($"/resources/{resource.Id}/approvers", assignRequest);
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal("ResourceApprover.Conflict", await ReadErrorCodeAsync(response));
+    }
+
+    // --- Batch 0: aligning ResourceApprover assignment with the global Approver role, and protecting
+    // the last approver of a resource that still requires approval. ---
+
+    [Fact]
+    public async Task AssignResourceApprover_WithATargetUserHoldingNoApprovalCapableRole_ReturnsConflict()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resource = await CreateResourceAsync(client, $"RoleRequiredHost {Guid.NewGuid()}");
+
+        var response = await client.PostAsJsonAsync($"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeMemberUserId });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal("ResourceApprover.RoleRequired", await ReadErrorCodeAsync(response));
+    }
+
+    [Fact]
+    public async Task AssignResourceApprover_WithATargetUserHoldingTheApproverRole_ReturnsCreated()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resource = await CreateResourceAsync(client, $"RoleAllowedHost {Guid.NewGuid()}");
+
+        var response = await client.PostAsJsonAsync(
+            $"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task RemoveResourceApprover_TheLastOneOnAResourceThatRequiresApproval_ReturnsConflict()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var response = await client.PostAsJsonAsync("/resources", new
+        {
+            resourceTypeId = TestDataSeeder.ResourceTypeId,
+            name = $"LastApproverHost {Guid.NewGuid()}",
+            capacity = 4,
+            requiresApproval = true,
+            timeZoneId = "UTC",
+        });
+        var resource = (await response.Content.ReadFromJsonAsync<ResourceResponse>(JsonOptions))!;
+        var assignResponse = await client.PostAsJsonAsync(
+            $"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
+        Assert.Equal(HttpStatusCode.Created, assignResponse.StatusCode);
+
+        var removeResponse = await client.DeleteAsync($"/resources/{resource.Id}/approvers/{TestDataSeeder.AcmeUnassignedApproverUserId}");
+
+        Assert.Equal(HttpStatusCode.Conflict, removeResponse.StatusCode);
+        Assert.Equal("ResourceApprover.LastRemaining", await ReadErrorCodeAsync(removeResponse));
+    }
+
+    [Fact]
+    public async Task RemoveResourceApprover_OneOfSeveralOnAResourceThatRequiresApproval_ReturnsNoContent()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var createResponse = await client.PostAsJsonAsync("/resources", new
+        {
+            resourceTypeId = TestDataSeeder.ResourceTypeId,
+            name = $"MultiApproverHost {Guid.NewGuid()}",
+            capacity = 4,
+            requiresApproval = true,
+            timeZoneId = "UTC",
+        });
+        var resource = (await createResponse.Content.ReadFromJsonAsync<ResourceResponse>(JsonOptions))!;
+        await client.PostAsJsonAsync($"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
+        await client.PostAsJsonAsync($"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeApproverUserId });
+
+        var removeResponse = await client.DeleteAsync($"/resources/{resource.Id}/approvers/{TestDataSeeder.AcmeUnassignedApproverUserId}");
+
+        Assert.Equal(HttpStatusCode.NoContent, removeResponse.StatusCode);
     }
 
     [Fact]

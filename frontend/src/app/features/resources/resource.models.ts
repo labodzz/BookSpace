@@ -19,6 +19,23 @@ export interface ResourceSummary {
   timeZoneId: string;
 }
 
+// CreateResourceRequest - POST /resources. Status isn't settable here; the backend always creates a
+// new resource as Active.
+export interface CreateResourceRequest {
+  resourceTypeId: string;
+  name: string;
+  description: string | null;
+  capacity: number;
+  requiresApproval: boolean;
+  timeZoneId: string;
+}
+
+// UpdateResourceCommandRequest - PUT /resources/{id}. Status excludes 'Archived' - the backend rejects
+// it (use archiveResource() instead) and rejects editing an already-Archived resource at all.
+export interface UpdateResourceRequest extends CreateResourceRequest {
+  status: Exclude<ResourceStatus, 'Archived'>;
+}
+
 export interface OpenPeriod {
   startUtc: string;
   endUtc: string;
