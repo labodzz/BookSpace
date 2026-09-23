@@ -31,6 +31,7 @@
       }
       @if (authService.hasAnyRole('TenantAdmin', 'SysAdmin')) {
         <a routerLink="/users" routerLinkActive="shell-nav__link--active" class="shell-nav__link">Users</a>
+        <a routerLink="/resource-types" routerLinkActive="shell-nav__link--active" class="shell-nav__link">Resource types</a>
       }
       <button type="button" class="shell-nav__link shell-nav__link--disabled" disabled title="Settings are coming soon">
         Settings

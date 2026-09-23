@@ -1,0 +1,273 @@
+<div class="manage-availability-page">
+@if (resourceLoading()) {
+  <div class="card manage-availability manage-availability--skeleton" aria-busy="true">
+    <span class="skeleton" style="height: 1.5rem; width: 45%;"></span>
+    <span class="skeleton" style="height: 1rem; width: 30%;"></span>
+    <span class="skeleton" style="height: 8rem; width: 100%;"></span>
+  </div>
+} @else if (resourceNotFound()) {
+  <div class="state-panel card">
+    <p class="state-panel__title">This resource doesn't exist</p>
+    <p>It may have been removed, or the link isn't correct.</p>
+    <a class="btn btn-primary" routerLink="/resources">Browse resources</a>
+  </div>
+} @else if (resourceError()) {
+  <div class="state-panel card">
+    <p class="state-panel__title">Couldn't load this resource</p>
+    <p>{{ resourceError()!.detail ?? resourceError()!.title }}</p>
+    <button type="button" class="btn btn-secondary" (click)="retryLoadResource()">Try again</button>
+  </div>
+} @else if (resource(); as resource) {
+  <a class="manage-availability__back" [routerLink]="['/resources', resource.id]">&larr; Back to {{ resource.name }}</a>
+
+  <header class="manage-availability__header">
+    <div>
+      <h1>Manage availability &middot; {{ resource.name }}</h1>
+      <p class="field-hint">Resource timezone: {{ resource.timeZoneId }}</p>
+    </div>
+    <span
+      class="status-pill"
+      [class.status-pill--confirmed]="resource.status === 'Active'"
+      [class.status-pill--cancelled]="resource.status !== 'Active'"
+    >
+      {{ resource.status }}
+    </span>
+  </header>
+
+  @if (isArchived()) {
+    <p class="banner banner-info" role="status">
+      This resource is archived. New rules and blackout periods can no longer be added, but existing ones can still be edited or removed.
+    </p>
+  }
+
+  @if (conflictWarning(); as warning) {
+    <div class="banner banner-error manage-availability__conflict-warning" role="alert">
+      <div>
+        <p class="manage-availability__conflict-warning-title">
+          Saved, but {{ warning.count }} existing {{ warning.count === 1 ? 'booking' : 'bookings' }} now overlap this blackout period.
+        </p>
+        <p>
+          Those bookings were <strong>not</strong> automatically cancelled and remain active. BookSpace has no tenant-wide booking
+          screen yet to look them up by ID here - affected booking ID{{ warning.count === 1 ? '' : 's' }}:
+          <code>{{ warning.ids.join(', ') }}</code>.
+        </p>
+      </div>
+      <button type="button" class="manage-availability__dismiss" (click)="dismissConflictWarning()" aria-label="Dismiss">&times;</button>
+    </div>
+  }
+
+  <section class="card manage-availability__section">
+    <h2>Weekly availability</h2>
+
+    @if (!isArchived()) {
+      <form class="manage-availability__rule-form" (ngSubmit)="submitNewRule()" novalidate>
+        @if (ruleFormError()) {
+          <p class="banner banner-error" role="alert">{{ ruleFormError() }}</p>
+        }
+        <div class="field">
+          <label for="rule-day">Day</label>
+          <select id="rule-day" [value]="newRuleDayOfWeek()" (change)="newRuleDayOfWeek.set($any($event.target).value)">
+            <option value="Monday">Monday</option>
+            <option value="Tuesday">Tuesday</option>
+            <option value="Wednesday">Wednesday</option>
+            <option value="Thursday">Thursday</option>
+            <option value="Friday">Friday</option>
+            <option value="Saturday">Saturday</option>
+            <option value="Sunday">Sunday</option>
+          </select>
+          @if (ruleDayFieldErrors().length) {
+            <span class="field-error-text">{{ ruleDayFieldErrors().join(' ') }}</span>
+          }
+        </div>
+        <div class="field">
+          <label for="rule-start">Start</label>
+          <input id="rule-start" type="time" [value]="newRuleStartTime()" (input)="newRuleStartTime.set($any($event.target).value)" />
+        </div>
+        <div class="field">
+          <label for="rule-end">End</label>
+          <input id="rule-end" type="time" [value]="newRuleEndTime()" (input)="newRuleEndTime.set($any($event.target).value)" />
+        </div>
+        @if (ruleTimeFieldErrors().length) {
+          <span class="field-error-text">{{ ruleTimeFieldErrors().join(' ') }}</span>
+        }
+        <button type="submit" class="btn btn-primary" [disabled]="creatingRule()">{{ creatingRule() ? 'Adding…' : 'Add rule' }}</button>
+      </form>
+    }
+
+    @if (rulesLoading()) {
+      <div class="manage-availability__rules" aria-busy="true">
+        <span class="skeleton" style="height: 2.5rem; width: 100%;"></span>
+        <span class="skeleton" style="height: 2.5rem; width: 100%;"></span>
+      </div>
+    } @else if (rulesError()) {
+      <div class="state-panel card">
+        <p class="state-panel__title">Couldn't load availability rules</p>
+        <p>{{ rulesError()!.detail ?? rulesError()!.title }}</p>
+        <button type="button" class="btn btn-secondary" (click)="retryLoadRules()">Try again</button>
+      </div>
+    } @else if (sortedRules().length === 0) {
+      <p class="field-hint">No weekly availability configured yet - this resource has no open hours until at least one rule is added.</p>
+    } @else {
+      <ul class="manage-availability__rules">
+        @for (rule of sortedRules(); track rule.id) {
+          <li class="manage-availability__rule">
+            <div>
+              <span class="manage-availability__rule-day">{{ rule.dayOfWeek }}</span>
+              <span class="manage-availability__rule-time">{{ formatTime(rule.startTime) }}–{{ formatTime(rule.endTime) }}</span>
+            </div>
+            <button type="button" class="btn btn-secondary manage-availability__delete-btn" (click)="askDeleteRule(rule)">Delete</button>
+          </li>
+        }
+      </ul>
+    }
+  </section>
+
+  <section class="card manage-availability__section">
+    <div class="manage-availability__section-header">
+      <h2>Blackout periods</h2>
+      @if (!isArchived()) {
+        <button type="button" class="btn btn-primary" (click)="openCreateBlackoutDialog()">Add blackout</button>
+      }
+    </div>
+
+    @if (blackoutsLoading()) {
+      <div class="manage-availability__blackouts" aria-busy="true">
+        <span class="skeleton" style="height: 3rem; width: 100%;"></span>
+        <span class="skeleton" style="height: 3rem; width: 100%;"></span>
+      </div>
+    } @else if (blackoutsError()) {
+      <div class="state-panel card">
+        <p class="state-panel__title">Couldn't load blackout periods</p>
+        <p>{{ blackoutsError()!.detail ?? blackoutsError()!.title }}</p>
+        <button type="button" class="btn btn-secondary" (click)="retryLoadBlackouts()">Try again</button>
+      </div>
+    } @else if (sortedBlackouts().length === 0) {
+      <p class="field-hint">No blackout periods configured - this resource has no scheduled downtime.</p>
+    } @else {
+      <ul class="manage-availability__blackouts">
+        @for (blackout of sortedBlackouts(); track blackout.id) {
+          <li class="manage-availability__blackout">
+            <div>
+              <div class="manage-availability__blackout-heading">
+                <span
+                  class="status-pill manage-availability__blackout-status"
+                  [class.status-pill--pending]="blackoutStatus(blackout) === 'upcoming'"
+                  [class.status-pill--rejected]="blackoutStatus(blackout) === 'active'"
+                  [class.status-pill--cancelled]="blackoutStatus(blackout) === 'past'"
+                >
+                  {{ blackoutStatus(blackout) }}
+                </span>
+                <span class="manage-availability__blackout-reason">{{ blackout.reason }}</span>
+              </div>
+              <span class="manage-availability__blackout-range">{{ formatBlackoutRange(blackout) }} {{ resource.timeZoneId }}</span>
+            </div>
+            <div class="manage-availability__blackout-actions">
+              <button type="button" class="btn btn-secondary" (click)="openEditBlackoutDialog(blackout)">Edit</button>
+              <button type="button" class="btn btn-secondary manage-availability__delete-btn" (click)="askDeleteBlackout(blackout)">
+                Delete
+              </button>
+            </div>
+          </li>
+        }
+      </ul>
+    }
+  </section>
+
+  @if (blackoutDialog(); as dialog) {
+    <div class="dialog-backdrop" (click)="closeBlackoutDialog()">
+      <div
+        class="card dialog manage-availability__blackout-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="blackout-dialog-title"
+        (click)="$event.stopPropagation()"
+      >
+        <h2 id="blackout-dialog-title">{{ dialog.mode === 'create' ? 'Add blackout period' : 'Edit blackout period' }}</h2>
+        <p class="field-hint">Times are in this resource's timezone: {{ resource.timeZoneId }}.</p>
+
+        @if (blackoutFormError()) {
+          <p class="banner banner-error" role="alert">{{ blackoutFormError() }}</p>
+        }
+
+        <div class="manage-availability__blackout-dialog-grid">
+          <div class="field">
+            <label for="blackout-start-date">Start date</label>
+            <input
+              id="blackout-start-date"
+              type="date"
+              [value]="blackoutStartDate()"
+              (input)="blackoutStartDate.set($any($event.target).value)"
+            />
+          </div>
+          <div class="field">
+            <label for="blackout-start-time">Start time</label>
+            <input
+              id="blackout-start-time"
+              type="time"
+              [value]="blackoutStartTime()"
+              (input)="blackoutStartTime.set($any($event.target).value)"
+            />
+          </div>
+          <div class="field">
+            <label for="blackout-end-date">End date</label>
+            <input id="blackout-end-date" type="date" [value]="blackoutEndDate()" (input)="blackoutEndDate.set($any($event.target).value)" />
+          </div>
+          <div class="field">
+            <label for="blackout-end-time">End time</label>
+            <input id="blackout-end-time" type="time" [value]="blackoutEndTime()" (input)="blackoutEndTime.set($any($event.target).value)" />
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="blackout-reason">Reason</label>
+          <input
+            id="blackout-reason"
+            type="text"
+            maxlength="1000"
+            [value]="blackoutReason()"
+            (input)="blackoutReason.set($any($event.target).value)"
+          />
+          @if (blackoutReasonFieldErrors().length) {
+            <span class="field-error-text">{{ blackoutReasonFieldErrors().join(' ') }}</span>
+          }
+        </div>
+
+        <div class="dialog__actions">
+          <button type="button" class="btn btn-secondary" [disabled]="savingBlackout()" (click)="closeBlackoutDialog()">Cancel</button>
+          <button type="button" class="btn btn-primary" [disabled]="savingBlackout()" (click)="submitBlackoutDialog()">
+            {{ savingBlackout() ? 'Saving…' : dialog.mode === 'create' ? 'Add blackout' : 'Save changes' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  }
+
+  @if (deleteConfirmation(); as target) {
+    <div class="dialog-backdrop" (click)="cancelDelete()">
+      <div class="card dialog" role="dialog" aria-modal="true" aria-labelledby="delete-dialog-title" (click)="$event.stopPropagation()">
+        <h2 id="delete-dialog-title">
+          {{ target.kind === 'rule' ? 'Delete this availability rule?' : 'Delete this blackout period?' }}
+        </h2>
+        <p class="dialog__summary">
+          @if (target.kind === 'rule') {
+            {{ target.rule.dayOfWeek }} {{ formatTime(target.rule.startTime) }}–{{ formatTime(target.rule.endTime) }}
+          } @else {
+            {{ target.blackout.reason }} &middot; {{ formatBlackoutRange(target.blackout) }}
+          }
+        </p>
+
+        @if (deleteError()) {
+          <p class="banner banner-error" role="alert">{{ deleteError() }}</p>
+        }
+
+        <div class="dialog__actions">
+          <button type="button" class="btn btn-secondary" [disabled]="deleting()" (click)="cancelDelete()">Keep it</button>
+          <button type="button" class="btn btn-primary" [disabled]="deleting()" (click)="confirmDelete()">
+            {{ deleting() ? 'Deleting…' : 'Delete' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  }
+}
+</div>

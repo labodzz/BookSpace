@@ -282,6 +282,26 @@ a plain `Approver`'s results to only the resources they're assigned to (`IResour
 `TenantAdmin`/`SysAdmin` see every `Pending` booking in their own tenant (never another tenant's, via the
 same global filter), with no per-resource restriction.
 
+## 13a. `ResourceApprover` eligibility is live-checked, never baked into the token
+
+`ApprovalAuthorization.EnsureCallerCanDecideAsync` reads the caller's `ResourceApprover` assignment (and
+their current global roles) fresh from the database on every approve/reject call - never from anything
+carried in the JWT. Two consequences, both now proven end-to-end rather than only asserted in prose
+(`RecurringSeriesAndApprovalEndpointsTests.cs`):
+
+- **Grant is immediate**: a user's access token can be issued *before* they're ever assigned as a
+  `ResourceApprover` for a given resource, and the very same, still-valid token can decide an approval on
+  that resource the moment an admin creates the assignment - no re-login, no new token required
+  (`AssignResourceApprover_ThenApproveWithATokenIssuedBeforeTheAssignmentExisted_Succeeds`).
+- **Revocation is immediate**: removing a `ResourceApprover` assignment takes effect on the very next
+  request with the same, still-otherwise-valid token - `Booking.ApprovalForbidden`, not a stale grant
+  persisting until the token naturally expires (`RemoveResourceApprover_ThenApproveWithTheSameToken_IsImmediatelyRejected`).
+
+This is the one authorization concept in this codebase that behaves this way; contrast with global roles
+(`Member`/`Approver`/`TenantAdmin`/`SysAdmin`), which *are* baked into the JWT at issuance and only take
+effect on the session's next refresh or login - see
+[user-administration.md](user-administration.md) §5's "JWT staleness" tradeoff.
+
 ## 14. Testing strategy and evidence
 
 - **`BookSpace.Application.Tests/Bookings/RecurringOccurrenceGeneratorTests.cs`**: pure, DB-free - daily/

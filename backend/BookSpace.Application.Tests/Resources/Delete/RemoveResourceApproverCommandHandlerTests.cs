@@ -1,5 +1,8 @@
+using BookSpace.Application.Bookings;
 using BookSpace.Application.Common;
+using BookSpace.Application.Mediator;
 using BookSpace.Application.Resources;
+using BookSpace.Application.Tests.Bookings;
 using BookSpace.Domain.Entities;
 using BookSpace.Domain.Enums;
 using Moq;
@@ -12,7 +15,11 @@ public sealed class RemoveResourceApproverCommandHandlerTests
     private readonly Mock<IResourceApproverRepository> _resourceApproverRepository = new();
     private readonly Mock<IResourceRepository> _resourceRepository = new();
 
-    private RemoveResourceApproverCommandHandler CreateSut() => new(_resourceApproverRepository.Object, _resourceRepository.Object);
+    // PassThroughResourceBookingLock, not a mock - the lock's own keyed-acquisition behavior is proven
+    // separately (RemoveResourceApproverConcurrencyTests, against real SQL Server); these tests only
+    // care about what happens INSIDE the locked operation.
+    private RemoveResourceApproverCommandHandler CreateSut() =>
+        new(_resourceApproverRepository.Object, _resourceRepository.Object, new PassThroughResourceBookingLock());
 
     private static Resource CreateResource(Guid id, bool requiresApproval) => new()
     {
@@ -102,5 +109,31 @@ public sealed class RemoveResourceApproverCommandHandlerTests
 
         _resourceApproverRepository.Verify(r => r.RemoveAsync(approver, It.IsAny<CancellationToken>()), Times.Once);
         _resourceApproverRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    // Every other test above uses PassThroughResourceBookingLock, which ignores its resourceId argument
+    // entirely - a bug that passed the wrong id would go undetected by any of them. This is the one test
+    // that actually asserts the lock is acquired keyed by the request's own ResourceId, the same
+    // convention UpdateResourceCommandHandlerTests already proves for its own handler.
+    [Fact]
+    public async Task Handle_AcquiresTheResourceBookingLockKeyedByTheRequestsOwnResourceId()
+    {
+        var resourceId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        var approver = new ResourceApprover { Id = Guid.NewGuid(), TenantId = Guid.NewGuid(), ResourceId = resourceId, UserId = userId };
+        _resourceApproverRepository
+            .Setup(r => r.FindByResourceAndUserAsync(resourceId, userId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(approver);
+        _resourceRepository.Setup(r => r.FindByIdAsync(resourceId, It.IsAny<CancellationToken>())).ReturnsAsync(CreateResource(resourceId, false));
+        var lockMock = new Mock<IResourceBookingLock>();
+        lockMock
+            .Setup(l => l.RunExclusiveAsync(It.IsAny<Guid>(), It.IsAny<Func<CancellationToken, Task<Unit>>>(), It.IsAny<CancellationToken>()))
+            .Returns<Guid, Func<CancellationToken, Task<Unit>>, CancellationToken>((_, operation, ct) => operation(ct));
+        var sut = new RemoveResourceApproverCommandHandler(_resourceApproverRepository.Object, _resourceRepository.Object, lockMock.Object);
+
+        await sut.Handle(new RemoveResourceApproverCommandRequest(resourceId, userId), CancellationToken.None);
+
+        lockMock.Verify(
+            l => l.RunExclusiveAsync(resourceId, It.IsAny<Func<CancellationToken, Task<Unit>>>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 }
