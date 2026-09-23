@@ -5,8 +5,14 @@
 :root {
   --color-bg: #fdf3f5;
   --color-surface: #ffffff;
+  // Dialogs/toasts sit "one level up" from an ordinary card - in light mode that's still plain white
+  // (nothing to visually separate), so this equals --color-surface here and only diverges in dark mode.
+  --color-surface-elevated: #ffffff;
   --color-surface-alt: #f4e9ec;
   --color-border: #e3dee0;
+  // A second, more visible border tier for the few spots (today's calendar cell, see calendar.scss)
+  // that need to stand out more than the app's usual hairline borders.
+  --color-border-strong: #d8ccd0;
 
   --color-primary: #8c2145;
   --color-primary-hover: #74183a;
@@ -23,6 +29,21 @@
   --color-error-bg: #fbeaea;
   --color-warning: #9a6b12;
   --color-warning-bg: #fbf1df;
+
+  --color-overlay: rgb(42 31 35 / 45%);
+  --color-shadow: rgb(140 33 69 / 35%);
+  --color-shadow-soft: rgb(0 0 0 / 12%);
+  // A separate token from --color-primary (even though it starts out equal to it) so a themed surface
+  // that cannot use the primary brand color as an outline - see login-card's own :focus-visible override
+  // - has one clearly-named property to redirect instead of overriding the outline color directly.
+  --color-focus-ring: var(--color-primary);
+
+  // The sidebar's own background/active-item tint, as tokens rather than values local to shell.scss, so
+  // dark mode (below) can give the sidebar a completely different treatment - near-black instead of a
+  // saturated brand-colored block - without shell.scss needing any theme-conditional logic of its own.
+  // The light value is the sidebar's existing burgundy gradient, unchanged pixel-for-pixel.
+  --color-sidebar-background: linear-gradient(180deg, #6e1c39 0%, #55172d 55%, #45132a 100%);
+  --color-sidebar-active: rgb(255 255 255 / 12%);
 
   --space-1: 4px;
   --space-2: 8px;
@@ -43,6 +64,65 @@
   color-scheme: light;
 }
 
+// Dark theme - a modern charcoal/slate palette (near-black backgrounds, cool-gray borders) with the
+// brand's burgundy hue kept as a restrained accent (links, buttons, active nav, focus rings) rather
+// than as a large saturated surface - deliberately NOT "the light gradient inverted", since a wash of
+// saturated burgundy across the sidebar/page reads as heavy rather than calm. Selected by ThemeService
+// setting data-theme="dark" on <html>; every rule in this file (and in every component's own
+// stylesheet) that already reads a --color-* token re-themes automatically, with no template or
+// component needing to know which theme is active.
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --color-bg: #0f1117;
+  --color-surface: #161a22;
+  --color-surface-elevated: #1d2330;
+  --color-surface-alt: #242b38;
+  --color-border: #2c3442;
+  --color-border-strong: #3a4556;
+
+  --color-primary: #c15378;
+  --color-primary-hover: #d26789;
+  // Near-white rather than a dark maroon: --color-primary is a mid-luminance rose in this palette, so a
+  // light contrast color reads more reliably on top of it than a dark one does (see the accessibility
+  // note in the implementation report - this is the better of two imperfect options for a filled
+  // .btn-primary, not a fully AA-clean pairing).
+  --color-primary-contrast: #f4f6fa;
+  --color-accent-soft: #38202a;
+
+  --color-text: #f4f6fa;
+  --color-text-secondary: #b3bbc9;
+  --color-text-muted: #7f8999;
+
+  --color-success: #65d69a;
+  --color-success-bg: #173629;
+  --color-error: #ff858d;
+  --color-error-bg: #3c2025;
+  --color-warning: #f2bf68;
+  --color-warning-bg: #3b2e19;
+
+  --color-overlay: rgb(0 0 0 / 65%);
+  --color-shadow: rgb(0 0 0 / 45%);
+  --color-shadow-soft: rgb(0 0 0 / 40%);
+  // Brighter than --color-primary specifically for visibility as an outline against near-black
+  // surfaces, the same reasoning --color-primary-contrast above is built on.
+  --color-focus-ring: #df789a;
+
+  // A near-black, slightly warm slate rather than a saturated burgundy block - burgundy stays visible
+  // through the logo, the active nav item, and Log out's focus/hover states instead of covering the
+  // whole rail (see shell.scss).
+  --color-sidebar-background: #151219;
+  --color-sidebar-active: #30202a;
+}
+
+// The sidebar's own text tokens (declared locally on .shell-sidebar in shell.scss, since light mode
+// needs values distinct from the app's normal --color-text - white/pink text for a saturated burgundy
+// gradient) collapse onto the app's ordinary text tokens once the sidebar itself is a near-black
+// surface like the rest of dark mode - no separate "sidebar text" palette is needed there.
+:root[data-theme='dark'] .shell-sidebar {
+  --sidebar-text: var(--color-text);
+  --sidebar-text-muted: var(--color-text-secondary);
+}
 
 * {
   box-sizing: border-box;
@@ -87,7 +167,7 @@ a {
 }
 
 :focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--color-focus-ring);
   outline-offset: 2px;
 }
 
@@ -97,6 +177,10 @@ a {
   border-radius: var(--radius-lg);
 }
 
+// Deliberately not themed with --color-* tokens: this dark burgundy gradient is the brand's signature
+// welcome/login backdrop (see welcome.scss's near-identical .welcome-page), not "the app background in
+// dark mode" - it stays the same in both themes, the same way the shell sidebar does. The theme toggle
+// is still present and functional on both pages; it only affects the rest of the app.
 .auth-page {
   min-height: 100dvh;
   display: flex;
@@ -126,6 +210,31 @@ a {
   opacity: 0.6;
 }
 
+// .btn-secondary is declared BEFORE .btn-primary so the calendar's Month/Week toggle - which applies
+// both classes together (a shared "btn btn-secondary" base, with "btn-primary" added only for whichever
+// view is currently selected, see calendar.html) - resolves as primary. With equal specificity on both
+// classes, source order decides the tie; declaring .btn-primary last is what makes the selected control
+// actually show the accent color instead of the plain secondary style silently winning.
+.btn-secondary {
+  background: transparent;
+  border-color: var(--color-border);
+  color: var(--color-text);
+}
+
+// A transparent secondary button reads fine on light mode's off-white page, but on dark mode's
+// near-black page it would look flat/invisible rather than like a distinct control - filling it with
+// the elevated surface tone (and lightening further on hover, below) gives every secondary button -
+// calendar's Month/Week/Today/arrows included - a clear, consistent "control" presence. Declared
+// BEFORE the :hover rule below: both match with equal specificity in dark mode, so source order is
+// what lets hover's lighter tone still win over this resting-state background.
+:root[data-theme='dark'] .btn-secondary {
+  background: var(--color-surface-elevated);
+}
+
+.btn-secondary:not(:disabled):hover {
+  background: var(--color-surface-alt);
+}
+
 .btn-primary {
   background: var(--color-primary);
   color: var(--color-primary-contrast);
@@ -133,16 +242,6 @@ a {
 
 .btn-primary:not(:disabled):hover {
   background: var(--color-primary-hover);
-}
-
-.btn-secondary {
-  background: transparent;
-  border-color: var(--color-border);
-  color: var(--color-text);
-}
-
-.btn-secondary:not(:disabled):hover {
-  background: var(--color-surface-alt);
 }
 
 .field {
@@ -280,7 +379,7 @@ a {
 .dialog-backdrop {
   position: fixed;
   inset: 0;
-  background: rgb(42 31 35 / 45%);
+  background: var(--color-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -289,6 +388,8 @@ a {
 }
 
 .dialog {
+  // One level lighter than an ordinary .card (a dialog floats above the page), matching .toast below.
+  background: var(--color-surface-elevated);
   display: flex;
   flex-direction: column;
   gap: var(--space-4);

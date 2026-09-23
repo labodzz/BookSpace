@@ -243,7 +243,14 @@
 
 .resource-preview-card:hover {
   border-color: var(--color-primary);
-  box-shadow: 0 8px 20px -14px rgb(140 33 69 / 35%);
+  box-shadow: 0 8px 20px -14px var(--color-shadow);
+}
+
+// Dark mode favors the surface/border hierarchy over a colored shadow (which reads as muddy rather than
+// elevated against a near-black page) - the same border cue plus a step up the surface ladder instead.
+:root[data-theme='dark'] .resource-preview-card:hover {
+  background: var(--color-surface-alt);
+  box-shadow: none;
 }
 
 .resource-preview-card__type {
