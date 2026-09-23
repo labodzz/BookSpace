@@ -2,7 +2,7 @@ import { HttpClient, HttpErrorResponse, provideHttpClient, withInterceptors } fr
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
-import { of, throwError } from 'rxjs';
+import { Subject, TimeoutError, of, throwError } from 'rxjs';
 import { authInterceptor, isApiRequest } from './auth.interceptor';
 import { AuthService } from '../auth/auth.service';
 import { environment } from '../../../environments/environment';
@@ -183,5 +183,61 @@ describe('authInterceptor', () => {
     expect(refreshAccessToken).toHaveBeenCalledOnce();
     expect(navigate).not.toHaveBeenCalled();
     expect(errored).toBe(true);
+  });
+
+  // AuthService.refreshAccessToken() bounds the underlying /auth/refresh call with timeout(REFRESH_TIMEOUT_MS)
+  // (see auth.service.ts) specifically because that call runs inside a cross-tab lock shared by every
+  // caller that needs a token refresh - a refresh that never settles would otherwise hold the lock and
+  // every waiting request forever, with no error for any of them to react to. A RxJS TimeoutError is
+  // NOT an HttpErrorResponse, so it must be treated the same as the network-error/5xx case above: fail
+  // the waiting request(s) cleanly, never redirect (a timeout says nothing about whether the backend
+  // actually rejected the session), and never leave anything hanging.
+  describe('a stalled /auth/refresh that times out', () => {
+    it('fails the waiting request without redirecting, once the shared refresh times out', () => {
+      const refreshAccessToken = vi.fn().mockReturnValue(throwError(() => new TimeoutError()));
+      (authService as unknown as { refreshAccessToken: typeof refreshAccessToken }).refreshAccessToken = refreshAccessToken;
+      const navigate = vi.spyOn(TestBed.inject(Router), 'navigate');
+
+      let errored = false;
+      httpClient.get(`${environment.apiUrl}/bookings`).subscribe({ error: () => (errored = true) });
+
+      const firstAttempt = httpTesting.expectOne(`${environment.apiUrl}/bookings`);
+      firstAttempt.flush('unauthorized', { status: 401, statusText: 'Unauthorized' });
+
+      expect(refreshAccessToken).toHaveBeenCalledOnce();
+      expect(errored).toBe(true);
+      expect(navigate).not.toHaveBeenCalled();
+      httpTesting.expectNone(`${environment.apiUrl}/bookings`);
+    });
+
+    // Two independent requests both fail with 401 while the token is expired - both must eventually
+    // fail once the shared refresh times out (neither is left permanently pending), proving the
+    // timeout's failure genuinely reaches every caller waiting on the same in-flight refresh, not just
+    // the one that happened to trigger it.
+    it('fails every request sharing the same stalled refresh once it times out, none left hanging', () => {
+      const refreshFailure$ = new Subject<never>();
+      const refreshAccessToken = vi.fn().mockReturnValue(refreshFailure$);
+      (authService as unknown as { refreshAccessToken: typeof refreshAccessToken }).refreshAccessToken = refreshAccessToken;
+
+      let firstErrored = false;
+      let secondErrored = false;
+      httpClient.get(`${environment.apiUrl}/bookings`).subscribe({ error: () => (firstErrored = true) });
+      httpClient.get(`${environment.apiUrl}/resources`).subscribe({ error: () => (secondErrored = true) });
+
+      httpTesting.expectOne(`${environment.apiUrl}/bookings`).flush('unauthorized', { status: 401, statusText: 'Unauthorized' });
+      httpTesting.expectOne(`${environment.apiUrl}/resources`).flush('unauthorized', { status: 401, statusText: 'Unauthorized' });
+
+      // Neither request has failed yet - the shared refresh is still "in flight" from each caller's
+      // point of view, exactly the hazard REFRESH_TIMEOUT_MS exists to bound.
+      expect(firstErrored).toBe(false);
+      expect(secondErrored).toBe(false);
+
+      // The real AuthService's timeout() operator firing is simulated here by erroring the shared
+      // Subject directly - both interceptor invocations were subscribed to this same mock return value.
+      refreshFailure$.error(new TimeoutError());
+
+      expect(firstErrored).toBe(true);
+      expect(secondErrored).toBe(true);
+    });
   });
 });

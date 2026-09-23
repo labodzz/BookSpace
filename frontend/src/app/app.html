@@ -1,2 +1,5 @@
 <app-toast />
+@if (!isProduction) {
+  <app-diagnostics-indicator />
+}
 <router-outlet />

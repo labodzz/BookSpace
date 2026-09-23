@@ -40,6 +40,15 @@ export class LoginComponent {
 
     this.authService.login(email, password, rememberMe).subscribe({
       next: () => {
+        // Reset BEFORE navigating, not left for navigation to implicitly clean up by destroying this
+        // component - the same pattern every other submit-then-navigate flow in this app already follows
+        // (see ResourceFormComponent.submit/BookingFormComponent.submit). This was the one place that
+        // didn't: if navigateByUrl doesn't cleanly complete (most plausibly a lazy route chunk failing to
+        // load - every route here is loadComponent()-lazy - but also any guard/resolver rejection), the
+        // component is never destroyed, and isSubmitting stayed true forever - the login button
+        // permanently stuck disabled on "Logging in…" with no way to retry, indistinguishable from a
+        // frozen page until the whole app is reloaded.
+        this.isSubmitting.set(false);
         const returnUrl = this.route.snapshot.queryParamMap.get('returnUrl') ?? '/';
         this.router.navigateByUrl(returnUrl);
       },
