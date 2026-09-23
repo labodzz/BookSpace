@@ -52,6 +52,24 @@ public sealed class AuthController(
         return NoContent();
     }
 
+    // 204, no tokens - accepting an invitation only activates the account; the caller logs in
+    // separately afterward via POST /auth/login (see docs/user-administration.md §4). A failure never
+    // distinguishes unknown/expired/revoked/already-accepted/no-longer-Invited - same generic-401
+    // philosophy login/refresh already apply to their own failures. The raw token is never logged here
+    // or anywhere downstream (AcceptInvitationCommandRequestValidator/AuthenticationService) - only its
+    // SHA-256 hash is ever looked up.
+    [HttpPost("accept-invitation")]
+    public async Task<IActionResult> AcceptInvitation(AcceptInvitationRequest request, CancellationToken cancellationToken)
+    {
+        var result = await mediator.Send(new AcceptInvitationCommandRequest(request.Token, request.Password), cancellationToken);
+        if (!result.Succeeded)
+        {
+            return await UnauthorizedProblemAsync("This invitation link is no longer valid.", result.ErrorCode);
+        }
+
+        return NoContent();
+    }
+
     // Login/refresh failures are ordinary (Succeeded == false) results, not exceptions -
     // LoginCommandRequestHandler/RefreshCommandRequestHandler never throw for "wrong password"/"bad
     // token", so they never reach the NotFoundException/ConflictException-driven IExceptionHandler
@@ -105,3 +123,5 @@ public sealed record LoginRequest(string Email, string Password);
 public sealed record RefreshRequest(string RefreshToken);
 
 public sealed record LogoutRequest(string RefreshToken);
+
+public sealed record AcceptInvitationRequest(string Token, string Password);

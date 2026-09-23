@@ -42,4 +42,16 @@ internal static class ErrorCodes
 
     public const string RecurringSeriesNotFound = "RecurringSeries.NotFound";
     public const string RecurringSeriesNoValidOccurrences = "RecurringSeries.NoValidOccurrences";
+
+    // User lifecycle and role administration (Batch 4A). See docs/user-administration.md.
+    public const string UserEmailConflict = "User.EmailConflict";
+    public const string UserStatusConflict = "User.StatusConflict";
+    public const string UserSelfLockout = "User.SelfLockout";
+    public const string UserLastAdminRemaining = "User.LastAdminRemaining";
+    public const string UserRoleDelegationNotAllowed = "User.RoleDelegationNotAllowed";
+    public const string UserRoleConflict = "User.RoleConflict";
+    public const string UserRoleNotAssigned = "User.RoleNotAssigned";
+    public const string UserApproverAssignmentsExist = "User.ApproverAssignmentsExist";
+    public const string RoleNotFound = "Role.NotFound";
+    public const string InvitationInvalid = "Invitation.Invalid";
 }

@@ -41,7 +41,8 @@ methods, both implemented with `.IgnoreQueryFilters()`:
 | Method | Caller | Why it's safe to bypass the filter |
 |---|---|---|
 | `FindByEmailAsync` | `AuthenticationService.LoginAsync` | Email has a global unique index (not per-tenant) - there is no ambiguity to resolve, since the lookup key already uniquely identifies one user across every tenant. |
-| `FindByIdForAuthenticationAsync` | `AuthenticationService.RefreshAsync` | The refresh token itself (a high-entropy, unguessable value, looked up by its hash) is already the real authorization check; the user id it points to needs no additional tenant scoping on top. |
+| `FindByIdForAuthenticationAsync` | `AuthenticationService.RefreshAsync`, `AuthenticationService.AcceptInvitationAsync` | The refresh token (or invitation token) itself - a high-entropy, unguessable value, looked up by its own hash - is already the real authorization check; the user id it points to needs no additional tenant scoping on top. |
+| `IInvitationRepository.FindByTokenHashForAcceptanceAsync` | `AuthenticationService.AcceptInvitationAsync` | Same reasoning as the row above, for the `Invitation` itself: accepting an invitation happens with no tenant context yet (the caller presents only a raw token), and the token's own unguessability is the authorization boundary. |
 
 Every other by-id lookup (e.g. `AssignResourceApproverCommandHandler` checking that a target `UserId`
 exists before making them an approver) uses the ordinary, filtered `FindByIdAsync` - a cross-tenant

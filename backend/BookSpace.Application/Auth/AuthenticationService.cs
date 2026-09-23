@@ -1,8 +1,7 @@
-using System.Security.Cryptography;
-using System.Text;
 using BookSpace.Application.Common;
 using BookSpace.Application.Security;
 using BookSpace.Domain.Entities;
+using BookSpace.Domain.Enums;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -11,6 +10,7 @@ namespace BookSpace.Application.Auth;
 public sealed class AuthenticationService(
     IUserRepository userRepository,
     IRefreshTokenRepository refreshTokenRepository,
+    IInvitationRepository invitationRepository,
     IPasswordHasher passwordHasher,
     IJwtTokenGenerator jwtTokenGenerator,
     IOptions<AuthOptions> authOptions,
@@ -19,7 +19,11 @@ public sealed class AuthenticationService(
     public async Task<LoginResponse> LoginAsync(string email, string password, CancellationToken cancellationToken)
     {
         var user = await userRepository.FindByEmailAsync(email, cancellationToken);
-        if (user is null || !passwordHasher.Verify(user.PasswordHash, password))
+        // Short-circuited via || before Verify is even called: a deactivated (or still-Invited, never
+        // yet given a real password) user presenting their genuinely-correct old password must still
+        // fail without spending a PBKDF2 verification - and either way, the identical generic
+        // "invalid credentials" outcome as an unknown email or a wrong password, never revealing which.
+        if (user is null || user.Status != UserStatus.Active || !passwordHasher.Verify(user.PasswordHash, password))
         {
             // Information, not Error - a wrong password is expected user error, same reasoning as
             // ValidationExceptionHandler. Only the email is logged, never the attempted password.
@@ -34,7 +38,7 @@ public sealed class AuthenticationService(
 
     public async Task<RefreshResponse> RefreshAsync(string refreshToken, CancellationToken cancellationToken)
     {
-        var tokenHash = HashToken(refreshToken);
+        var tokenHash = SecureTokenGenerator.HashToken(refreshToken);
         var existing = await refreshTokenRepository.FindByTokenHashAsync(tokenHash, cancellationToken);
 
         if (existing is null)
@@ -112,7 +116,7 @@ public sealed class AuthenticationService(
     // device's" session via logout, which is exactly what a deliberate Logout click should do.
     public async Task<LogoutResponse> LogoutAsync(string refreshToken, CancellationToken cancellationToken)
     {
-        var tokenHash = HashToken(refreshToken);
+        var tokenHash = SecureTokenGenerator.HashToken(refreshToken);
         var existing = await refreshTokenRepository.FindByTokenHashAsync(tokenHash, cancellationToken);
         if (existing is not null)
         {
@@ -121,6 +125,54 @@ public sealed class AuthenticationService(
         }
 
         return new LogoutResponse();
+    }
+
+    // Every reason a presented token is unusable (unknown, already accepted, revoked, expired, or the
+    // underlying User somehow no longer Invited - e.g. an admin deactivated the pending invite
+    // independently of the invitation record) collapses into the identical generic outcome - same
+    // "don't reveal account state" philosophy LoginAsync/RefreshAsync already apply to their own
+    // failures. See docs/user-administration.md §4.
+    public async Task<AcceptInvitationResponse> AcceptInvitationAsync(string token, string password, CancellationToken cancellationToken)
+    {
+        var tokenHash = SecureTokenGenerator.HashToken(token);
+        var invitation = await invitationRepository.FindByTokenHashForAcceptanceAsync(tokenHash, cancellationToken);
+
+        if (invitation is null || invitation.AcceptedAtUtc is not null || invitation.RevokedAtUtc is not null
+            || invitation.ExpiresAtUtc <= DateTimeOffset.UtcNow)
+        {
+            return new AcceptInvitationResponse(false, ErrorCodes.InvitationInvalid);
+        }
+
+        // Pre-tenant-context lookup, same reasoning as FindByIdForAuthenticationAsync's own doc comment
+        // - the caller presents only a raw token, no valid access token, so no tenant is known yet.
+        var user = await userRepository.FindByIdForAuthenticationAsync(invitation.UserId, cancellationToken);
+        if (user is null || user.Status != UserStatus.Invited)
+        {
+            return new AcceptInvitationResponse(false, ErrorCodes.InvitationInvalid);
+        }
+
+        user.PasswordHash = passwordHasher.Hash(password);
+        user.Status = UserStatus.Active;
+        invitation.AcceptedAtUtc = DateTimeOffset.UtcNow;
+
+        try
+        {
+            // One SaveChangesAsync call persists both entities: the same DbContext instance backs both
+            // userRepository and invitationRepository within this request, so the User change tracked
+            // above is included here too, without a separate userRepository.SaveChangesAsync() call -
+            // the same atomic-write pattern IssueTokensAsync already uses for its own two-entity write.
+            await invitationRepository.SaveChangesAsync(cancellationToken);
+        }
+        catch (ConflictException)
+        {
+            // A concurrent acceptance of the same token already won - Invitation.RowVersion no longer
+            // matches what this request read. Mirrors RefreshAsync's own catch (ConflictException)
+            // handling of a concurrent-rotation loss: collapsed into the same generic failure, not a
+            // distinct error, so a losing racer learns nothing more than "this token didn't work."
+            return new AcceptInvitationResponse(false, ErrorCodes.InvitationInvalid);
+        }
+
+        return new AcceptInvitationResponse(true);
     }
 
     private async Task<AuthTokens> IssueTokensAsync(
@@ -132,14 +184,14 @@ public sealed class AuthenticationService(
     {
         var accessToken = jwtTokenGenerator.GenerateAccessToken(user, roles);
 
-        var rawRefreshToken = GenerateRawRefreshToken();
+        var rawRefreshToken = SecureTokenGenerator.GenerateRawToken();
         var refreshTokenExpiresAtUtc = DateTimeOffset.UtcNow.AddDays(authOptions.Value.RefreshTokenDays);
         var newRefreshToken = new RefreshToken
         {
             Id = Guid.NewGuid(),
             UserId = user.Id,
             FamilyId = familyId,
-            TokenHash = HashToken(rawRefreshToken),
+            TokenHash = SecureTokenGenerator.HashToken(rawRefreshToken),
             CreatedAtUtc = DateTimeOffset.UtcNow,
             ExpiresAtUtc = refreshTokenExpiresAtUtc,
         };
@@ -156,16 +208,4 @@ public sealed class AuthenticationService(
 
         return new AuthTokens(accessToken.Token, accessToken.ExpiresAtUtc, rawRefreshToken, refreshTokenExpiresAtUtc);
     }
-
-    private static string GenerateRawRefreshToken() =>
-        Convert.ToBase64String(RandomNumberGenerator.GetBytes(64))
-            .Replace('+', '-')
-            .Replace('/', '_')
-            .TrimEnd('=');
-
-    // Refresh tokens are high-entropy random values, not user-chosen passwords, so a plain fast hash
-    // (not PBKDF2) is the right tool here - it only needs to stop a raw DB leak from being directly
-    // usable, and it needs to be cheap enough to run on every refresh request.
-    private static string HashToken(string rawToken) =>
-        Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(rawToken)));
 }

@@ -64,6 +64,71 @@ public sealed class UsersEndpointsTests : IClassFixture<CustomWebApplicationFact
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
+    [Fact]
+    public async Task GetUsers_ReportsEachUsersStatusAndGlobalRoles()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+
+        var response = await client.GetAsync("/users");
+
+        var body = await response.Content.ReadFromJsonAsync<PagedResponse<UserSummaryResponse>>(JsonOptions);
+        var approver = body!.Items.Single(user => user.Email == TestDataSeeder.AcmeApproverEmail);
+        Assert.Equal(0, approver.Status); // UserStatus.Active - every seeded user is Active
+        Assert.Contains("Approver", approver.Roles);
+    }
+
+    // "Approver" (LastName) matches both AcmeApproverEmail and AcmeUnassignedApproverEmail (LastName
+    // "UnassignedApprover" still contains the substring) but must never match a Member.
+    [Fact]
+    public async Task GetUsers_WithSearch_MatchesAcrossFirstNameLastNameAndEmail()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+
+        var response = await client.GetAsync("/users?search=Approver");
+
+        var body = await response.Content.ReadFromJsonAsync<PagedResponse<UserSummaryResponse>>(JsonOptions);
+        Assert.Contains(body!.Items, user => user.Email == TestDataSeeder.AcmeApproverEmail);
+        Assert.Contains(body.Items, user => user.Email == TestDataSeeder.AcmeUnassignedApproverEmail);
+        Assert.DoesNotContain(body.Items, user => user.Email == TestDataSeeder.AcmeMemberEmail);
+    }
+
+    [Fact]
+    public async Task GetUsers_WithRoleFilter_ReturnsOnlyUsersHoldingThatExactRole()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+
+        var response = await client.GetAsync("/users?role=Approver");
+
+        var body = await response.Content.ReadFromJsonAsync<PagedResponse<UserSummaryResponse>>(JsonOptions);
+        Assert.Contains(body!.Items, user => user.Email == TestDataSeeder.AcmeApproverEmail);
+        Assert.DoesNotContain(body.Items, user => user.Email == TestDataSeeder.AcmeMemberEmail);
+    }
+
+    [Fact]
+    public async Task GetUsers_WithStatusFilter_ReturnsOnlyUsersInThatExactStatus()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+
+        var response = await client.GetAsync("/users?status=Active");
+
+        var body = await response.Content.ReadFromJsonAsync<PagedResponse<UserSummaryResponse>>(JsonOptions);
+        Assert.Contains(body!.Items, user => user.Email == TestDataSeeder.AcmeMemberEmail);
+        Assert.All(body.Items, user => Assert.Equal(0, user.Status)); // UserStatus.Active
+    }
+
+    [Fact]
+    public async Task GetUsers_WithIds_ResolvesExactlyThoseUsersRegardlessOfOtherFilters()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+
+        var response = await client.GetAsync($"/users?ids={TestDataSeeder.AcmeMemberUserId}&ids={TestDataSeeder.AcmeApproverUserId}");
+
+        var body = await response.Content.ReadFromJsonAsync<PagedResponse<UserSummaryResponse>>(JsonOptions);
+        Assert.Equal(2, body!.Items.Count);
+        Assert.Contains(body.Items, user => user.Id == TestDataSeeder.AcmeMemberUserId);
+        Assert.Contains(body.Items, user => user.Id == TestDataSeeder.AcmeApproverUserId);
+    }
+
     private async Task<HttpClient> AuthenticatedClientAsync(string email)
     {
         var client = _factory.CreateClient();
@@ -76,7 +141,7 @@ public sealed class UsersEndpointsTests : IClassFixture<CustomWebApplicationFact
 
     private sealed record LoginResponse(string AccessToken);
 
-    private sealed record UserSummaryResponse(Guid Id, string FirstName, string LastName, string Email, Guid TenantId);
+    private sealed record UserSummaryResponse(Guid Id, string FirstName, string LastName, string Email, Guid TenantId, int Status, List<string> Roles);
 
     private sealed record PagedResponse<T>(List<T> Items, int Page, int PageSize, int TotalCount);
 }

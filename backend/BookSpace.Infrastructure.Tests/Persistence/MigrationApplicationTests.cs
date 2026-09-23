@@ -49,9 +49,11 @@ public sealed class MigrationApplicationTests : IAsyncLifetime
             var migrator = dbContext.GetService<IMigrator>();
 
             // Migrate only up to the migration immediately BEFORE the one under test - at this point
-            // RecurringSeries still has the old StartUtc/EndUtc shape, but every other table (Tenants,
-            // ResourceTypes, Resources, Users) already matches the CURRENT EF model, since nothing after
-            // this point touches them - so the ordinary DbContext API is safe to use for seeding those.
+            // RecurringSeries still has the old StartUtc/EndUtc shape, and (since AddUserStatusAndInvitations
+            // is chronologically LATER than PreRedesignMigration) Users doesn't have its Status column yet
+            // either. Tenants/ResourceTypes/Resources are untouched by anything after this checkpoint, so
+            // the ordinary DbContext API is still safe for seeding those; Users needs the same raw-SQL
+            // treatment as the RecurringSeries row below, for the identical reason.
             await migrator.MigrateAsync(PreRedesignMigration);
 
             var now = DateTimeOffset.UtcNow;
@@ -62,8 +64,14 @@ public sealed class MigrationApplicationTests : IAsyncLifetime
                 Id = resourceId, TenantId = tenantId, ResourceTypeId = resourceTypeId, Name = "Migration Test Room",
                 Capacity = 2, RequiresApproval = false, Status = ResourceStatus.Active, TimeZoneId = "UTC",
             });
-            dbContext.Users.Add(new User { Id = userId, TenantId = tenantId, FirstName = "Migration", LastName = "Test", Email = "migration@constraint.test", PasswordHash = "x", CreatedAtUtc = now });
             await dbContext.SaveChangesAsync();
+
+            // A real pre-existing User row in the OLD (no Status column) shape, inserted via raw SQL
+            // since the current EF model maps a Status column that doesn't exist yet at this checkpoint.
+            await dbContext.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO Users (Id, TenantId, FirstName, LastName, Email, PasswordHash, CreatedAtUtc)
+                VALUES ({userId}, {tenantId}, {"Migration"}, {"Test"}, {"migration@constraint.test"}, {"x"}, {now})
+                """);
 
             // A real pre-existing RecurringSeries row in the OLD (StartUtc/EndUtc) shape, inserted via
             // raw SQL since the current EF model no longer maps those columns at all.
@@ -82,6 +90,43 @@ public sealed class MigrationApplicationTests : IAsyncLifetime
         Assert.Equal(1, series.OccurrenceCount);
         Assert.Null(series.EndDate);
         Assert.True(series.EndTime > series.StartTime);
+    }
+
+    // AddUserStatusAndInvitations adds a NOT NULL Status column to a table that can already have rows,
+    // backed by a DB DEFAULT constraint (not an application-side backfill) - this proves that migration
+    // actually applies cleanly against a pre-existing Users row and that the DEFAULT constraint backfills
+    // it to Active, matching User.cs's own documented reasoning for why Active had to be the enum's zero
+    // member (see that file's comment on the EF "unset vs. explicitly set" sentinel).
+    private const string PreUserStatusMigration = "20260915120000_BackfillResourceTypesTenantId";
+
+    [Fact]
+    public async Task ApplyingTheAddUserStatusAndInvitationsMigration_BackfillsAnExistingUserRowToActive()
+    {
+        var tenantId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+
+        await using (var dbContext = CreateDbContext())
+        {
+            var migrator = dbContext.GetService<IMigrator>();
+            await migrator.MigrateAsync(PreUserStatusMigration);
+
+            var now = DateTimeOffset.UtcNow;
+            dbContext.Tenants.Add(new Tenant { Id = tenantId, Name = "Backfill Test Tenant", DefaultTimeZoneId = "UTC", Status = TenantStatus.Active, CreatedAtUtc = now });
+            await dbContext.SaveChangesAsync();
+
+            // Users has no Status column yet at this checkpoint - raw SQL, same reasoning as the
+            // RecurringSeries/Users seeding above.
+            await dbContext.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO Users (Id, TenantId, FirstName, LastName, Email, PasswordHash, CreatedAtUtc)
+                VALUES ({userId}, {tenantId}, {"Pre"}, {"Existing"}, {"pre-existing@backfill.test"}, {"x"}, {now})
+                """);
+
+            await migrator.MigrateAsync();
+        }
+
+        await using var verifyContext = CreateDbContext(tenantId);
+        var user = await verifyContext.Users.SingleAsync(u => u.Id == userId);
+        Assert.Equal(UserStatus.Active, user.Status);
     }
 
     private BookSpaceDbContext CreateDbContext(Guid? tenantId = null)
