@@ -6,6 +6,7 @@ import { ApiError, toApiError } from '../../../core/http/api-error';
 import { NotificationService } from '../../../core/notifications/notification.service';
 import { ResourceStatus, ResourceSummary } from '../resource.models';
 import { ResourceService } from '../resource.service';
+import { TimezoneSelectComponent } from '../timezone-select/timezone-select';
 
 // Friendlier copy than the raw ProblemDetails.detail for the specific conflicts Create/UpdateResource
 // can throw - falls back to apiError.detail/title for anything not in this map (e.g. the "archived and
@@ -21,7 +22,7 @@ const CONFLICT_MESSAGES: Record<string, string> = {
 // routes role-guarded - see app.routes.ts.
 @Component({
   selector: 'app-resource-form',
-  imports: [RouterLink, FormsModule],
+  imports: [RouterLink, FormsModule, TimezoneSelectComponent],
   templateUrl: './resource-form.html',
   styleUrl: './resource-form.scss',
 })
@@ -47,7 +48,10 @@ export class ResourceFormComponent {
   protected readonly description = signal('');
   protected readonly capacity = signal(1);
   protected readonly requiresApproval = signal(false);
-  protected readonly timeZoneId = signal('UTC');
+  // Empty until TimezoneSelectComponent resolves a real default (browser-detected or the project's
+  // documented fallback) for Create, or this component's own prefill() sets the resource's stored
+  // value for Edit - see resource-form.html's autoDetectBrowserTimezone binding.
+  protected readonly timeZoneId = signal('');
   // Never 'Archived' - the backend rejects that Status value on Update outright (archiving is its own
   // action, via the "Archive" button on Resource Detail, not a status picked here).
   protected readonly status = signal<Exclude<ResourceStatus, 'Archived'>>('Active');
