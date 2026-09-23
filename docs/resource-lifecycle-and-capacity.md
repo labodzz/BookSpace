@@ -10,7 +10,7 @@
 | Active | Allowed | Archives it | Allowed | Computed normally | - |
 | Inactive | Allowed | Archives it | Allowed | `BookableSlots` empty; schedule/occupancy still shown | Still readable |
 | Maintenance | Allowed | Archives it | Allowed (deliberate - see below) | `BookableSlots` empty; schedule/occupancy still shown | Still readable |
-| Archived | **Rejected** (`ConflictException`) | Idempotent no-op | **Rejected** (`ConflictException`) | Computed (not 404); `BookableSlots` empty because non-Active | Still readable |
+| Archived | **Rejected** (`ConflictException`) | Idempotent no-op | **Rejected** (`ConflictException`) - includes *editing* an existing Blackout, not just adding a new one | Computed (not 404); `BookableSlots` empty because non-Active | Still readable |
 
 Notes:
 
@@ -24,6 +24,13 @@ Notes:
   in Maintenance can still have `AvailabilityRule`/`BlackoutPeriod`/`ResourceApprover` rows added to it -
   it's temporary, and configuring a blackout for the exact maintenance window (or otherwise preparing
   the resource for when it comes back) is a legitimate thing to do while it lasts.
+- **`UpdateBlackoutPeriodCommandHandler` enforces Archived-is-terminal too, not just Create.** Every
+  sibling Create/Update handler in this feature (`CreateBlackoutPeriodCommandHandler`,
+  `AssignResourceApproverCommandHandler`, `UpdateResourceCommandHandler`) already called
+  `ResourceGuard.EnsureNotArchived(resource)`; Update for BlackoutPeriod specifically was missing it -
+  editing an existing blackout on an Archived resource was possible until this was found and fixed.
+  Covered by `UpdateBlackoutPeriodCommandHandlerTests.Handle_ForAnArchivedResource_...` and
+  `ResourcesEndpointsTests.UpdateBlackoutPeriod_OnAnArchivedResource_ReturnsConflict`.
 - **Delete/Remove operations on child entities have no parent-status check at all**, for any status
   including Archived - cleanup should always be possible regardless of the parent's lifecycle state.
   Only *creating new* child configuration is blocked, and only when the parent is Archived.

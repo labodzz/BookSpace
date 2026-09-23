@@ -133,6 +133,36 @@ describe('ResourceDetailComponent', () => {
     expect(root().querySelector('.dialog .banner-error')).not.toBeNull();
   });
 
+  it('shows "Manage availability" and "Manage approvers", navigating to their guarded management routes, for a TenantAdmin or SysAdmin', () => {
+    configure((...roles) => roles.includes('SysAdmin'));
+    flushLoad();
+
+    const availabilityLink = [...root().querySelectorAll('a')].find((a) => a.textContent?.trim() === 'Manage availability');
+    expect(availabilityLink?.getAttribute('href')).toBe(`/resources/${RESOURCE_ID}/manage-availability`);
+    const approversLink = [...root().querySelectorAll('a')].find((a) => a.textContent?.trim() === 'Manage approvers');
+    expect(approversLink?.getAttribute('href')).toBe(`/resources/${RESOURCE_ID}/manage-approvers`);
+  });
+
+  it('does not show "Manage availability" or "Manage approvers" for a plain Member', () => {
+    configure();
+    flushLoad();
+
+    expect([...root().querySelectorAll('a')].some((a) => a.textContent?.trim() === 'Manage availability')).toBe(false);
+    expect([...root().querySelectorAll('a')].some((a) => a.textContent?.trim() === 'Manage approvers')).toBe(false);
+  });
+
+  // Unlike Edit/Archive, both management links stay reachable on an already-archived resource - the
+  // management pages still let an admin delete existing rules/blackouts/approver assignments there,
+  // even though they can no longer add new ones (see resource-availability-manage.ts/
+  // resource-approvers-manage.ts).
+  it('still shows "Manage availability" and "Manage approvers" for a TenantAdmin on an already-archived resource', () => {
+    configure((...roles) => roles.includes('TenantAdmin'));
+    flushLoad({ status: 3 }); // ResourceStatus.Archived
+
+    expect([...root().querySelectorAll('a')].some((a) => a.textContent?.trim() === 'Manage availability')).toBe(true);
+    expect([...root().querySelectorAll('a')].some((a) => a.textContent?.trim() === 'Manage approvers')).toBe(true);
+  });
+
   it('closes the dialog without archiving when "Keep resource" is clicked', () => {
     configure((...roles) => roles.includes('TenantAdmin'));
     flushLoad();

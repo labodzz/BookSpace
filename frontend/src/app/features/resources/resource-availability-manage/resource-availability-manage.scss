@@ -1,0 +1,192 @@
+// Full width within the shell content area - the same pattern every other resource admin page uses
+// (resource-detail, resource-form), so this page never shows unused space beside a narrow card.
+.manage-availability-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: 100%;
+}
+
+.manage-availability--skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-6);
+}
+
+.manage-availability__back {
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  width: fit-content;
+}
+
+.manage-availability__back:hover {
+  color: var(--color-primary);
+}
+
+.manage-availability__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.manage-availability__header h1 {
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+}
+
+.manage-availability__header p {
+  margin-top: var(--space-1);
+}
+
+.manage-availability__conflict-warning {
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.manage-availability__conflict-warning-title {
+  font-weight: 600;
+  margin-bottom: var(--space-1);
+}
+
+.manage-availability__conflict-warning code {
+  font-size: 0.8125rem;
+  word-break: break-all;
+}
+
+.manage-availability__dismiss {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 1.125rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.manage-availability__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-6);
+}
+
+.manage-availability__section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.manage-availability__rule-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.manage-availability__rule-form .banner {
+  flex-basis: 100%;
+}
+
+.manage-availability__rules,
+.manage-availability__blackouts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.manage-availability__rule {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.manage-availability__rule-day {
+  font-weight: 600;
+  margin-right: var(--space-3);
+}
+
+.manage-availability__rule-time {
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.manage-availability__blackout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.manage-availability__blackout-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
+}
+
+.manage-availability__blackout-reason {
+  font-weight: 600;
+}
+
+.manage-availability__blackout-range {
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.manage-availability__blackout-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.manage-availability__delete-btn {
+  color: var(--color-error);
+  border-color: var(--color-error-bg);
+}
+
+.manage-availability__delete-btn:hover {
+  background: var(--color-error-bg);
+}
+
+.manage-availability__blackout-dialog {
+  max-width: 480px;
+}
+
+.manage-availability__blackout-dialog-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+}
+
+@media (max-width: 480px) {
+  .manage-availability__blackout-dialog-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .manage-availability__rule-form {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .manage-availability__blackout {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

@@ -1084,6 +1084,27 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     }
 
+    // Genuine gap found while reconstructing this coverage: UpdateBlackoutPeriodCommandHandler was
+    // missing the same ResourceGuard.EnsureNotArchived check every sibling Create/Update handler in this
+    // feature already has (CreateBlackoutPeriodCommandHandler, AssignResourceApproverCommandHandler,
+    // UpdateResourceCommandHandler) - an Archived resource's blackout periods could still be edited.
+    [Fact]
+    public async Task UpdateBlackoutPeriod_OnAnArchivedResource_ReturnsConflict()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resource = await CreateResourceAsync(client, $"ArchivedBlackoutUpdate {Guid.NewGuid()}");
+        var start = DateTimeOffset.UtcNow.AddDays(11);
+        var createResponse = await client.PostAsJsonAsync($"/resources/{resource.Id}/blackout-periods",
+            new { startUtc = start, endUtc = start.AddHours(1), reason = "Original" });
+        var period = await createResponse.Content.ReadFromJsonAsync<BlackoutPeriodResponse>(JsonOptions);
+        await client.DeleteAsync($"/resources/{resource.Id}");
+
+        var response = await client.PutAsJsonAsync($"/resources/{resource.Id}/blackout-periods/{period!.Id}",
+            new { startUtc = start, endUtc = start.AddHours(2), reason = "Attempted change" });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
     // ExistsByNameAsync has no explicit tenant parameter - it relies entirely on the EF global query
     // filter. A regression that broadened it tenant-globally would silently block legitimate cross-tenant
     // creates; only same-tenant duplicate rejection was ever tested before this.

@@ -576,6 +576,95 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
         Assert.Equal("Booking.ApprovalForbidden", await ReadErrorCodeAsync(response));
     }
 
+    // ResourceApprover assignment is never encoded in the JWT - only the global "Approver" role is (see
+    // ApprovalAuthorization.EnsureCallerCanDecideAsync). This proves that in practice: the approver's
+    // token is issued BEFORE the assignment even exists, yet the very same token can approve immediately
+    // after an admin creates the assignment - no re-login, no new token, because the assignment check is
+    // a live DB read on every request, not something the token itself carries.
+    [Fact]
+    public async Task AssignResourceApprover_ThenApproveWithATokenIssuedBeforeTheAssignmentExisted_Succeeds()
+    {
+        using var approverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeUnassignedApproverEmail);
+
+        using var adminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var createResourceResponse = await adminClient.PostAsJsonAsync("/resources", new
+        {
+            resourceTypeId = TestDataSeeder.ResourceTypeId,
+            name = $"Live Grant Room {Guid.NewGuid()}",
+            capacity = 2,
+            requiresApproval = true,
+            timeZoneId = "UTC",
+        });
+        var resource = await createResourceResponse.Content.ReadFromJsonAsync<ResourceIdResponse>(JsonOptions);
+        foreach (var dayOfWeek in Enum.GetValues<DayOfWeek>())
+        {
+            await adminClient.PostAsJsonAsync($"/resources/{resource!.Id}/availability-rules",
+                new { dayOfWeek, startTime = "00:00:00", endTime = "23:59:59" });
+        }
+
+        // The assignment must exist before the booking is created - CreateBookingCommandHandler itself
+        // rejects a RequiresApproval resource with zero configured approvers (Booking.NoApproverConfigured).
+        // What this test proves is unaffected by that ordering: approverClient's token (obtained above,
+        // before this call) still predates the assignment.
+        var assignResponse = await adminClient.PostAsJsonAsync(
+            $"/resources/{resource!.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
+        Assert.Equal(HttpStatusCode.Created, assignResponse.StatusCode);
+
+        using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+        var start = TestDataSeeder.AvailabilityAnchorUtc.AddHours(2).AddDays(90);
+        var createBookingResponse = await memberClient.PostAsJsonAsync(
+            "/bookings", new { resourceId = resource.Id, startUtc = start, endUtc = start.AddHours(1), quantity = 1 });
+        var booking = await createBookingResponse.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
+
+        var approveResponse = await approverClient.PostAsJsonAsync($"/bookings/{booking!.Id}/approve", new { decisionNote = (string?)null });
+
+        Assert.Equal(HttpStatusCode.OK, approveResponse.StatusCode);
+        var approved = await approveResponse.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
+        Assert.Equal(BookingStatus.Confirmed, approved!.Status);
+    }
+
+    // The mirror image of the test above: revocation must also be immediate and live-checked, not
+    // something a caller can keep exploiting with an already-issued token just because nothing forces
+    // them to log in again.
+    [Fact]
+    public async Task RemoveResourceApprover_ThenApproveWithTheSameToken_IsImmediatelyRejected()
+    {
+        using var adminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var createResourceResponse = await adminClient.PostAsJsonAsync("/resources", new
+        {
+            resourceTypeId = TestDataSeeder.ResourceTypeId,
+            name = $"Live Revoke Room {Guid.NewGuid()}",
+            capacity = 2,
+            requiresApproval = true,
+            timeZoneId = "UTC",
+        });
+        var resource = await createResourceResponse.Content.ReadFromJsonAsync<ResourceIdResponse>(JsonOptions);
+        foreach (var dayOfWeek in Enum.GetValues<DayOfWeek>())
+        {
+            await adminClient.PostAsJsonAsync($"/resources/{resource!.Id}/availability-rules",
+                new { dayOfWeek, startTime = "00:00:00", endTime = "23:59:59" });
+        }
+        // Two approvers, so removing one does not hit the RemoveResourceApprover.LastRemaining guard.
+        await adminClient.PostAsJsonAsync($"/resources/{resource!.Id}/approvers", new { userId = TestDataSeeder.AcmeApproverUserId });
+        await adminClient.PostAsJsonAsync($"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
+
+        using var approverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeUnassignedApproverEmail);
+
+        using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+        var start = TestDataSeeder.AvailabilityAnchorUtc.AddHours(2).AddDays(91);
+        var createBookingResponse = await memberClient.PostAsJsonAsync(
+            "/bookings", new { resourceId = resource.Id, startUtc = start, endUtc = start.AddHours(1), quantity = 1 });
+        var booking = await createBookingResponse.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
+
+        var removeResponse = await adminClient.DeleteAsync($"/resources/{resource.Id}/approvers/{TestDataSeeder.AcmeUnassignedApproverUserId}");
+        Assert.Equal(HttpStatusCode.NoContent, removeResponse.StatusCode);
+
+        var approveResponse = await approverClient.PostAsJsonAsync($"/bookings/{booking!.Id}/approve", new { decisionNote = (string?)null });
+
+        Assert.Equal(HttpStatusCode.Conflict, approveResponse.StatusCode);
+        Assert.Equal("Booking.ApprovalForbidden", await ReadErrorCodeAsync(approveResponse));
+    }
+
     // Booking.NoApproverConfigured (409) had no API-level test - only ever unit-tested via mocks.
     [Fact]
     public async Task CreateBooking_ForResourceRequiringApprovalWithNoConfiguredApprovers_ReturnsConflictWithNoApproverConfiguredCode()

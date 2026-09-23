@@ -24,11 +24,21 @@ public sealed class UpdateBlackoutPeriodCommandRequestValidator : AbstractValida
 }
 
 public sealed class UpdateBlackoutPeriodCommandHandler(
-    IBlackoutPeriodRepository blackoutPeriodRepository, IBookingAvailabilityRepository bookingAvailabilityRepository)
+    IBlackoutPeriodRepository blackoutPeriodRepository, IResourceRepository resourceRepository,
+    IBookingAvailabilityRepository bookingAvailabilityRepository)
     : IRequestHandler<UpdateBlackoutPeriodCommandRequest, UpdateBlackoutPeriodResponse>
 {
     public async Task<UpdateBlackoutPeriodResponse> Handle(UpdateBlackoutPeriodCommandRequest request, CancellationToken cancellationToken)
     {
+        var resource = await resourceRepository.FindByIdAsync(request.ResourceId, cancellationToken)
+            ?? throw new NotFoundException($"Resource {request.ResourceId} was not found.", ErrorCodes.ResourceNotFound);
+
+        // Archived is terminal, same as every other Create/Update handler in this feature
+        // (CreateBlackoutPeriodCommandHandler, AssignResourceApproverCommandHandler,
+        // UpdateResourceCommandHandler) - a resource effectively deleted from the caller's point of view
+        // must not accept edits to its blackout periods either.
+        ResourceGuard.EnsureNotArchived(resource);
+
         var period = await blackoutPeriodRepository.FindByIdAsync(request.BlackoutId, cancellationToken);
         if (period is null || period.ResourceId != request.ResourceId)
         {
