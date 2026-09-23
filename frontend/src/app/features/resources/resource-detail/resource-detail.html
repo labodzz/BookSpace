@@ -71,8 +71,8 @@
 
     @if (resource.status === 'Active') {
       <div class="resource-detail__actions">
-        <a class="btn btn-primary" [routerLink]="['/resources', resource.id, 'availability']">Check availability</a>
-        <a class="btn btn-secondary" [routerLink]="['/bookings/new']" [queryParams]="{ resourceId: resource.id }">Book this resource</a>
+        <a class="btn btn-primary" [routerLink]="['/bookings/new']" [queryParams]="{ resourceId: resource.id }">Book this resource</a>
+        <a class="btn btn-secondary" [routerLink]="['/resources', resource.id, 'availability']">Check availability</a>
         <a class="btn btn-secondary" [routerLink]="['/bookings/new-recurring']" [queryParams]="{ resourceId: resource.id }">
           Set up a recurring booking
         </a>

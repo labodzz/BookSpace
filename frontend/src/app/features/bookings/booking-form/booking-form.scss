@@ -1,5 +1,7 @@
 // The outer page container - always full width, so the shell's content area never shows unused space
-// beside a narrow form. The form itself keeps a readable max-width inside it.
+// beside a narrow form. The form itself keeps a readable max-width inside it - wider than a plain field
+// list (560px) needs, since it now also hosts the inline availability display (blackout pills, a row of
+// slot buttons), not just labeled inputs.
 .booking-form-page {
   display: block;
   width: 100%;
@@ -9,7 +11,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-  max-width: 560px;
+  max-width: 720px;
   padding: var(--space-6);
 }
 
@@ -25,10 +27,104 @@
   margin-bottom: var(--space-1);
 }
 
+.booking-form__date {
+  max-width: 220px;
+}
+
+.booking-form__availability {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-alt);
+}
+
+.booking-form__availability-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+}
+
+.booking-form__availability-status--error {
+  color: var(--color-error);
+}
+
+.booking-form__availability-label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  margin-bottom: var(--space-2);
+}
+
+.booking-form__blackouts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+// Wraps rather than forcing horizontal scroll - a day with many open segments still lays out fine on a
+// narrow viewport, and the shared .field/input styling below keeps the manual Start/End inputs as the
+// same, already-accessible fallback if a slot's exact boundary isn't quite what's wanted.
+.booking-form__slots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.booking-form__slot {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  cursor: pointer;
+  font: inherit;
+  color: var(--color-text);
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.booking-form__slot:hover {
+  border-color: var(--color-primary);
+  background: var(--color-accent-soft);
+}
+
+.booking-form__slot:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+// Selected state is never color-only: a bold border plus a check mark (content, not decoration) both
+// carry the "this is the current selection" signal, matching aria-pressed="true" on the same element.
+.booking-form__slot--selected {
+  border-color: var(--color-primary);
+  border-width: 2px;
+  background: var(--color-accent-soft);
+  font-weight: 600;
+}
+
+.booking-form__slot--selected::after {
+  content: ' ✓ Selected';
+  font-weight: 600;
+  color: var(--color-primary);
+}
+
+.booking-form__slot-capacity {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
 .booking-form__row {
   display: grid;
-  grid-template-columns: 1.2fr 1fr 1fr;
+  grid-template-columns: 1fr 1fr;
   gap: var(--space-3);
+  max-width: 420px;
 }
 
 @media (max-width: 560px) {

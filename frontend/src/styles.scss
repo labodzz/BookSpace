@@ -452,3 +452,40 @@ a[href^='/'] {
   background: var(--color-accent-soft);
   color: var(--color-text);
 }
+
+// Distinct from banner-error: used when a request failed specifically because availability changed out
+// from under the user (not a plain validation mistake) - see booking-form.ts's conflictNotice.
+.banner-warning {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+
+// Shared between the one-off and recurring booking forms, so switching between them (preserving
+// resourceId) always looks and behaves identically regardless of which one the user started on.
+.booking-mode-tabs {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.booking-mode-tabs__tab {
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.booking-mode-tabs__tab:hover {
+  border-color: var(--color-primary);
+  color: var(--color-text);
+}
+
+.booking-mode-tabs__tab--active {
+  background: var(--color-accent-soft);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
