@@ -55,7 +55,10 @@ describe('ResourceDetailComponent', () => {
 
   afterEach(() => httpTesting.verify());
 
-  it('makes "Book this resource" the primary action, opening the integrated booking page with resourceId', () => {
+  // "Check availability" was deliberately removed once availability browsing moved inline into the
+  // booking form itself (see booking-form.ts) - a separate link to the same information right next to
+  // "Book this resource" would just be a redundant second path to the same place.
+  it('makes "Book this resource" the primary (and only booking-adjacent) action - no separate "Check availability" link', () => {
     configure();
     flushLoad();
 
@@ -63,9 +66,7 @@ describe('ResourceDetailComponent', () => {
     expect(bookLink.classList.contains('btn-primary')).toBe(true);
     expect(bookLink.getAttribute('href')).toBe(`/bookings/new?resourceId=${RESOURCE_ID}`);
 
-    const availabilityLink = [...root().querySelectorAll('a')].find((a) => a.textContent?.trim() === 'Check availability')!;
-    expect(availabilityLink.classList.contains('btn-secondary')).toBe(true);
-    expect(availabilityLink.getAttribute('href')).toBe(`/resources/${RESOURCE_ID}/availability`);
+    expect([...root().querySelectorAll('a')].some((a) => a.textContent?.trim() === 'Check availability')).toBe(false);
   });
 
   it('does not show Edit/Archive controls for a plain Member', () => {
