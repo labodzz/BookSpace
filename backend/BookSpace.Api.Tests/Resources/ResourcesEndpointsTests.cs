@@ -717,6 +717,33 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
+    // No role restriction, same posture as GET /resource-types - any authenticated tenant member picks
+    // a time zone when creating/editing a resource, not just TenantAdmin/SysAdmin.
+    [Fact]
+    public async Task GetSupportedTimeZones_AsMember_ReturnsOkWithWellKnownZones()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+
+        var response = await client.GetAsync("/resources/supported-timezones");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var zones = await response.Content.ReadFromJsonAsync<string[]>(JsonOptions);
+        Assert.NotNull(zones);
+        Assert.Contains("Europe/Sarajevo", zones);
+        Assert.Contains("UTC", zones);
+        Assert.Contains("America/New_York", zones);
+    }
+
+    [Fact]
+    public async Task GetSupportedTimeZones_WithoutToken_ReturnsUnauthorized()
+    {
+        using var client = _factory.CreateClient();
+
+        var response = await client.GetAsync("/resources/supported-timezones");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
     [Fact]
     public async Task DeleteResource_ArchivesRatherThanRemoves()
     {

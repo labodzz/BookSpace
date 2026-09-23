@@ -304,4 +304,39 @@ describe('ResourceService', () => {
       expect(service.resourceTypes()).toEqual([{ id: 'type-1', name: 'Desk' }, { id: 'type-2', name: 'Room' }]);
     });
   });
+
+  describe('supported time zones', () => {
+    it('getSupportedTimeZones GETs the canonical list from the backend', () => {
+      let result: unknown;
+      service.getSupportedTimeZones().subscribe((zones) => (result = zones));
+
+      httpTesting.expectOne(`${RESOURCES_URL}/supported-timezones`).flush(['Europe/Sarajevo', 'UTC']);
+
+      expect(result).toEqual(['Europe/Sarajevo', 'UTC']);
+    });
+
+    it('caches the list for the app\'s lifetime - a second call issues no further request', () => {
+      service.getSupportedTimeZones().subscribe();
+      httpTesting.expectOne(`${RESOURCES_URL}/supported-timezones`).flush(['UTC']);
+
+      let second: unknown;
+      service.getSupportedTimeZones().subscribe((zones) => (second = zones));
+
+      httpTesting.expectNone(`${RESOURCES_URL}/supported-timezones`);
+      expect(second).toEqual(['UTC']);
+    });
+
+    it('does not cache a failed request - the next call retries with a fresh HTTP request', () => {
+      let firstErrored = false;
+      service.getSupportedTimeZones().subscribe({ error: () => (firstErrored = true) });
+      httpTesting.expectOne(`${RESOURCES_URL}/supported-timezones`).flush('boom', { status: 500, statusText: 'Internal Server Error' });
+      expect(firstErrored).toBe(true);
+
+      let second: unknown;
+      service.getSupportedTimeZones().subscribe((zones) => (second = zones));
+      httpTesting.expectOne(`${RESOURCES_URL}/supported-timezones`).flush(['UTC']);
+
+      expect(second).toEqual(['UTC']);
+    });
+  });
 });

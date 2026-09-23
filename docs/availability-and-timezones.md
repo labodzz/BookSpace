@@ -4,6 +4,20 @@ This is especially relevant for the future Booking Work Packet - read
 [resource-lifecycle-and-capacity.md](resource-lifecycle-and-capacity.md)'s "not a booking-creation
 guarantee" section first.
 
+## Choosing a resource's time zone
+
+`Resource.TimeZoneId` belongs to the **resource** (its physical/operational location), never to the
+signed-in administrator, their browser, or a fixed UTC offset. The Create/Edit Resource form's time zone
+field is a searchable combobox (`TimezoneSelectComponent`, shared by both), not free text - it only lets
+an administrator pick from `GET /resources/supported-timezones`, the backend's own canonical, currently-
+resolvable IANA identifier list (the same one `Create/UpdateResourceCommandRequest`'s
+`TimeZoneValidation.BeAValidTimeZoneId` validator already enforces, so a selection can never be rejected
+as "unsupported"). A fixed offset like `UTC+1` is never accepted or stored - daylight-saving rules can
+change a zone's actual UTC offset during the year, which a fixed offset cannot express; see "DST policy"
+below for how that plays out downstream. An existing resource's already-stored value is always shown
+as-is on Edit (never silently replaced by the picker's own list or the browser's zone), including a
+legacy value that predates this selector and isn't in the current list.
+
 ## Storage model
 
 - `AvailabilityRule.StartTime`/`EndTime` are **wall-clock local times** (`TimeOnly`) in the resource's

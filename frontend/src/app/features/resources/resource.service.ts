@@ -1,6 +1,6 @@
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable, inject, signal } from '@angular/core';
-import { Observable, map, of, shareReplay, switchMap, tap } from 'rxjs';
+import { Observable, catchError, map, of, shareReplay, switchMap, tap, throwError } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import { PagedResult } from '../../core/http/paged-result';
 import { UserService } from '../users/user.service';
@@ -42,6 +42,11 @@ export class ResourceService {
   // they're fetched once and cached for the app's lifetime rather than re-requested per screen.
   private resourceTypesRequest$: Observable<ResourceType[]> | null = null;
   readonly resourceTypes = signal<ResourceType[]>([]);
+
+  // The backend's canonical, IANA-only, currently-resolvable time zone list - static for the process
+  // lifetime of the SERVER, so a single client-side fetch cached for this app's own lifetime is safe;
+  // never re-requested per Create/Edit form visit.
+  private supportedTimeZonesRequest$: Observable<string[]> | null = null;
 
   getResources(page: number, pageSize: number, resourceTypeId?: string, status?: ResourceStatus): Observable<PagedResult<ResourceSummary>> {
     let params = new HttpParams().set('page', page).set('pageSize', pageSize);
@@ -190,6 +195,23 @@ export class ResourceService {
 
   removeResourceApprover(resourceId: string, userId: string): Observable<void> {
     return this.http.delete<void>(`${environment.apiUrl}/resources/${resourceId}/approvers/${userId}`);
+  }
+
+  // Cached indefinitely via shareReplay(1) - a failed request is deliberately NOT cached (catchError
+  // below clears it before rethrowing), so a transient network failure can be retried by simply calling
+  // this again, matching timezone-select.ts's own retry button.
+  getSupportedTimeZones(): Observable<string[]> {
+    if (!this.supportedTimeZonesRequest$) {
+      this.supportedTimeZonesRequest$ = this.http.get<string[]>(`${environment.apiUrl}/resources/supported-timezones`).pipe(
+        catchError((error: unknown) => {
+          this.supportedTimeZonesRequest$ = null;
+          return throwError(() => error);
+        }),
+        shareReplay(1),
+      );
+    }
+
+    return this.supportedTimeZonesRequest$;
   }
 
   getResourceTypes(): Observable<ResourceType[]> {

@@ -40,3 +40,31 @@ export function resolveLuxonZone(timeZoneId: string): string {
 
   return 'local';
 }
+
+// Underscores/hyphens in IANA ids are word separators, not literal characters a user would type - this
+// lets "new york" match "America/New_York" and "st lucia" match "America/St_Lucia", on top of the plain
+// substring match that already covers searching by region ("Europe") or full id ("Europe/Sarajevo").
+function normalizeForTimeZoneSearch(text: string): string {
+  return text.toLowerCase().replace(/[_-]/g, ' ');
+}
+
+export function matchesTimeZoneQuery(timeZoneId: string, query: string): boolean {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return true;
+  }
+  return normalizeForTimeZoneSearch(timeZoneId).includes(normalizeForTimeZoneSearch(trimmed));
+}
+
+// Purely informational - see timezone-select.ts's own rules on why this is never stored and never used
+// for booking-time math. Returns null rather than throwing for a legacy id the browser's Intl can't
+// resolve (e.g. a Windows-style id never converted via resolveLuxonZone above).
+export function formatCurrentUtcOffset(timeZoneId: string): string | null {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone: timeZoneId, timeZoneName: 'longOffset' }).formatToParts(new Date());
+    const offset = parts.find((part) => part.type === 'timeZoneName')?.value;
+    return offset ? offset.replace('GMT', 'UTC') : null;
+  } catch {
+    return null;
+  }
+}

@@ -31,6 +31,12 @@ public sealed class ResourcesController(IMediator mediator) : ControllerBase
         int page = 1, int pageSize = 20, Guid? resourceTypeId = null, ResourceStatus? status = null, CancellationToken cancellationToken = default) =>
         Ok(await mediator.Send(new GetResourcesQueryRequest(page, pageSize, resourceTypeId, status), cancellationToken));
 
+    // "supported-timezones" never collides with the {id:guid} route below - it isn't a valid Guid, so
+    // routing falls through to this literal segment instead.
+    [HttpGet("supported-timezones")]
+    public async Task<IActionResult> GetSupportedTimeZones(CancellationToken cancellationToken) =>
+        Ok(await mediator.Send(new GetSupportedTimeZonesQueryRequest(), cancellationToken));
+
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetResource(Guid id, CancellationToken cancellationToken) =>
         Ok(await mediator.Send(new GetResourceQueryRequest(id), cancellationToken));

@@ -76,20 +76,14 @@
       }
     </div>
 
-    <div class="field">
-      <label for="time-zone">Time zone</label>
-      <input
-        id="time-zone"
-        type="text"
-        placeholder="e.g. Europe/Sarajevo"
-        [value]="timeZoneId()"
-        (input)="timeZoneId.set($any($event.target).value)"
-      />
-      <span class="field-hint">An IANA time zone identifier, such as Europe/Sarajevo or America/New_York.</span>
-      @if (timeZoneFieldErrors().length) {
-        <span class="field-error-text">{{ timeZoneFieldErrors().join(' ') }}</span>
-      }
-    </div>
+    <app-timezone-select
+      [value]="timeZoneId()"
+      (valueChange)="timeZoneId.set($event)"
+      [autoDetectBrowserTimezone]="!isEditMode()"
+    />
+    @if (timeZoneFieldErrors().length) {
+      <span class="field-error-text">{{ timeZoneFieldErrors().join(' ') }}</span>
+    }
 
     @if (isEditMode()) {
       <div class="field">

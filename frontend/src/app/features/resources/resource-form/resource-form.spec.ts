@@ -8,6 +8,8 @@ import { ResourceFormComponent } from './resource-form';
 
 const RESOURCES_URL = `${environment.apiUrl}/resources`;
 const TYPES_URL = `${environment.apiUrl}/resource-types`;
+const TIMEZONES_URL = `${environment.apiUrl}/resources/supported-timezones`;
+const SUPPORTED_TIMEZONES = ['America/New_York', 'Asia/Tokyo', 'Europe/London', 'Europe/Sarajevo', 'UTC'];
 
 function wireResource(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -29,6 +31,13 @@ describe('ResourceFormComponent', () => {
   let router: Router;
 
   function configure(resourceId: string | null): void {
+    // Deterministic across machines/CI - TimezoneSelectComponent's Create-mode default detection reads
+    // this real API, so it's pinned here rather than left to whatever the test host's own system time
+    // zone happens to be. 'Europe/Sarajevo' is deliberately included in SUPPORTED_TIMEZONES above.
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({
+      timeZone: 'Europe/Sarajevo',
+    } as Intl.ResolvedDateTimeFormatOptions);
+
     TestBed.configureTestingModule({
       imports: [ResourceFormComponent],
       providers: [
@@ -54,22 +63,55 @@ describe('ResourceFormComponent', () => {
     input.dispatchEvent(new Event(id === 'resource-type' || id === 'status' ? 'change' : 'input'));
   }
 
+  // Mirrors real combobox interaction (see timezone-select.ts): focus opens the list, typing filters
+  // it, and only a mousedown on the matching option actually commits a selection - the same mechanism
+  // timezone-select.spec.ts exercises directly and in more depth; this just proves the form wires it up.
+  function selectTimeZone(zoneId: string): void {
+    const input = root().querySelector('#time-zone') as HTMLInputElement;
+    input.dispatchEvent(new Event('focus'));
+    fixture.detectChanges();
+    input.value = zoneId;
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    const option = [...root().querySelectorAll('[role="option"]')].find((element) => element.textContent?.trim() === zoneId);
+    option?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    fixture.detectChanges();
+  }
+
   function submitButton(): HTMLButtonElement {
     return [...root().querySelectorAll('button')].find((b) => b.getAttribute('type') === 'submit') as HTMLButtonElement;
   }
 
-  afterEach(() => httpTesting.verify());
+  // TimezoneSelectComponent is a CHILD component only constructed once its host template actually
+  // renders it - not at TestBed.createComponent() time like ResourceFormComponent's own constructor.
+  // In edit mode that's only once loadingResource() flips false (i.e. after a detectChanges() that
+  // follows the resource GET being flushed), so callers must flush that first - see each edit-mode
+  // test below.
+  function flushTimeZones(): void {
+    httpTesting.expectOne((r) => r.url === TIMEZONES_URL).flush(SUPPORTED_TIMEZONES);
+    fixture.detectChanges();
+  }
+
+  afterEach(() => {
+    httpTesting.verify();
+    vi.restoreAllMocks();
+  });
 
   describe('create mode (resources/new)', () => {
     beforeEach(() => {
       configure(null);
       httpTesting.expectOne((r) => r.url === TYPES_URL).flush([{ id: 'type-1', name: 'Meeting Room' }]);
-      fixture.detectChanges();
+      fixture.detectChanges(); // constructs app-timezone-select, which issues the TIMEZONES_URL request
+      flushTimeZones();
     });
 
     it('renders an empty form with no resource fetch', () => {
       expect(root().textContent).toContain('New resource');
       httpTesting.expectNone((r) => r.url.startsWith(`${RESOURCES_URL}/`));
+    });
+
+    it('preselects the (mocked) browser time zone as the default, since it is in the supported list', () => {
+      expect((root().querySelector('#time-zone') as HTMLInputElement).value).toBe('Europe/Sarajevo');
     });
 
     it('blocks submission client-side when required fields are missing, without an HTTP call', () => {
@@ -80,11 +122,11 @@ describe('ResourceFormComponent', () => {
       httpTesting.expectNone((r) => r.url === RESOURCES_URL);
     });
 
-    it('submits a valid new resource, shows a success toast, and navigates to its detail page', () => {
+    it('submits a valid new resource with the selected time zone, shows a success toast, and navigates to its detail page', () => {
       setInput('resource-type', 'type-1');
       setInput('name', 'Falcon Room');
       setInput('capacity', '4');
-      setInput('time-zone', 'UTC');
+      selectTimeZone('UTC');
       submitButton().click();
 
       const req = httpTesting.expectOne((r) => r.url === RESOURCES_URL && r.method === 'POST');
@@ -103,11 +145,11 @@ describe('ResourceFormComponent', () => {
       expect(TestBed.inject(NotificationService).toasts()).toEqual([expect.objectContaining({ message: 'Resource created.' })]);
     });
 
-    it('renders field-level errors returned by the API without touching the generic form error', () => {
+    it('renders field-level errors the backend returns for the submitted time zone', () => {
       setInput('resource-type', 'type-1');
       setInput('name', 'Falcon Room');
       setInput('capacity', '4');
-      setInput('time-zone', 'Not/AZone');
+      selectTimeZone('Europe/London');
       submitButton().click();
 
       httpTesting.expectOne((r) => r.url === RESOURCES_URL && r.method === 'POST').flush(
@@ -124,7 +166,7 @@ describe('ResourceFormComponent', () => {
       setInput('resource-type', 'type-1');
       setInput('name', 'Falcon Room');
       setInput('capacity', '4');
-      setInput('time-zone', 'UTC');
+      selectTimeZone('UTC');
       submitButton().click();
 
       httpTesting.expectOne((r) => r.url === RESOURCES_URL && r.method === 'POST').flush(
@@ -143,18 +185,25 @@ describe('ResourceFormComponent', () => {
       httpTesting.expectOne((r) => r.url === TYPES_URL).flush([{ id: 'type-1', name: 'Meeting Room' }]);
     });
 
-    it('loads and prefills the existing resource, including its current status', () => {
-      httpTesting.expectOne((r) => r.url === `${RESOURCES_URL}/resource-1` && r.method === 'GET').flush(wireResource({ status: 1 })); // Inactive
+    it('loads and prefills the existing resource, including its current status and its own time zone - never the browser default', () => {
+      httpTesting.expectOne((r) => r.url === `${RESOURCES_URL}/resource-1` && r.method === 'GET').flush(
+        wireResource({ status: 1, timeZoneId: 'Asia/Tokyo' }), // Inactive
+      );
       fixture.detectChanges();
+      flushTimeZones();
 
       expect((root().querySelector('#name') as HTMLInputElement).value).toBe('Falcon Room');
       expect((root().querySelector('#capacity') as HTMLInputElement).value).toBe('4');
       expect((root().querySelector('#status') as HTMLSelectElement).value).toBe('Inactive');
+      // Not 'Europe/Sarajevo' - configure() above mocks that as the browser's own zone, and it must
+      // never override an Edit resource's already-stored value.
+      expect((root().querySelector('#time-zone') as HTMLInputElement).value).toBe('Asia/Tokyo');
     });
 
-    it('submits an update as a PUT with the status sent as its numeric wire code', () => {
+    it('submits an update as a PUT with the status sent as its numeric wire code, keeping the resource\'s own time zone', () => {
       httpTesting.expectOne((r) => r.url === `${RESOURCES_URL}/resource-1` && r.method === 'GET').flush(wireResource());
       fixture.detectChanges();
+      flushTimeZones();
 
       setInput('name', 'Falcon Room (renamed)');
       setInput('status', 'Maintenance');
@@ -163,6 +212,7 @@ describe('ResourceFormComponent', () => {
       const req = httpTesting.expectOne((r) => r.url === `${RESOURCES_URL}/resource-1` && r.method === 'PUT');
       expect(req.request.body.name).toBe('Falcon Room (renamed)');
       expect(req.request.body.status).toBe(2); // ResourceStatus.Maintenance
+      expect(req.request.body.timeZoneId).toBe('UTC');
       req.flush(wireResource({ name: 'Falcon Room (renamed)', status: 2 }));
       fixture.detectChanges();
 
@@ -184,6 +234,7 @@ describe('ResourceFormComponent', () => {
     it('surfaces the backend\'s own message when submitting an edit to an already-archived resource', () => {
       httpTesting.expectOne((r) => r.url === `${RESOURCES_URL}/resource-1` && r.method === 'GET').flush(wireResource({ status: 3 })); // Archived
       fixture.detectChanges();
+      flushTimeZones();
       submitButton().click();
 
       httpTesting.expectOne((r) => r.url === `${RESOURCES_URL}/resource-1` && r.method === 'PUT').flush(
@@ -193,6 +244,17 @@ describe('ResourceFormComponent', () => {
       fixture.detectChanges();
 
       expect(root().textContent).toContain('is archived and cannot be modified');
+    });
+
+    it('displays a legacy stored time zone that is not in the supported list, with a warning, rather than clearing it', () => {
+      httpTesting.expectOne((r) => r.url === `${RESOURCES_URL}/resource-1` && r.method === 'GET').flush(
+        wireResource({ timeZoneId: 'Eastern Standard Time' }),
+      );
+      fixture.detectChanges();
+      flushTimeZones();
+
+      expect((root().querySelector('#time-zone') as HTMLInputElement).value).toBe('Eastern Standard Time');
+      expect(root().textContent).toContain("isn't in the current supported list");
     });
   });
 });
