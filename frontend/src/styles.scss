@@ -166,6 +166,16 @@ a {
   color: var(--color-primary);
 }
 
+// Browser-specific defense-in-depth alongside App.onInternalLinkDragStart (app.ts), which is the actual
+// behavioral fix for the native link-drag freeze - this CSS alone is not a complete cross-browser
+// contract (Chromium in particular can still start a native drag from a fast mousedown+move even with
+// -webkit-user-drag: none set, per the sequence that originally reproduced the sidebar freeze). Scoped to
+// root-relative hrefs only (how every internal routerLink anchor renders, see app.routes.ts), so it never
+// touches external/mailto/tel links.
+a[href^='/'] {
+  -webkit-user-drag: none;
+}
+
 :focus-visible {
   outline: 2px solid var(--color-focus-ring);
   outline-offset: 2px;

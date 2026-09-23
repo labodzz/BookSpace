@@ -88,8 +88,10 @@ describe('ShellComponent', () => {
   // (pointerdown/mousedown/dragstart/pointercancel, never reaching pointerup/mouseup/click) and leaves
   // the page stuck until reload. draggable="false" (plus the CSS -webkit-user-drag: none belt-and-
   // suspenders in shell.scss) is what prevents the browser from ever starting that drag in the first
-  // place. jsdom cannot reproduce the actual stuck-drag browser behavior itself - see the dedicated
-  // dragstart test below for what IS and isn't proven here.
+  // place, kept here as defense-in-depth alongside the centralized, app-root-level fix that now covers
+  // every internal link app-wide (App.onInternalLinkDragStart in app.ts - see app.spec.ts and
+  // internal-link-native-drag.spec.ts). jsdom cannot reproduce the actual stuck-drag browser behavior
+  // itself - see the dedicated dragstart test below for what IS and isn't proven here.
   describe('sidebar links are not draggable (fix for the native-drag freeze)', () => {
     it('marks every sidebar nav anchor draggable="false", for every visible role combination', () => {
       configure({ hasAnyRole: () => true }); // SysAdmin-equivalent - every conditional link renders
@@ -132,9 +134,12 @@ describe('ShellComponent', () => {
       const link = root().querySelector('a.shell-nav__link') as HTMLAnchorElement;
       expect(link.draggable).toBe(false);
 
-      // jsdom does not implement the DragEvent constructor - a plain Event of the same type is enough
-      // to prove nothing in this app throws on or specially handles a dragstart (there is deliberately
-      // no dragstart listener anywhere - see the "no global drag prevention" test below).
+      // jsdom does not implement the DragEvent constructor - a plain Event of the same type is enough to
+      // prove nothing in ShellComponent itself throws on or specially handles a dragstart. The centralized
+      // fix (App.onInternalLinkDragStart, app.ts) sits one level up at the application root, not here -
+      // see internal-link-native-drag.spec.ts for coverage of that handler actually preventing dragstart
+      // on this exact anchor, and the "does not add its own dragstart listener" test below for what this
+      // file itself still guarantees: ShellComponent has no local/duplicate listener of its own.
       expect(() => link.dispatchEvent(new Event('dragstart', { bubbles: true, cancelable: true }))).not.toThrow();
     });
 
@@ -190,7 +195,10 @@ describe('ShellComponent', () => {
       expect(link.getAttribute('href')).toBe('/resources');
     });
 
-    it('does not add any global document-level dragstart listener', () => {
+    // The centralized dragstart fix lives one level up, at the application root (App.onInternalLinkDragStart
+    // in app.ts, bound via @HostListener to <app-root> itself) - not here and not on `document`. This just
+    // guards against ShellComponent ever growing its own separate/duplicate listener on top of that.
+    it('does not add its own document-level dragstart listener', () => {
       const addEventListener = vi.spyOn(document, 'addEventListener');
       configure({ hasAnyRole: () => true });
       flushPendingApprovals();
