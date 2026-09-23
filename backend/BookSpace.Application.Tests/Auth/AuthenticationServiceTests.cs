@@ -2,6 +2,7 @@ using BookSpace.Application.Auth;
 using BookSpace.Application.Common;
 using BookSpace.Application.Security;
 using BookSpace.Domain.Entities;
+using BookSpace.Domain.Enums;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -13,6 +14,7 @@ public sealed class AuthenticationServiceTests
 {
     private readonly Mock<IUserRepository> _userRepository = new();
     private readonly Mock<IRefreshTokenRepository> _refreshTokenRepository = new();
+    private readonly Mock<IInvitationRepository> _invitationRepository = new();
     private readonly Mock<IPasswordHasher> _passwordHasher = new();
     private readonly Mock<IJwtTokenGenerator> _jwtTokenGenerator = new();
     private readonly AuthOptions _authOptions = new()
@@ -27,12 +29,13 @@ public sealed class AuthenticationServiceTests
     private AuthenticationService CreateSut() => new(
         _userRepository.Object,
         _refreshTokenRepository.Object,
+        _invitationRepository.Object,
         _passwordHasher.Object,
         _jwtTokenGenerator.Object,
         Options.Create(_authOptions),
         NullLogger<AuthenticationService>.Instance);
 
-    private static User CreateUser(Guid? id = null) => new()
+    private static User CreateUser(Guid? id = null, UserStatus status = UserStatus.Active) => new()
     {
         Id = id ?? Guid.NewGuid(),
         TenantId = Guid.NewGuid(),
@@ -40,7 +43,21 @@ public sealed class AuthenticationServiceTests
         LastName = "User",
         Email = "test.user@bookspace.test",
         PasswordHash = "stored-hash",
+        Status = status,
         CreatedAtUtc = DateTimeOffset.UtcNow,
+    };
+
+    private static Invitation CreateInvitation(Guid userId, DateTimeOffset? acceptedAtUtc = null, DateTimeOffset? revokedAtUtc = null, DateTimeOffset? expiresAtUtc = null) => new()
+    {
+        Id = Guid.NewGuid(),
+        TenantId = Guid.NewGuid(),
+        UserId = userId,
+        TokenHash = "irrelevant-in-these-tests-since-FindByTokenHashForAcceptanceAsync-is-mocked-directly",
+        CreatedByUserId = Guid.NewGuid(),
+        CreatedAtUtc = DateTimeOffset.UtcNow.AddHours(-1),
+        ExpiresAtUtc = expiresAtUtc ?? DateTimeOffset.UtcNow.AddHours(71),
+        AcceptedAtUtc = acceptedAtUtc,
+        RevokedAtUtc = revokedAtUtc,
     };
 
     [Fact]
@@ -80,6 +97,27 @@ public sealed class AuthenticationServiceTests
 
         Assert.False(result.Succeeded);
         Assert.Null(result.Tokens);
+        _passwordHasher.Verify(h => h.Verify(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        _refreshTokenRepository.Verify(r => r.AddAsync(It.IsAny<RefreshToken>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // Short-circuited via || before Verify is even called - proven here by asserting Verify is never
+    // invoked at all, not just by checking the outcome. Login never reveals account status to an
+    // outside prober: this is the identical generic failure a wrong password or unknown email produces.
+    [Theory]
+    [InlineData(UserStatus.Inactive)]
+    [InlineData(UserStatus.Invited)]
+    public async Task LoginAsync_ForANonActiveUser_ReturnsFailureWithoutEverCallingVerify(UserStatus status)
+    {
+        var user = CreateUser(status: status);
+        _userRepository.Setup(r => r.FindByEmailAsync(user.Email, It.IsAny<CancellationToken>())).ReturnsAsync(user);
+
+        var sut = CreateSut();
+        var result = await sut.LoginAsync(user.Email, "their-genuinely-correct-password", CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.Null(result.Tokens);
+        Assert.Equal("Auth.InvalidCredentials", result.ErrorCode);
         _passwordHasher.Verify(h => h.Verify(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
         _refreshTokenRepository.Verify(r => r.AddAsync(It.IsAny<RefreshToken>(), It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -425,5 +463,144 @@ public sealed class AuthenticationServiceTests
         Assert.False(result.Succeeded);
         Assert.False(result.ReuseDetected);
         Assert.Null(result.Tokens);
+    }
+
+    [Fact]
+    public async Task AcceptInvitationAsync_WithAValidToken_ActivatesTheUserAndAcceptsTheInvitation()
+    {
+        var user = CreateUser(status: UserStatus.Invited);
+        var invitation = CreateInvitation(user.Id);
+        _invitationRepository.Setup(r => r.FindByTokenHashForAcceptanceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(invitation);
+        _userRepository.Setup(r => r.FindByIdForAuthenticationAsync(user.Id, It.IsAny<CancellationToken>())).ReturnsAsync(user);
+        _passwordHasher.Setup(h => h.Hash("a-New-Passw0rd!")).Returns("new-hashed-password");
+
+        var sut = CreateSut();
+        var result = await sut.AcceptInvitationAsync("raw-token", "a-New-Passw0rd!", CancellationToken.None);
+
+        Assert.True(result.Succeeded);
+        Assert.Null(result.ErrorCode);
+        Assert.Equal(UserStatus.Active, user.Status);
+        Assert.Equal("new-hashed-password", user.PasswordHash);
+        Assert.NotNull(invitation.AcceptedAtUtc);
+        _invitationRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    // No access/refresh token is ever issued directly by acceptance - the caller logs in separately
+    // afterward via LoginAsync. RefreshTokenRepository must never be touched by this path at all.
+    [Fact]
+    public async Task AcceptInvitationAsync_WithAValidToken_NeverIssuesTokens()
+    {
+        var user = CreateUser(status: UserStatus.Invited);
+        var invitation = CreateInvitation(user.Id);
+        _invitationRepository.Setup(r => r.FindByTokenHashForAcceptanceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(invitation);
+        _userRepository.Setup(r => r.FindByIdForAuthenticationAsync(user.Id, It.IsAny<CancellationToken>())).ReturnsAsync(user);
+
+        var sut = CreateSut();
+        await sut.AcceptInvitationAsync("raw-token", "a-New-Passw0rd!", CancellationToken.None);
+
+        _refreshTokenRepository.Verify(r => r.AddAsync(It.IsAny<RefreshToken>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task AcceptInvitationAsync_WithAnUnknownToken_ReturnsGenericInvitationInvalidFailure()
+    {
+        _invitationRepository.Setup(r => r.FindByTokenHashForAcceptanceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Invitation?)null);
+
+        var sut = CreateSut();
+        var result = await sut.AcceptInvitationAsync("unknown-token", "a-New-Passw0rd!", CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("Invitation.Invalid", result.ErrorCode);
+    }
+
+    [Fact]
+    public async Task AcceptInvitationAsync_WithAnAlreadyAcceptedToken_ReturnsTheIdenticalGenericFailure()
+    {
+        var user = CreateUser(status: UserStatus.Active);
+        var invitation = CreateInvitation(user.Id, acceptedAtUtc: DateTimeOffset.UtcNow.AddMinutes(-5));
+        _invitationRepository.Setup(r => r.FindByTokenHashForAcceptanceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(invitation);
+
+        var sut = CreateSut();
+        var result = await sut.AcceptInvitationAsync("already-used-token", "a-New-Passw0rd!", CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("Invitation.Invalid", result.ErrorCode);
+        _invitationRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task AcceptInvitationAsync_WithARevokedToken_ReturnsTheIdenticalGenericFailure()
+    {
+        var user = CreateUser(status: UserStatus.Invited);
+        var invitation = CreateInvitation(user.Id, revokedAtUtc: DateTimeOffset.UtcNow.AddMinutes(-5));
+        _invitationRepository.Setup(r => r.FindByTokenHashForAcceptanceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(invitation);
+
+        var sut = CreateSut();
+        var result = await sut.AcceptInvitationAsync("revoked-token", "a-New-Passw0rd!", CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("Invitation.Invalid", result.ErrorCode);
+    }
+
+    [Fact]
+    public async Task AcceptInvitationAsync_WithAnExpiredToken_ReturnsTheIdenticalGenericFailure()
+    {
+        var user = CreateUser(status: UserStatus.Invited);
+        var invitation = CreateInvitation(user.Id, expiresAtUtc: DateTimeOffset.UtcNow.AddMinutes(-1));
+        _invitationRepository.Setup(r => r.FindByTokenHashForAcceptanceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(invitation);
+
+        var sut = CreateSut();
+        var result = await sut.AcceptInvitationAsync("expired-token", "a-New-Passw0rd!", CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("Invitation.Invalid", result.ErrorCode);
+    }
+
+    // The underlying User can independently drift away from Invited (e.g. an admin deactivated the
+    // pending account) without the Invitation row itself being touched - the acceptance must still fail
+    // cleanly rather than resurrecting an account state the admin action already moved away from.
+    [Fact]
+    public async Task AcceptInvitationAsync_WhenTheUnderlyingUserIsNoLongerInvited_ReturnsTheIdenticalGenericFailure()
+    {
+        var user = CreateUser(status: UserStatus.Inactive);
+        var invitation = CreateInvitation(user.Id);
+        _invitationRepository.Setup(r => r.FindByTokenHashForAcceptanceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(invitation);
+        _userRepository.Setup(r => r.FindByIdForAuthenticationAsync(user.Id, It.IsAny<CancellationToken>())).ReturnsAsync(user);
+
+        var sut = CreateSut();
+        var result = await sut.AcceptInvitationAsync("stale-invitation-token", "a-New-Passw0rd!", CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("Invitation.Invalid", result.ErrorCode);
+        _invitationRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // Mirrors RefreshAsync_WhenRotationLosesAConcurrencyRace_ReturnsFailureWithoutReuseDetection: a
+    // concurrent acceptance of the same token already won (Invitation.RowVersion mismatch, translated to
+    // ConflictException by SaveChangesHandlingConflictsAsync) - the loser must fail cleanly with the same
+    // generic outcome, never a distinct error that would tell them anything more than "didn't work".
+    [Fact]
+    public async Task AcceptInvitationAsync_WhenAcceptanceLosesAConcurrencyRace_ReturnsTheIdenticalGenericFailure()
+    {
+        var user = CreateUser(status: UserStatus.Invited);
+        var invitation = CreateInvitation(user.Id);
+        _invitationRepository.Setup(r => r.FindByTokenHashForAcceptanceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(invitation);
+        _userRepository.Setup(r => r.FindByIdForAuthenticationAsync(user.Id, It.IsAny<CancellationToken>())).ReturnsAsync(user);
+        _invitationRepository.Setup(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new ConflictException("The record was modified by another request. Reload and try again."));
+
+        var sut = CreateSut();
+        var result = await sut.AcceptInvitationAsync("raced-token", "a-New-Passw0rd!", CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("Invitation.Invalid", result.ErrorCode);
     }
 }

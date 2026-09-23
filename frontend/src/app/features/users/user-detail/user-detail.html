@@ -1,0 +1,221 @@
+<div class="user-detail-page">
+@if (loading()) {
+  <div class="card user-detail user-detail--skeleton" aria-busy="true">
+    <span class="skeleton" style="height: 1.5rem; width: 45%;"></span>
+    <span class="skeleton" style="height: 1rem; width: 30%;"></span>
+    <span class="skeleton" style="height: 6rem; width: 100%;"></span>
+  </div>
+} @else if (notFound()) {
+  <div class="state-panel card">
+    <p class="state-panel__title">This user doesn't exist</p>
+    <p>They may have been removed, or the link isn't correct.</p>
+    <a class="btn btn-primary" routerLink="/users" [queryParams]="backQueryParams">Back to users</a>
+  </div>
+} @else if (error()) {
+  <div class="state-panel card">
+    <p class="state-panel__title">Couldn't load this user</p>
+    <p>{{ error()!.detail ?? error()!.title }}</p>
+    <button type="button" class="btn btn-secondary" (click)="retry()">Try again</button>
+  </div>
+} @else if (user(); as u) {
+  <a class="user-detail__back" routerLink="/users" [queryParams]="backQueryParams">&larr; Back to users</a>
+
+  <header class="card user-detail__section user-detail__header">
+    <div>
+      <h1>
+        {{ u.firstName }} {{ u.lastName }}
+        @if (isSelf()) {
+          <span class="user-detail__you">(You)</span>
+        }
+      </h1>
+      <p class="field-hint">{{ u.email }}</p>
+      <p class="field-hint">User ID: {{ u.id }}</p>
+      <p class="field-hint">Created {{ u.createdAtUtc | date: 'medium' }}</p>
+    </div>
+    <span
+      class="status-pill"
+      [class.status-pill--confirmed]="u.status === 'Active'"
+      [class.status-pill--pending]="u.status === 'Invited'"
+      [class.status-pill--cancelled]="u.status === 'Inactive'"
+    >
+      {{ u.status }}
+    </span>
+  </header>
+
+  @if (u.status === 'Invited') {
+    <p class="banner banner-info" role="status">
+      This user has been invited but hasn't accepted their invitation yet. Invitation delivery will be handled by the onboarding
+      email workflow, which isn't available in this app yet - no invitation link or token is shown here.
+      @if (u.pendingInvitationExpiresAtUtc) {
+        Their pending invitation expires {{ u.pendingInvitationExpiresAtUtc | date: 'medium' }}.
+      }
+    </p>
+  }
+
+  <section class="card user-detail__section">
+    <h2>Profile</h2>
+    <form (ngSubmit)="submitEdit()" novalidate>
+      @if (formError()) {
+        <p class="banner banner-error" role="alert">{{ formError() }}</p>
+      }
+
+      <div class="field">
+        <label for="first-name">First name</label>
+        <input id="first-name" type="text" [value]="firstName()" (input)="firstName.set($any($event.target).value)" maxlength="100" required />
+        @if (firstNameFieldErrors().length) {
+          <span class="field-error-text">{{ firstNameFieldErrors().join(' ') }}</span>
+        }
+      </div>
+
+      <div class="field">
+        <label for="last-name">Last name</label>
+        <input id="last-name" type="text" [value]="lastName()" (input)="lastName.set($any($event.target).value)" maxlength="100" required />
+        @if (lastNameFieldErrors().length) {
+          <span class="field-error-text">{{ lastNameFieldErrors().join(' ') }}</span>
+        }
+      </div>
+
+      <div class="user-detail__actions">
+        <button type="submit" class="btn btn-primary" [disabled]="submitting()">{{ submitting() ? 'Saving…' : 'Save changes' }}</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="card user-detail__section">
+    <h2>Global roles</h2>
+    <p class="field-hint">
+      Roles apply once this user's session next refreshes or they log in again - an already-issued session may keep its old
+      roles for up to 15 minutes.
+    </p>
+
+    @if (assignRoleError()) {
+      <p class="banner banner-error" role="alert">{{ assignRoleError() }}</p>
+    }
+
+    @if (u.roles.length === 0) {
+      <p class="field-hint">This user holds no global roles.</p>
+    } @else {
+      <ul class="user-detail__role-list">
+        @for (role of u.roles; track role) {
+          <li class="role-row">
+            <span class="role-chip">{{ role }}</span>
+            @if (delegableRoles.includes(role)) {
+              <button
+                type="button"
+                class="btn btn-secondary"
+                [disabled]="!canRemoveOwnRole(role)"
+                [title]="!canRemoveOwnRole(role) ? 'You cannot remove your own administrative role.' : ''"
+                (click)="askRemoveRole(role)"
+              >
+                Remove
+              </button>
+            }
+          </li>
+        }
+      </ul>
+    }
+
+    @if (assignableRoles().length > 0) {
+      <div class="user-detail__assign-roles">
+        <span class="field-hint">Add a role:</span>
+        @for (role of assignableRoles(); track role) {
+          <button type="button" class="btn btn-secondary" [disabled]="assigningRole() === role" (click)="assignRole(role)">
+            {{ assigningRole() === role ? 'Adding…' : ('+ ' + role) }}
+          </button>
+        }
+      </div>
+      @if (assignableRoles().includes('Approver')) {
+        <p class="field-hint">
+          Assigning Approver makes this user eligible to approve bookings, but they must still be assigned to individual
+          resources before they can act on any approval - see each resource's "Manage approvers" page.
+        </p>
+      }
+    }
+  </section>
+
+  <section class="card user-detail__section">
+    <h2>Account lifecycle</h2>
+
+    @if (u.status !== 'Inactive') {
+      <p class="field-hint">Deactivating this user prevents them from logging in. This is not a permanent deletion.</p>
+      @if (deactivateError() && !deactivateDialogOpen()) {
+        <p class="banner banner-error" role="alert">{{ deactivateError() }}</p>
+      }
+      <button
+        type="button"
+        class="btn btn-secondary"
+        [disabled]="isSelf()"
+        [title]="isSelf() ? 'You cannot deactivate your own account.' : ''"
+        (click)="openDeactivateDialog()"
+      >
+        Deactivate user
+      </button>
+      @if (isSelf()) {
+        <p class="field-hint">You cannot deactivate your own account.</p>
+      }
+    } @else {
+      <p class="field-hint">
+        Reactivating this user lets them log in again. They will need to sign in again - reactivation does not restore their
+        previous session, and their roles remain as shown above.
+      </p>
+      @if (reactivateError()) {
+        <p class="banner banner-error" role="alert">{{ reactivateError() }}</p>
+      }
+      <button type="button" class="btn btn-primary" [disabled]="reactivating()" (click)="reactivate()">
+        {{ reactivating() ? 'Reactivating…' : 'Reactivate user' }}
+      </button>
+    }
+  </section>
+
+  @if (deactivateDialogOpen()) {
+    <div class="dialog-backdrop" (click)="closeDeactivateDialog()">
+      <div class="card dialog" role="dialog" aria-modal="true" aria-labelledby="deactivate-dialog-title" (click)="$event.stopPropagation()">
+        <h2 id="deactivate-dialog-title">Deactivate {{ u.firstName }} {{ u.lastName }}?</h2>
+        <p class="dialog__summary">
+          They will no longer be able to log in. Their existing refresh-token sessions are revoked, though any access token
+          already issued to them may remain valid for up to 15 minutes. Their bookings and history are preserved, and any
+          resource-approver assignments they hold are not automatically removed. This is not a permanent deletion - they can
+          be reactivated later.
+        </p>
+
+        @if (deactivateError()) {
+          <p class="banner banner-error" role="alert">{{ deactivateError() }}</p>
+        }
+
+        <div class="dialog__actions">
+          <button type="button" class="btn btn-secondary" [disabled]="deactivating()" (click)="closeDeactivateDialog()">Cancel</button>
+          <button type="button" class="btn btn-primary" [disabled]="deactivating()" (click)="confirmDeactivate()">
+            {{ deactivating() ? 'Deactivating…' : 'Deactivate user' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  }
+
+  @if (removeRoleConfirmation(); as role) {
+    <div class="dialog-backdrop" (click)="cancelRemoveRole()">
+      <div class="card dialog" role="dialog" aria-modal="true" aria-labelledby="remove-role-dialog-title" (click)="$event.stopPropagation()">
+        <h2 id="remove-role-dialog-title">Remove the {{ role }} role from {{ u.firstName }} {{ u.lastName }}?</h2>
+        <p class="dialog__summary">
+          @if (role === 'Approver') {
+            They will lose global approval eligibility. This applies once their session next refreshes or they log in again.
+          } @else {
+            They will lose the {{ role }} role. This applies once their session next refreshes or they log in again.
+          }
+        </p>
+
+        @if (removeRoleError()) {
+          <p class="banner banner-error" role="alert">{{ removeRoleError() }}</p>
+        }
+
+        <div class="dialog__actions">
+          <button type="button" class="btn btn-secondary" [disabled]="removingRole()" (click)="cancelRemoveRole()">Keep role</button>
+          <button type="button" class="btn btn-primary" [disabled]="removingRole()" (click)="confirmRemoveRole()">
+            {{ removingRole() ? 'Removing…' : 'Remove role' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  }
+}
+</div>

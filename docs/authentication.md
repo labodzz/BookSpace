@@ -1,5 +1,30 @@
 # Authentication and Refresh Token Security
 
+## Invitation acceptance (`POST /auth/accept-invitation`)
+
+A fourth pre-tenant-context flow alongside login/refresh/logout, added by the user-administration batch
+(full lifecycle writeup in [user-administration.md](user-administration.md) §4) but documented here for
+its security-model overlap with the rest of this file:
+
+- The presented invitation token is a 512-bit random value (`SecureTokenGenerator`, the exact same
+  generate-and-hash algorithm refresh tokens use - see "Token model" above). Only its SHA-256 hash is
+  ever looked up or persisted; the raw value is returned to the inviting admin exactly once, at
+  invitation-creation time, and never logged anywhere in this flow.
+- Every reason a token doesn't work - unknown, already accepted, revoked, expired, or the underlying
+  `User` somehow no longer `Invited` - collapses into the identical generic failure (`Invitation.Invalid`,
+  `401`), the same "don't leak account state" philosophy login/refresh already apply to their own
+  failures.
+- Single-use is enforced by `Invitation.RowVersion` (a real SQL Server `rowversion` column, the same
+  mechanism `RefreshToken.RowVersion` uses for rotation races - see "RowVersion concurrency mechanism"
+  above): a losing concurrent acceptance of the same token gets `ConflictException` from
+  `SaveChangesHandlingConflictsAsync`, mapped to the identical generic failure rather than a distinct
+  error.
+- Acceptance sets the password hash and flips `User.Status` to `Active` in the same `SaveChangesAsync`
+  call that marks the invitation accepted - one atomic write, not two.
+- Deliberately issues **no** access/refresh token - the newly-activated user logs in separately afterward
+  via the ordinary `POST /auth/login`. Accepting an invitation is proof you set a password, not proof of
+  an authenticated session.
+
 ## Token model
 
 - **Access token**: a short-lived, stateless JWT (`AccessTokenMinutes`, currently 15). Carries the
@@ -154,6 +179,28 @@ captured once before the request was even sent, is immune to that. `logout()` ha
 always clears unconditionally, because an explicit logout (and a "logged out" broadcast received from
 another tab) means the whole family was just revoked server-side - there is no "newer session" left to
 protect at that point.
+
+## Login rejects any non-Active user
+
+`AuthenticationService.LoginAsync` checks `user.Status != UserStatus.Active`, short-circuited via `||`
+**before** `IPasswordHasher.Verify` is even called - a deactivated (`Inactive`) or still-pending
+(`Invited`, never yet given a real password) user presenting their genuinely-correct old/eventual
+password still fails, without spending a PBKDF2 verification on a login that can never succeed anyway.
+The failure is the exact same generic `Auth.InvalidCredentials` result an unknown email or a wrong
+password produces - login never reveals account status to an outside prober. See
+[user-administration.md](user-administration.md) §1 for the full `UserStatus` lifecycle this check
+enforces.
+
+## Bounded `/auth/refresh` call
+
+`AuthService.refreshAccessToken()` (frontend) wraps the actual `POST /auth/refresh` HTTP call in
+`timeout(REFRESH_TIMEOUT_MS)` (15 seconds). This matters specifically because that call runs inside
+`navigator.locks.request('bookspace-auth-refresh', ...)` and is shared app-wide through a single
+`refreshInFlight$` observable (see "Cross-tab refresh coordination" below) - a request that never settles
+would otherwise hold the cross-tab lock forever, leaving every other component/tab that also needs a
+token refresh waiting on that same never-resolving observable with no error to ever react to. A timeout
+is treated identically to a network error or a 5xx: it says nothing about whether the backend actually
+rejected the session, so it never triggers `clearExpiredSession()` - only a confirmed `401` does that.
 
 ## Deferred session-management decisions
 

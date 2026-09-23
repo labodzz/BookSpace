@@ -1,4 +1,5 @@
 using BookSpace.Domain.Entities;
+using BookSpace.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 
 namespace BookSpace.Infrastructure.Persistence;
@@ -48,10 +49,40 @@ internal static class BookSpaceModelConfiguration
             entity.Property(user => user.LastName).HasMaxLength(100).IsRequired();
             entity.Property(user => user.Email).HasMaxLength(320).IsRequired();
             entity.Property(user => user.PasswordHash).HasMaxLength(200).IsRequired();
+            // HasDefaultValue, not just a column default in the migration alone - EF must know about
+            // it too, since User.Status's CLR default (UserStatus.Active, the enum's zero member) is
+            // exactly what tells EF "this property was left at its default, apply the DB DEFAULT
+            // constraint" for every existing object-initializer call site that never sets Status
+            // explicitly. See User.cs's own comment for why Active had to be the zero member.
+            entity.Property(user => user.Status).HasConversion<string>().HasMaxLength(20).HasDefaultValue(UserStatus.Active);
             // Global, not per-tenant: login looks a user up by email alone, before any tenant is
             // known, so two tenants sharing an email would make that lookup ambiguous.
             entity.HasIndex(user => user.Email).IsUnique();
             entity.HasOne<Tenant>().WithMany().HasForeignKey(user => user.TenantId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<Invitation>(entity =>
+        {
+            entity.ToTable("Invitations");
+            entity.HasKey(invitation => invitation.Id);
+            entity.Property(invitation => invitation.TokenHash).HasMaxLength(200).IsRequired();
+            entity.HasIndex(invitation => invitation.TokenHash).IsUnique();
+            entity.HasIndex(invitation => invitation.TenantId);
+            entity.HasIndex(invitation => invitation.CreatedByUserId);
+            // At most one ACTIVE (not yet accepted, not yet revoked) invitation per user - a reissue
+            // must revoke the previous one first (see InviteUserCommandHandler), never leave two
+            // active rows racing. Accepted/revoked rows are excluded from the filter, so history
+            // accumulates freely across repeated invite/reissue cycles for the same user.
+            entity.HasIndex(invitation => invitation.UserId)
+                .IsUnique()
+                .HasFilter("[AcceptedAtUtc] IS NULL AND [RevokedAtUtc] IS NULL");
+            entity.HasOne<Tenant>().WithMany().HasForeignKey(invitation => invitation.TenantId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<User>().WithMany().HasForeignKey(invitation => invitation.UserId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<User>().WithMany().HasForeignKey(invitation => invitation.CreatedByUserId).OnDelete(DeleteBehavior.Restrict);
+            if (useRowVersionColumns)
+            {
+                entity.Property(invitation => invitation.RowVersion).IsRowVersion();
+            }
         });
 
         builder.Entity<RefreshToken>(entity =>

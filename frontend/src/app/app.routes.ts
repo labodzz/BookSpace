@@ -53,6 +53,11 @@ export const routes: Routes = [
         loadComponent: () => import('./features/users/user-list/user-list').then((m) => m.UserListComponent),
       },
       {
+        path: 'users/:id',
+        canActivate: [roleGuard('TenantAdmin', 'SysAdmin')],
+        loadComponent: () => import('./features/users/user-detail/user-detail').then((m) => m.UserDetailComponent),
+      },
+      {
         path: 'bookings',
         loadComponent: () => import('./features/bookings/my-bookings/my-bookings').then((m) => m.MyBookingsComponent),
       },
