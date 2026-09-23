@@ -70,6 +70,14 @@
   text-align: left;
   cursor: pointer;
   transition: background-color 0.15s ease, color 0.15s ease;
+  // Belt-and-suspenders alongside the draggable="false" attribute in shell.html (see that file's own
+  // comment) - Chromium in particular can still start a native link-drag from a fast mousedown+move
+  // even with draggable="false" set, per the confirmed pointerdown/mousedown/dragstart/pointercancel
+  // sequence that reproduced the sidebar freeze. -webkit-user-drag: none is the CSS-level equivalent of
+  // the attribute; user-select: none only stops text-drag-selection (irrelevant to focus/keyboard/link
+  // semantics) and is scoped to these nav labels only, not applied anywhere else in the app.
+  -webkit-user-drag: none;
+  user-select: none;
 }
 
 .shell-nav__link:hover:not(:disabled) {
