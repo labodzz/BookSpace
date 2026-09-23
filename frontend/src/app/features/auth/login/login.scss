@@ -3,12 +3,32 @@
   min-height: 100dvh;
 }
 
-.login-card {
+// Hoisted from .login-card so the theme toggle - a sibling of the card, not a descendant - can inherit
+// the same on-brand text/accent colors for its own on-dark styling below.
+.auth-page {
   --login-card-text: #f8eef1;
   --login-card-text-secondary: #e3bcc9;
   --login-card-accent: #f0a9be;
   --login-card-cta-text: #4a1528;
+}
 
+// Fixed to the viewport rather than laid out next to the card, so it never affects the card's own
+// centered layout at any width.
+.auth-page__theme-toggle {
+  position: fixed;
+  top: var(--space-4);
+  right: var(--space-4);
+  z-index: 10;
+
+  // The auth page's dark gradient backdrop never changes with the app theme (see styles.scss's
+  // .auth-page comment) - same on-dark treatment login-card already gives its own :focus-visible.
+  --theme-toggle-border: rgb(255 255 255 / 25%);
+  --theme-toggle-text: var(--login-card-text);
+  --theme-toggle-hover-bg: rgb(255 255 255 / 10%);
+  --theme-toggle-focus-ring: var(--login-card-text);
+}
+
+.login-card {
   width: 100%;
   max-width: 380px;
   min-width: 0;

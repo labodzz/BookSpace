@@ -1,39 +1,63 @@
+// Viewport-bound: :host itself never grows taller than the viewport, so an authenticated page with a
+// lot of content can never push <body>/<html> taller and make the WHOLE document scroll. Everything
+// inside that needs to grow past one viewport (the nav list, the routed page) gets its own internal
+// overflow region below instead - the fallback vh line matters on browsers without dvh support, where
+// the invalid second declaration is simply ignored and this first one stands.
 :host {
   display: block;
-  min-height: 100dvh;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
 }
 
 .shell {
-  min-height: 100dvh;
+  height: 100vh;
+  height: 100dvh;
   display: flex;
 }
 
 .shell-sidebar {
   --sidebar-text: #f3dde5;
   --sidebar-text-muted: #d9a9bb;
-  --sidebar-active-bg: rgb(255 255 255 / 12%);
 
   width: 240px;
-  flex-shrink: 0;
+  flex: 0 0 240px;
+  height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   gap: var(--space-6);
   padding: var(--space-5) var(--space-4);
-  background: linear-gradient(180deg, #6e1c39 0%, #55172d 55%, #45132a 100%);
+  background: var(--color-sidebar-background);
   color: var(--sidebar-text);
+  overflow: hidden;
+}
+
+// The sidebar is a dark surface in both themes (a burgundy gradient in light mode, near-black in dark
+// mode) - the app-wide focus ring color is tuned for light surfaces, so every focusable control in here
+// (nav links, Log out, the theme toggle already handles its own case) needs the same on-dark override
+// login-card already established for itself.
+.shell-sidebar :focus-visible {
+  outline-color: var(--sidebar-text);
 }
 
 .shell-sidebar__brand {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-2);
   color: #ffffff;
+  text-decoration: none;
+  // Same native-link-drag belt-and-suspenders as .shell-nav__link above - the brand is a real anchor too.
+  -webkit-user-drag: none;
+  user-select: none;
 }
 
 .shell-sidebar__logo {
   width: 26px;
   height: 26px;
+  flex-shrink: 0;
 }
 
 .shell-sidebar__wordmark {
@@ -46,11 +70,16 @@
   color: #f0a9be;
 }
 
+// The middle region - the only part of the sidebar that ever scrolls, so a long nav list never pushes
+// the logo or the footer (theme toggle, Logout) out of view.
 .shell-nav {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  flex: 1;
 }
 
 .shell-nav__link {
@@ -60,41 +89,45 @@
   justify-content: space-between;
   gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
+  border-left: 3px solid transparent;
   border-radius: var(--radius-md);
-  border: none;
   background: transparent;
-  color: var(--sidebar-text);
+  // Muted by default so the active/hovered item reads as clearly more prominent, rather than every
+  // link competing at the same brightness.
+  color: var(--sidebar-text-muted);
   text-decoration: none;
   font-size: 0.9375rem;
   font-weight: 500;
   text-align: left;
   cursor: pointer;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
   // Belt-and-suspenders alongside the draggable="false" attribute in shell.html (see that file's own
   // comment) - Chromium in particular can still start a native link-drag from a fast mousedown+move
   // even with draggable="false" set, per the confirmed pointerdown/mousedown/dragstart/pointercancel
   // sequence that reproduced the sidebar freeze. -webkit-user-drag: none is the CSS-level equivalent of
   // the attribute; user-select: none only stops text-drag-selection (irrelevant to focus/keyboard/link
-  // semantics) and is scoped to these nav labels only, not applied anywhere else in the app.
+  // semantics) and, along with .shell-sidebar__brand's own copy of this rule below, is scoped to the
+  // sidebar's own links only, not applied anywhere else in the app.
   -webkit-user-drag: none;
   user-select: none;
 }
 
 .shell-nav__link:hover:not(:disabled) {
   background: rgb(255 255 255 / 8%);
-  color: #ffffff;
+  color: var(--sidebar-text);
 }
 
 .shell-nav__link--active {
-  background: var(--sidebar-active-bg);
-  color: #ffffff;
+  background: var(--color-sidebar-active);
+  border-left-color: var(--color-primary);
+  color: var(--sidebar-text);
   font-weight: 600;
 }
 
 .shell-nav__link--disabled {
   color: var(--sidebar-text-muted);
   cursor: not-allowed;
-  opacity: 0.7;
+  opacity: 0.6;
 }
 
 .shell-nav__badge {
@@ -111,7 +144,9 @@
   font-weight: 700;
 }
 
+// Never scrolls with the nav list above it - always visible, always the last thing in the sidebar.
 .shell-sidebar__footer {
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -140,8 +175,24 @@
   white-space: nowrap;
 }
 
+// Sits between the user info and Log out - styled like a nav row (no border/pill shape) so it fits
+// the sidebar's own language instead of reading as an unrelated floating control, and spans the full
+// footer width so it lines up with Logout below it.
+.shell-sidebar__theme-toggle {
+  display: block;
+  width: 100%;
+
+  --theme-toggle-width: 100%;
+  --theme-toggle-border: transparent;
+  --theme-toggle-bg: rgb(255 255 255 / 6%);
+  --theme-toggle-text: var(--sidebar-text-muted);
+  --theme-toggle-hover-bg: rgb(255 255 255 / 10%);
+  --theme-toggle-focus-ring: var(--sidebar-text);
+}
+
 .shell-sidebar__logout {
   appearance: none;
+  width: 100%;
   padding: var(--space-2) var(--space-4);
   border-radius: var(--radius-md);
   border: 1px solid rgb(255 255 255 / 25%);
@@ -158,19 +209,39 @@
   border-color: rgb(255 255 255 / 45%);
 }
 
+// The one scrolling region for every authenticated page's own content - independent of the sidebar, so
+// scrolling a long list never moves the logo, nav, theme toggle, or Logout.
 .shell-content {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
+  height: 100vh;
+  height: 100dvh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
   padding: var(--space-6) var(--space-7);
 }
 
 @media (max-width: 900px) {
+  // Below this width the sidebar reflows into a horizontal bar above the content (see .shell-sidebar
+  // etc. below) and the page returns to normal document scrolling - the desktop/tablet fixed-height,
+  // independently-scrolling layout above is deliberately only for widths where a full-height side rail
+  // makes sense.
+  :host {
+    height: auto;
+    overflow: visible;
+  }
+
   .shell {
+    height: auto;
     flex-direction: column;
   }
 
   .shell-sidebar {
     width: auto;
+    flex: none;
+    height: auto;
+    overflow: visible;
     flex-direction: row;
     align-items: center;
     flex-wrap: wrap;
@@ -178,9 +249,11 @@
   }
 
   .shell-nav {
+    flex: none;
+    min-height: 0;
+    overflow: visible;
     flex-direction: row;
     flex-wrap: wrap;
-    flex: none;
   }
 
   .shell-sidebar__footer {
@@ -191,7 +264,18 @@
     margin-left: auto;
   }
 
+  .shell-sidebar__theme-toggle {
+    width: auto;
+    --theme-toggle-width: auto;
+  }
+
+  .shell-sidebar__logout {
+    width: auto;
+  }
+
   .shell-content {
+    height: auto;
+    overflow: visible;
     padding: var(--space-5);
   }
 }

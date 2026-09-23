@@ -202,8 +202,14 @@ function ancestorConcerns(ancestors: AncestorStyleSnapshot[]): string[] {
     // Empty string is jsdom's getComputedStyle() answer for "no rule set this property" (real browsers
     // resolve it to the CSS-spec initial value instead, 'visible'/'none' respectively) - treated as safe
     // here explicitly, rather than via an exclusion list, so an unrecognized-but-harmless value from any
-    // environment doesn't produce a false "concern".
-    const SAFE_OVERFLOW = new Set(['visible', 'auto', 'unset', '']);
+    // environment doesn't produce a false "concern". 'hidden' is also safe: unlike pointer-events/
+    // visibility/display above, whether an ancestor's overflow: hidden actually clips a descendant is a
+    // pure layout-geometry question (is the descendant positioned within the ancestor's visible bounds?)
+    // that this static CSS-declaration check cannot answer - see the getBoundingClientRect() disclaimer
+    // on the caller below. The sidebar's own fixed-height, independently-scrolling layout (.shell-sidebar/
+    // :host) relies on overflow: hidden precisely so the nav links stay fully visible and scrollable
+    // within it, never to hide them.
+    const SAFE_OVERFLOW = new Set(['visible', 'auto', 'unset', 'hidden', '']);
     if (!SAFE_OVERFLOW.has(ancestor.overflow)) {
       concerns.push(`${label}: overflow: ${ancestor.overflow}`);
     }

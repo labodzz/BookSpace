@@ -1,13 +1,13 @@
 <div class="shell">
   <aside class="shell-sidebar">
-    <div class="shell-sidebar__brand">
+    <a routerLink="/" class="shell-sidebar__brand" aria-label="BookSpace - go to dashboard" draggable="false">
       <svg class="shell-sidebar__logo" viewBox="0 0 40 40" aria-hidden="true">
         <path d="M20 4 34 11 20 18 6 11Z" fill="currentColor" opacity="1" />
         <path d="M20 18 34 11V29L20 36Z" fill="currentColor" opacity=".7" />
         <path d="M20 18 6 11V29L20 36Z" fill="currentColor" opacity=".5" />
       </svg>
       <span class="shell-sidebar__wordmark">Book<span class="shell-sidebar__wordmark-accent">Space</span></span>
-    </div>
+    </a>
 
     <nav class="shell-nav">
       <a
@@ -39,15 +39,18 @@
       </button>
     </nav>
 
-    @if (authService.currentUser(); as user) {
-      <div class="shell-sidebar__footer">
+    <div class="shell-sidebar__footer">
+      @if (authService.currentUser(); as user) {
         <div class="shell-sidebar__user">
           <span class="shell-sidebar__user-name">{{ authService.displayName() }}</span>
           <span class="shell-sidebar__user-email">{{ user.email }}</span>
         </div>
+        <app-theme-toggle class="shell-sidebar__theme-toggle" />
         <button type="button" class="shell-sidebar__logout" (click)="logout()">Log out</button>
-      </div>
-    }
+      } @else {
+        <app-theme-toggle class="shell-sidebar__theme-toggle" />
+      }
+    </div>
   </aside>
 
   <main class="shell-content">

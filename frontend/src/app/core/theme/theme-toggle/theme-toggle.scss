@@ -1,0 +1,48 @@
+// Every color here has a fallback to the app-wide semantic tokens, but is also overridable by any
+// ancestor through these custom properties (see shell.scss/login.scss/welcome.scss) - the toggle
+// always sits on a permanently-dark, on-brand surface (the shell sidebar, the auth-page gradient)
+// rather than the page's own light/dark background, so those hosts override the fallbacks instead of
+// this component guessing at a host it doesn't know about.
+.theme-toggle {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: var(--theme-toggle-justify, flex-start);
+  gap: var(--space-2);
+  width: var(--theme-toggle-width, auto);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--theme-toggle-border, var(--color-border));
+  background: var(--theme-toggle-bg, transparent);
+  color: var(--theme-toggle-text, var(--color-text));
+  font: inherit;
+  font-weight: 600;
+  font-size: 0.8125rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.theme-toggle:hover {
+  background: var(--theme-toggle-hover-bg, var(--color-surface-alt));
+}
+
+// Overrides the global :focus-visible outline color only when a host surface says its default
+// (--color-focus-ring) would not be visible against it - see login-card's own :focus-visible override
+// in login.scss for the established precedent this follows.
+.theme-toggle:focus-visible {
+  outline-color: var(--theme-toggle-focus-ring, var(--color-focus-ring));
+}
+
+.theme-toggle__icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+// Fixed to fit the wider of "Light"/"Dark" so toggling never shifts this button's own width or
+// whatever sits next to it.
+.theme-toggle__label {
+  min-width: 2.75em;
+  text-align: left;
+}
