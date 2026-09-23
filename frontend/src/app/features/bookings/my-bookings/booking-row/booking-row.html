@@ -1,0 +1,30 @@
+<div class="booking-row">
+  <div class="booking-row__main">
+    @if (!compact()) {
+      <div class="booking-row__title">
+        <span>{{ resourceName() }}</span>
+        @if (booking().seriesId) {
+          <span class="booking-row__recurring" title="Part of a recurring series">&#8635; recurring</span>
+        }
+      </div>
+    }
+    <p class="booking-row__time">{{ formatRange(booking().startUtc, booking().endUtc) }}</p>
+    @if (booking().quantity > 1) {
+      <p class="booking-row__quantity">Quantity {{ booking().quantity }}</p>
+    }
+    @if (booking().status === 'Cancelled' && booking().cancelledAtUtc) {
+      <p class="booking-row__cancellation">
+        Cancelled{{ booking().cancelledByAdmin ? ' by an administrator' : '' }}
+        @if (booking().cancellationReason) {
+          — {{ booking().cancellationReason }}
+        }
+      </p>
+    }
+  </div>
+  <div class="booking-row__end">
+    <span [class]="statusPillClass(booking().status)">{{ statusLabel(booking().status) }}</span>
+    @if (canCancel()) {
+      <button type="button" class="btn btn-secondary" (click)="requestCancel()">Cancel</button>
+    }
+  </div>
+</div>

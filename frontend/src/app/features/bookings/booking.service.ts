@@ -36,6 +36,12 @@ const MAX_PAGE_SIZE = 100;
 // the UI can say so, rather than the range silently rendering as if it were complete.
 const MAX_RANGE_PAGES = 50;
 
+// The most pages getBookingsForSeries will ever follow. A series can never have more than 750
+// occurrences (CreateRecurringSeriesCommandRequestValidator's cap, mirrored by MAX_OCCURRENCES in
+// RecurringBookingFormComponent) - 8 pages of MAX_PAGE_SIZE covers 800, comfortably above that ceiling,
+// so in practice this bound is never actually why a series' occurrence list comes back incomplete.
+const MAX_SERIES_PAGES = 8;
+
 @Injectable({ providedIn: 'root' })
 export class BookingService {
   private readonly http = inject(HttpClient);
@@ -77,6 +83,32 @@ export class BookingService {
     fromUtc: string, toUtc: string, page: number,
   ): Observable<{ items: OwnBooking[]; page: number; totalCount: number }> {
     const params = new HttpParams().set('page', page).set('pageSize', MAX_PAGE_SIZE).set('fromUtc', fromUtc).set('toUtc', toUtc);
+
+    return this.http
+      .get<PagedResult<OwnBookingWire>>(`${environment.apiUrl}/bookings`, { params })
+      .pipe(map((result) => ({ items: result.items.map(mapOwnBooking), page, totalCount: result.totalCount })));
+  }
+
+  // Every occurrence belonging to one recurring series, in a single call site - used by My Bookings to
+  // expand a collapsed series group to its full occurrence list regardless of which page(s) of the plain
+  // getOwnBookings listing its individual occurrences happen to fall on. Same follow-all-pages shape as
+  // getOwnBookingsInRange, bounded by MAX_SERIES_PAGES instead of MAX_RANGE_PAGES.
+  getBookingsForSeries(seriesId: string): Observable<OwnBooking[]> {
+    return this.fetchSeriesPage(seriesId, 1).pipe(
+      expand((state) => (state.page < MAX_SERIES_PAGES && state.page * MAX_PAGE_SIZE < state.totalCount
+        ? this.fetchSeriesPage(seriesId, state.page + 1)
+        : EMPTY)),
+      reduce<{ items: OwnBooking[]; page: number; totalCount: number }, OwnBooking[]>(
+        (acc, state) => [...acc, ...state.items],
+        [],
+      ),
+    );
+  }
+
+  private fetchSeriesPage(
+    seriesId: string, page: number,
+  ): Observable<{ items: OwnBooking[]; page: number; totalCount: number }> {
+    const params = new HttpParams().set('page', page).set('pageSize', MAX_PAGE_SIZE).set('seriesId', seriesId);
 
     return this.http
       .get<PagedResult<OwnBookingWire>>(`${environment.apiUrl}/bookings`, { params })
