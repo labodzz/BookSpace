@@ -95,6 +95,19 @@ public sealed class CreateRecurringSeriesCommandHandlerTests
     }
 
     [Fact]
+    public async Task Handle_IncludesTheResourcesOwnTimeZoneIdInTheResponse()
+    {
+        var resource = CreateResource();
+        resource.TimeZoneId = "Europe/Sarajevo";
+        SetupResource(resource);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(CreateRequest(resource.Id, occurrenceCount: 3), CancellationToken.None);
+
+        Assert.Equal("Europe/Sarajevo", result.TimeZoneId);
+    }
+
+    [Fact]
     public async Task Handle_WithOneOccurrenceOverlappingABlackout_ReportsExactlyThatConflictAndStillCreatesTheRest()
     {
         var resource = CreateResource();

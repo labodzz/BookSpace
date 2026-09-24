@@ -10,7 +10,7 @@ import { ResourceSummary } from '../../resources/resource.models';
 import { ResourceService } from '../../resources/resource.service';
 import { resolveLuxonZone } from '../../resources/timezone.util';
 import { BookingService } from '../booking.service';
-import { parseStrictLocalDateTime } from '../local-time.util';
+import { DualZoneRange, detectViewerTimeZone, formatDualZoneRange, parseStrictLocalDateTime } from '../local-time.util';
 
 // Friendlier copy than the raw ProblemDetails.detail for the specific conflicts CreateBookingCommandRequest
 // can throw - falls back to apiError.detail/title for anything not in this map.
@@ -58,6 +58,30 @@ export class BookingFormComponent {
   protected readonly fieldErrors = signal<Record<string, string[]>>({});
   protected readonly timeFieldErrors = computed(() => [...(this.fieldErrors()['StartUtc'] ?? []), ...(this.fieldErrors()['EndUtc'] ?? [])]);
   protected readonly quantityFieldErrors = computed(() => this.fieldErrors()['Quantity'] ?? []);
+
+  protected readonly viewerZoneId = detectViewerTimeZone();
+
+  // This IS the confirmation moment for the one-off booking flow: there's no separate confirmation
+  // screen (success just toasts and redirects to My Bookings) - the review of the exact selected interval,
+  // right before "Confirm booking" is clicked, is where dual-zone clarity actually matters. Resource-local
+  // is primary, matching the header hint above it ("Times are in {{ resource.timeZoneId }}"); the viewer's
+  // own local time is the secondary line, shown only when it differs. null until a valid, fully-entered
+  // date/start/end exists (the same validity check submit() itself relies on via parseStrictLocalDateTime).
+  protected readonly confirmationRange = computed<DualZoneRange | null>(() => {
+    const resource = this.resource();
+    if (!resource || !this.date() || !this.startTime() || !this.endTime()) {
+      return null;
+    }
+
+    const zone = resolveLuxonZone(resource.timeZoneId);
+    const start = parseStrictLocalDateTime(`${this.date()}T${this.startTime()}`, zone);
+    const end = parseStrictLocalDateTime(`${this.date()}T${this.endTime()}`, zone);
+    if (!start || !end || end <= start) {
+      return null;
+    }
+
+    return formatDualZoneRange(start.toUTC().toISO()!, end.toUTC().toISO()!, resource.timeZoneId, this.viewerZoneId);
+  });
 
   constructor() {
     if (this.resourceId) {

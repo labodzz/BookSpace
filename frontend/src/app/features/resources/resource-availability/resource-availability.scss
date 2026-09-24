@@ -79,7 +79,8 @@
   background: var(--color-accent-soft);
 }
 
-.availability__slot-capacity {
+.availability__slot-capacity,
+.availability__slot-secondary {
   font-size: 0.75rem;
   color: var(--color-text-muted);
 }

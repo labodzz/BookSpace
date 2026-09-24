@@ -54,6 +54,15 @@
     @if (timeFieldErrors().length) {
       <span class="field-error-text">{{ timeFieldErrors().join(' ') }}</span>
     }
+    @if (confirmationRange(); as range) {
+      <p class="booking-form__confirmation-range">
+        {{ range.first.text }} &middot; {{ resource.timeZoneId }}
+        @if (range.second; as viewerTime) {
+          <br />
+          <span class="field-hint">Your local time: {{ viewerTime.text }} &middot; {{ viewerTime.zoneId }}</span>
+        }
+      </p>
+    }
 
     <div class="field booking-form__quantity">
       <label for="quantity">Quantity</label>

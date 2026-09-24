@@ -22,6 +22,7 @@ function bookingsPage(count: number, startIndex: number): OwnBookingWire[] {
     cancelledByAdmin: false,
     cancellationReason: null,
     seriesId: null,
+    timeZoneId: 'UTC',
   }));
 }
 

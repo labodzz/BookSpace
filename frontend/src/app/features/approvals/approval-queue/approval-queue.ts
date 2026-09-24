@@ -8,7 +8,7 @@ import { CalendarService } from '../../calendar/calendar.service';
 import { ResourceService } from '../../resources/resource.service';
 import { ApprovalService } from '../approval.service';
 import { PendingApproval } from '../approval.models';
-import { toLocalDateTime } from '../../bookings/local-time.util';
+import { DualZoneRange, detectViewerTimeZone, formatDualZoneRange } from '../../bookings/local-time.util';
 
 type Decision = 'approve' | 'reject';
 
@@ -48,6 +48,8 @@ export class ApprovalQueueComponent {
   protected readonly groupNotes = signal<Record<string, string>>({});
   protected readonly groupErrors = signal<Record<string, string>>({});
   protected readonly submittingGroupIds = signal<Set<string>>(new Set());
+
+  protected readonly viewerZoneId = detectViewerTimeZone();
 
   protected readonly loading = signal(true);
   protected readonly error = signal<ApiError | null>(null);
@@ -116,10 +118,12 @@ export class ApprovalQueueComponent {
     return this.submittingGroupIds().has(seriesId);
   }
 
-  protected formatRange(startUtc: string, endUtc: string): string {
-    const start = toLocalDateTime(startUtc);
-    const end = toLocalDateTime(endUtc);
-    return `${start.toFormat('cccc, LLL d · HH:mm')}–${end.toFormat('HH:mm')}`;
+  // Resource-local time is primary (an approver cares about the resource's own business hours), the
+  // viewer's own local time is a secondary line shown only when it differs. alwaysShowDate: true because
+  // this is a flat queue spanning many different days with no other day-grouping context - same
+  // reasoning as My Bookings (see my-bookings.ts's own comment on its own range()).
+  protected range(approval: PendingApproval): DualZoneRange {
+    return formatDualZoneRange(approval.startUtc, approval.endUtc, approval.timeZoneId, this.viewerZoneId, { alwaysShowDate: true });
   }
 
   protected formatExpiry(expiresAtUtc: string): string {

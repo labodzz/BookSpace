@@ -7,6 +7,8 @@ namespace BookSpace.Application.Bookings;
 
 public sealed record GetRecurringSeriesQueryRequest(Guid Id) : IRequest<GetRecurringSeriesResponse>;
 
+// TimeZoneId is the series' own snapshot (taken at creation time, see RecurringSeries.TimeZoneId) of the
+// resource's IANA zone at that time - not re-derived from the resource's current value.
 public sealed record GetRecurringSeriesResponse(
     Guid Id,
     Guid ResourceId,
@@ -18,7 +20,8 @@ public sealed record GetRecurringSeriesResponse(
     DateOnly? EndDate,
     int? OccurrenceCount,
     int Quantity,
-    IReadOnlyList<GetRecurringSeriesOccurrenceResponse> Occurrences);
+    IReadOnlyList<GetRecurringSeriesOccurrenceResponse> Occurrences,
+    string TimeZoneId);
 
 public sealed record GetRecurringSeriesOccurrenceResponse(Guid Id, DateTimeOffset StartUtc, DateTimeOffset EndUtc, int Quantity, BookingStatus Status);
 
@@ -53,6 +56,7 @@ public sealed class GetRecurringSeriesQueryHandler(
             occurrences
                 .OrderBy(occurrence => occurrence.StartUtc)
                 .Select(occurrence => new GetRecurringSeriesOccurrenceResponse(occurrence.Id, occurrence.StartUtc, occurrence.EndUtc, occurrence.Quantity, occurrence.Status))
-                .ToList());
+                .ToList(),
+            series.TimeZoneId);
     }
 }

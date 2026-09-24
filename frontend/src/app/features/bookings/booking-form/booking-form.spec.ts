@@ -167,12 +167,18 @@ describe('BookingFormComponent', () => {
 
     const root = fixture.nativeElement as HTMLElement;
     fillValidFutureBooking(root);
+    fixture.detectChanges();
+
+    // The confirmation preview is purely additive display - it must never change what's actually
+    // submitted (required scenario 7's frontend half).
+    expect(root.querySelector('.booking-form__confirmation-range')!.textContent).toContain('10:00–11:00');
+
     root.querySelector('form')!.dispatchEvent(new Event('submit'));
 
     // 2026-12-20 is standard time in America/New_York (EST, -05:00) - 10:00 local is 15:00 UTC.
     const req = httpTesting.expectOne((r) => r.url === BOOKINGS_URL);
     expect(req.request.body.startUtc).toBe('2026-12-20T15:00:00.000Z');
-    req.flush({ id: 'booking-1', resourceId: 'resource-1', startUtc: req.request.body.startUtc, endUtc: req.request.body.endUtc, quantity: 1, status: 1 });
+    req.flush({ id: 'booking-1', resourceId: 'resource-1', startUtc: req.request.body.startUtc, endUtc: req.request.body.endUtc, quantity: 1, status: 1, timeZoneId: 'America/New_York' });
   });
 
   // An unrecognized/unmapped timeZoneId falls back to the viewer's own local zone (resolveLuxonZone) -
@@ -213,5 +219,83 @@ describe('BookingFormComponent', () => {
     fixture.detectChanges();
 
     expect(root.textContent).toContain("overlaps a blackout period");
+  });
+});
+
+// A separate top-level describe (not nested above) because the viewer's zone is captured once, at
+// component construction (`viewerZoneId = detectViewerTimeZone()`) - the Intl mock must be in place
+// BEFORE TestBed.createComponent runs, which the shared `setup()` above already does unconditionally.
+describe('BookingFormComponent - dual timezone display', () => {
+  let fixture: ComponentFixture<BookingFormComponent>;
+  let httpTesting: HttpTestingController;
+
+  function setup(): void {
+    TestBed.configureTestingModule({
+      imports: [BookingFormComponent],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        provideRouter([]),
+        { provide: ActivatedRoute, useValue: { snapshot: { queryParamMap: convertToParamMap({ resourceId: 'resource-1' }) } } },
+      ],
+    });
+    httpTesting = TestBed.inject(HttpTestingController);
+    fixture = TestBed.createComponent(BookingFormComponent);
+  }
+
+  function flushResource(timeZoneId: string): void {
+    httpTesting.expectOne((r) => r.url === RESOURCE_URL).flush({
+      id: 'resource-1', resourceTypeId: 'type-1', name: 'Falcon Room', description: null,
+      capacity: 4, requiresApproval: false, status: 0, timeZoneId,
+    });
+  }
+
+  afterEach(() => {
+    httpTesting.verify();
+    vi.restoreAllMocks();
+  });
+
+  it("shows the resource-local time as primary, and the viewer's local time as a secondary line when the zones differ", () => {
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({ timeZone: 'Asia/Tokyo' } as Intl.ResolvedDateTimeFormatOptions);
+    setup();
+    flushResource('Europe/Sarajevo');
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    setInputValue(root.querySelector('#date')!, '2026-07-15');
+    setInputValue(root.querySelector('#start-time')!, '10:15');
+    setInputValue(root.querySelector('#end-time')!, '11:15');
+    fixture.detectChanges();
+
+    const range = root.querySelector('.booking-form__confirmation-range')!;
+    expect(range.textContent).toContain('10:15–11:15');
+    expect(range.textContent).toContain('Europe/Sarajevo');
+    expect(range.textContent).toContain('Your local time: 17:15–18:15');
+    expect(range.textContent).toContain('Asia/Tokyo');
+  });
+
+  it('shows only one time when the resource zone matches the viewer zone', () => {
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({ timeZone: 'Europe/Sarajevo' } as Intl.ResolvedDateTimeFormatOptions);
+    setup();
+    flushResource('Europe/Sarajevo');
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    setInputValue(root.querySelector('#date')!, '2026-07-15');
+    setInputValue(root.querySelector('#start-time')!, '10:15');
+    setInputValue(root.querySelector('#end-time')!, '11:15');
+    fixture.detectChanges();
+
+    const range = root.querySelector('.booking-form__confirmation-range')!;
+    expect(range.textContent).toContain('10:15–11:15');
+    expect(range.textContent).not.toContain('Your local time');
+  });
+
+  it('shows no confirmation preview until the date and both times are filled in', () => {
+    setup();
+    flushResource('UTC');
+    fixture.detectChanges();
+
+    expect((fixture.nativeElement as HTMLElement).querySelector('.booking-form__confirmation-range')).toBeNull();
   });
 });

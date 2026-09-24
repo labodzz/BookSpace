@@ -34,6 +34,7 @@ describe('ApprovalQueueComponent', () => {
         quantity: 1,
         expiresAtUtc: '2026-12-21T10:00:00Z',
         seriesId: null,
+        timeZoneId: 'UTC',
       },
     ]);
     httpTesting.expectOne((r) => r.url === RESOURCE_URL).flush({
@@ -59,6 +60,7 @@ describe('ApprovalQueueComponent', () => {
         quantity: 1,
         expiresAtUtc: '2026-12-21T10:00:00Z',
         seriesId: 'series-1',
+        timeZoneId: 'UTC',
       },
       {
         bookingId: 'occurrence-2',
@@ -69,6 +71,7 @@ describe('ApprovalQueueComponent', () => {
         quantity: 1,
         expiresAtUtc: '2026-12-28T10:00:00Z',
         seriesId: 'series-1',
+        timeZoneId: 'UTC',
       },
     ]);
     httpTesting.expectOne((r) => r.url === RESOURCE_URL).flush({
@@ -177,6 +180,7 @@ describe('ApprovalQueueComponent', () => {
         quantity: 1,
         expiresAtUtc: '2026-12-28T10:00:00Z',
         seriesId: 'series-1',
+        timeZoneId: 'UTC',
       },
     ]);
     fixture.detectChanges();
@@ -185,5 +189,67 @@ describe('ApprovalQueueComponent', () => {
     // series group of one.
     expect(root.textContent).not.toContain('Recurring series');
     expect([...root.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Approve')).toBe(true);
+  });
+});
+
+// A separate top-level describe (not nested above) because the viewer's zone is captured once, at
+// component construction (`viewerZoneId = detectViewerTimeZone()`) - the Intl mock must be in place
+// BEFORE TestBed.createComponent runs, which the shared beforeEach above already does unconditionally.
+describe('ApprovalQueueComponent - dual timezone display', () => {
+  let fixture: ComponentFixture<ApprovalQueueComponent>;
+  let httpTesting: HttpTestingController;
+
+  function configure(): void {
+    TestBed.configureTestingModule({
+      imports: [ApprovalQueueComponent],
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    });
+    httpTesting = TestBed.inject(HttpTestingController);
+    fixture = TestBed.createComponent(ApprovalQueueComponent);
+  }
+
+  function flushApproval(timeZoneId: string): void {
+    httpTesting.expectOne((r) => r.url === PENDING_URL).flush([
+      {
+        bookingId: 'booking-1', resourceId: 'resource-1', userId: 'user-1',
+        startUtc: '2026-07-15T08:15:00Z', endUtc: '2026-07-15T09:15:00Z',
+        quantity: 1, expiresAtUtc: '2026-12-21T10:00:00Z', seriesId: null, timeZoneId,
+      },
+    ]);
+    httpTesting.expectOne((r) => r.url === RESOURCE_URL).flush({
+      id: 'resource-1', resourceTypeId: 'type-1', name: 'Falcon Room', description: null,
+      capacity: 4, requiresApproval: true, status: 0, timeZoneId,
+    });
+  }
+
+  afterEach(() => {
+    httpTesting.verify();
+    vi.restoreAllMocks();
+  });
+
+  it("shows the resource's own local time as primary, and the approver's local time as a secondary line when the zones differ", () => {
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({ timeZone: 'Asia/Tokyo' } as Intl.ResolvedDateTimeFormatOptions);
+    configure();
+    flushApproval('Europe/Sarajevo');
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    const primary = root.querySelector('.approval-row__time')!;
+    const secondary = root.querySelector('.approval-row__time-secondary')!;
+    expect(primary.textContent).toContain('10:15');
+    expect(primary.textContent).toContain('Europe/Sarajevo');
+    expect(secondary.textContent).toContain('17:15');
+    expect(secondary.textContent).toContain('Asia/Tokyo');
+  });
+
+  it('shows only one time when the resource zone matches the approver zone', () => {
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({ timeZone: 'Europe/Sarajevo' } as Intl.ResolvedDateTimeFormatOptions);
+    configure();
+    flushApproval('Europe/Sarajevo');
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.querySelector('.approval-row__time-secondary')).toBeNull();
+    expect(root.querySelector('.approval-row__time')!.textContent).toContain('10:15');
   });
 });

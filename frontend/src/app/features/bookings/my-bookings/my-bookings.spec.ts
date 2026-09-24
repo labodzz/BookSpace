@@ -37,6 +37,7 @@ describe('MyBookingsComponent', () => {
           cancelledByAdmin: false,
           cancellationReason: null,
           seriesId: null,
+          timeZoneId: 'UTC',
         },
       ],
       page: 1,
@@ -114,6 +115,7 @@ describe('MyBookingsComponent', () => {
           cancelledByAdmin: false,
           cancellationReason: null,
           seriesId: null,
+          timeZoneId: 'UTC',
         },
         {
           id: 'booking-older-request-later-start',
@@ -126,6 +128,7 @@ describe('MyBookingsComponent', () => {
           cancelledByAdmin: false,
           cancellationReason: null,
           seriesId: null,
+          timeZoneId: 'UTC',
         },
       ],
       page: 1,
@@ -166,6 +169,7 @@ describe('MyBookingsComponent', () => {
           cancelledByAdmin: false,
           cancellationReason: null,
           seriesId: null,
+          timeZoneId: 'UTC',
         },
       ],
       page: 1,
@@ -186,5 +190,82 @@ describe('MyBookingsComponent', () => {
 
     const root = fixture.nativeElement as HTMLElement;
     expect([...root.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Cancel')).toBe(false);
+  });
+});
+
+// Required scenario 5: My Bookings must no longer silently format a booking's time only through the
+// browser's own timezone - it needs to show the resource's own local time as primary, with the viewer's
+// local time as a secondary line only when the two actually differ. A separate top-level describe (rather
+// than nesting inside the block above) because the viewer's zone is captured once, at component
+// construction (`viewerZoneId = detectViewerTimeZone()`) - the Intl mock must be in place BEFORE
+// TestBed.createComponent runs, which the shared beforeEach above already does unconditionally.
+describe('MyBookingsComponent - dual timezone display', () => {
+  let fixture: ComponentFixture<MyBookingsComponent>;
+  let httpTesting: HttpTestingController;
+
+  function configure(): void {
+    TestBed.configureTestingModule({
+      imports: [MyBookingsComponent],
+      providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter([])],
+    });
+    httpTesting = TestBed.inject(HttpTestingController);
+    fixture = TestBed.createComponent(MyBookingsComponent);
+  }
+
+  function flushBooking(timeZoneId: string): void {
+    httpTesting.expectOne((r) => r.url === BOOKINGS_URL && r.method === 'GET').flush({
+      items: [
+        {
+          id: 'booking-1', resourceId: 'resource-1', startUtc: '2026-07-15T08:15:00Z', endUtc: '2026-07-15T09:15:00Z',
+          quantity: 1, status: 1, cancelledAtUtc: null, cancelledByAdmin: false, cancellationReason: null, seriesId: null,
+          timeZoneId,
+        },
+      ],
+      page: 1,
+      pageSize: 10,
+      totalCount: 1,
+    });
+    httpTesting.expectOne((r) => r.url === RESOURCE_URL).flush({
+      id: 'resource-1', resourceTypeId: 'type-1', name: 'Falcon Room', description: null,
+      capacity: 4, requiresApproval: false, status: 0, timeZoneId,
+    });
+  }
+
+  afterEach(() => {
+    httpTesting.verify();
+    vi.restoreAllMocks();
+  });
+
+  it("shows the resource's own local time as primary, and the viewer's local time as a secondary line when the zones differ", () => {
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({ timeZone: 'Asia/Tokyo' } as Intl.ResolvedDateTimeFormatOptions);
+    configure();
+    flushBooking('Europe/Sarajevo');
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    const primary = root.querySelector('.booking-row__time')!;
+    const secondary = root.querySelector('.booking-row__time-secondary')!;
+    // My Bookings always shows the date (alwaysShowDate: true, see my-bookings.ts's own comment) since
+    // it's a flat list spanning many different days - so both times render in the full-date form here.
+    expect(primary.textContent).toContain('Jul 15');
+    expect(primary.textContent).toContain('10:15');
+    expect(primary.textContent).toContain('11:15');
+    expect(primary.textContent).toContain('Europe/Sarajevo');
+    expect(secondary.textContent).toContain('17:15');
+    expect(secondary.textContent).toContain('18:15');
+    expect(secondary.textContent).toContain('Asia/Tokyo');
+  });
+
+  it('shows only one time when the booking timezone matches the viewer zone', () => {
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({ timeZone: 'Europe/Sarajevo' } as Intl.ResolvedDateTimeFormatOptions);
+    configure();
+    flushBooking('Europe/Sarajevo');
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.querySelector('.booking-row__time-secondary')).toBeNull();
+    const primary = root.querySelector('.booking-row__time')!;
+    expect(primary.textContent).toContain('10:15');
+    expect(primary.textContent).toContain('11:15');
   });
 });

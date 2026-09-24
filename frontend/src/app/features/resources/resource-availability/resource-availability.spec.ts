@@ -196,3 +196,66 @@ describe('ResourceAvailabilityComponent', () => {
     });
   });
 });
+
+// A separate top-level describe (not nested in the block above) because the viewer's zone is captured
+// once, at component construction (`viewerZoneId = detectViewerTimeZone()`) - the Intl mock must be in
+// place BEFORE TestBed.createComponent runs, which the shared beforeEach above already does unconditionally.
+describe('ResourceAvailabilityComponent - dual timezone display', () => {
+  let fixture: ComponentFixture<ResourceAvailabilityComponent>;
+  let httpTesting: HttpTestingController;
+
+  function configure(): void {
+    TestBed.configureTestingModule({
+      imports: [ResourceAvailabilityComponent],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        provideRouter([]),
+        { provide: ActivatedRoute, useValue: { snapshot: { paramMap: { get: () => RESOURCE_ID } } } },
+      ],
+    });
+    httpTesting = TestBed.inject(HttpTestingController);
+    fixture = TestBed.createComponent(ResourceAvailabilityComponent);
+  }
+
+  function flushWithSlot(timeZoneId: string): void {
+    httpTesting.expectOne(RESOURCE_URL).flush({
+      id: RESOURCE_ID, resourceTypeId: 'type-1', name: 'Falcon Room', description: null,
+      capacity: 4, requiresApproval: false, status: 0, timeZoneId,
+    });
+    fixture.detectChanges();
+    httpTesting.expectOne((r) => r.url === `${environment.apiUrl}/resources/${RESOURCE_ID}/availability`).flush({
+      resourceId: RESOURCE_ID, fromDate: '2026-07-15', toDate: '2026-07-15', timeZoneId, capacity: 4,
+      openPeriods: [{ startUtc: '2026-07-15T00:00:00Z', endUtc: '2026-07-16T00:00:00Z' }], blackouts: [], busyPeriods: [],
+      bookableSlots: [{ startUtc: '2026-07-15T08:15:00Z', endUtc: '2026-07-15T09:15:00Z', availableCapacity: 4 }],
+    });
+    fixture.detectChanges();
+  }
+
+  afterEach(() => {
+    httpTesting.verify();
+    vi.restoreAllMocks();
+  });
+
+  it("shows the resource's own local time as primary, and the viewer's local time as a secondary line when the zones differ", () => {
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({ timeZone: 'Asia/Tokyo' } as Intl.ResolvedDateTimeFormatOptions);
+    configure();
+    flushWithSlot('Europe/Sarajevo');
+
+    const root = fixture.nativeElement as HTMLElement;
+    const slot = root.querySelector('.availability__slot')!;
+    expect(slot.textContent).toContain('10:15–11:15');
+    expect(slot.querySelector('.availability__slot-secondary')?.textContent).toContain('17:15–18:15');
+  });
+
+  it('shows only one time when the resource zone matches the viewer zone', () => {
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({ timeZone: 'Europe/Sarajevo' } as Intl.ResolvedDateTimeFormatOptions);
+    configure();
+    flushWithSlot('Europe/Sarajevo');
+
+    const root = fixture.nativeElement as HTMLElement;
+    const slot = root.querySelector('.availability__slot')!;
+    expect(slot.textContent).toContain('10:15–11:15');
+    expect(slot.querySelector('.availability__slot-secondary')).toBeNull();
+  });
+});

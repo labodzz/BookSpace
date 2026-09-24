@@ -10,7 +10,7 @@ import { CancelBookingDialogComponent } from '../cancel-booking-dialog/cancel-bo
 import { statusLabel, statusPillClass } from '../booking-status.util';
 import { BookingService } from '../booking.service';
 import { OwnBooking } from '../booking.models';
-import { toLocalDateTime } from '../local-time.util';
+import { DualZoneRange, detectViewerTimeZone, formatDualZoneRange } from '../local-time.util';
 
 const PAGE_SIZE = 10;
 const CANCELLABLE_STATUSES: OwnBooking['status'][] = ['Pending', 'Confirmed'];
@@ -39,6 +39,8 @@ export class MyBookingsComponent {
 
   protected readonly totalPages = computed(() => Math.max(1, Math.ceil(this.totalCount() / PAGE_SIZE)));
 
+  protected readonly viewerZoneId = detectViewerTimeZone();
+
   constructor() {
     this.load();
   }
@@ -50,13 +52,13 @@ export class MyBookingsComponent {
     return this.resourceNames()[resourceId] ?? 'Loading…';
   }
 
-  protected formatRange(startUtc: string, endUtc: string): string {
-    const start = toLocalDateTime(startUtc);
-    const end = toLocalDateTime(endUtc);
-    const sameDay = start.hasSame(end, 'day');
-    return sameDay
-      ? `${start.toFormat('cccc, LLL d · HH:mm')}–${end.toFormat('HH:mm')}`
-      : `${start.toFormat('cccc, LLL d, HH:mm')} – ${end.toFormat('cccc, LLL d, HH:mm')}`;
+  // Resource-local time is primary here (this row IS a specific booking of a specific resource), the
+  // viewer's own local time is the secondary line shown only when it differs (see local-time.util.ts).
+  // alwaysShowDate: true because this is a flat list spanning many different days with no other
+  // day-grouping context (unlike, say, resource-availability's per-day-heading slots) - a bare "10:00–
+  // 11:00" on every row would make two bookings weeks apart at the same time of day indistinguishable.
+  protected range(booking: OwnBooking): DualZoneRange {
+    return formatDualZoneRange(booking.startUtc, booking.endUtc, booking.timeZoneId, this.viewerZoneId, { alwaysShowDate: true });
   }
 
   protected canCancel(booking: OwnBooking): boolean {

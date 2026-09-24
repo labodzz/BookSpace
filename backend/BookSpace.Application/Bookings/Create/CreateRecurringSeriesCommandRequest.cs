@@ -21,12 +21,15 @@ public sealed record CreateRecurringSeriesCommandRequest(
 
 // RequestedOccurrenceCount is the number of candidate dates the recurrence pattern produced;
 // CreatedOccurrences + Conflicts.Count always equals it - no candidate date is ever silently dropped.
+// TimeZoneId is the resource's own IANA zone (one per series, since a series has exactly one resource) -
+// lets the client show each occurrence's local time at the resource without a follow-up lookup.
 public sealed record CreateRecurringSeriesResponse(
     Guid SeriesId,
     Guid ResourceId,
     int RequestedOccurrenceCount,
     IReadOnlyList<CreateRecurringSeriesOccurrenceResponse> CreatedOccurrences,
-    IReadOnlyList<CreateRecurringSeriesConflictResponse> Conflicts);
+    IReadOnlyList<CreateRecurringSeriesConflictResponse> Conflicts,
+    string TimeZoneId);
 
 public sealed record CreateRecurringSeriesOccurrenceResponse(Guid Id, DateTimeOffset StartUtc, DateTimeOffset EndUtc, BookingStatus Status);
 
@@ -241,6 +244,7 @@ public sealed class CreateRecurringSeriesCommandHandler(
             resource.Id,
             candidateDates.Count,
             bookings.Select(booking => new CreateRecurringSeriesOccurrenceResponse(booking.Id, booking.StartUtc, booking.EndUtc, booking.Status)).ToList(),
-            conflicts);
+            conflicts,
+            resource.TimeZoneId);
     }
 }

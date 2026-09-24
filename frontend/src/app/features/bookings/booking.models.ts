@@ -15,6 +15,9 @@ export interface OwnBooking {
   cancelledByAdmin: boolean;
   cancellationReason: string | null;
   seriesId: string | null;
+  // The resource's own IANA zone (as of now, not a snapshot from booking time) - lets the UI show this
+  // booking's local time at the resource alongside the viewer's own local time.
+  timeZoneId: string;
 }
 
 // getOwnBookingsInRange's result: `truncated` is true when the safety page cap was hit while the
@@ -39,6 +42,7 @@ export interface CreateBookingResponse {
   endUtc: string;
   quantity: number;
   status: BookingStatus;
+  timeZoneId: string;
 }
 
 export interface CancelBookingResponse {
@@ -87,4 +91,6 @@ export interface CreateRecurringSeriesResponse {
   requestedOccurrenceCount: number;
   createdOccurrences: RecurringSeriesOccurrence[];
   conflicts: RecurringSeriesConflict[];
+  // One per series (a series has exactly one resource) - see OwnBooking.timeZoneId for what it's for.
+  timeZoneId: string;
 }

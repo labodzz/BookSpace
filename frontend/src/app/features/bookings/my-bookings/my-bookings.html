@@ -39,7 +39,10 @@
                 <span class="booking-row__recurring" title="Part of a recurring series">&#8635; recurring</span>
               }
             </div>
-            <p class="booking-row__time">{{ formatRange(booking.startUtc, booking.endUtc) }}</p>
+            <p class="booking-row__time">{{ range(booking).first.text }} &middot; {{ booking.timeZoneId }}</p>
+            @if (range(booking).second; as viewerTime) {
+              <p class="booking-row__time-secondary field-hint">Your local time: {{ viewerTime.text }} &middot; {{ viewerTime.zoneId }}</p>
+            }
             @if (booking.quantity > 1) {
               <p class="booking-row__quantity">Quantity {{ booking.quantity }}</p>
             }

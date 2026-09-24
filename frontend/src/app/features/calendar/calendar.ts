@@ -7,7 +7,7 @@ import { statusLabel, statusPillClass } from '../bookings/booking-status.util';
 import { BookingService } from '../bookings/booking.service';
 import { OwnBooking } from '../bookings/booking.models';
 import { ResourceService } from '../resources/resource.service';
-import { toLocalDateTime } from '../bookings/local-time.util';
+import { DualZoneRange, detectViewerTimeZone, formatDualZoneRange, toLocalDateTime } from '../bookings/local-time.util';
 import { CalendarService } from './calendar.service';
 
 type ViewMode = 'month' | 'week';
@@ -54,6 +54,7 @@ export class CalendarComponent {
   protected readonly statusPillClass = statusPillClass;
   protected readonly statusLabel = statusLabel;
   protected readonly monthCellEventCap = MONTH_CELL_EVENT_CAP;
+  protected readonly viewerZoneId = detectViewerTimeZone();
 
   protected readonly gridStart = computed(() =>
     this.viewMode() === 'month' ? this.anchor().startOf('month').startOf('week') : this.anchor().startOf('week'),
@@ -133,10 +134,12 @@ export class CalendarComponent {
     return toLocalDateTime(utcIso).toFormat('HH:mm');
   }
 
-  protected formatDetailRange(booking: OwnBooking): string {
-    const start = toLocalDateTime(booking.startUtc);
-    const end = toLocalDateTime(booking.endUtc);
-    return `${start.toFormat('cccc, LLL d · HH:mm')}–${end.toFormat('HH:mm')}`;
+  // Unlike every other screen, the VIEWER's zone is first/primary here, not the resource's - the grid
+  // itself already buckets and labels every event in the viewer's own zone (see `cells`/`formatTime`
+  // above, deliberately untouched), so the detail dialog keeps that same frame of reference and adds the
+  // resource's local time as the secondary line only when it differs.
+  protected formatDetailRange(booking: OwnBooking): DualZoneRange {
+    return formatDualZoneRange(booking.startUtc, booking.endUtc, this.viewerZoneId, booking.timeZoneId);
   }
 
   protected selectBooking(booking: OwnBooking): void {

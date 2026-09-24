@@ -69,7 +69,10 @@
                 <div class="availability__blackouts">
                   @for (blackout of day.blackouts; track blackout.startUtc) {
                     <span class="status-pill status-pill--rejected" [title]="blackout.reason">
-                      Blacked out {{ formatBlackoutTime(blackout, availability.timeZoneId) }} — {{ blackout.reason }}
+                      Blacked out {{ blackoutRange(blackout, availability.timeZoneId).first.text }} — {{ blackout.reason }}
+                      @if (blackoutRange(blackout, availability.timeZoneId).second; as viewerTime) {
+                        (your time: {{ viewerTime.text }} &middot; {{ viewerTime.zoneId }})
+                      }
                     </span>
                   }
                 </div>
@@ -79,7 +82,10 @@
                 <div class="availability__slots">
                   @for (slot of day.slots; track slot.startUtc) {
                     <button type="button" class="availability__slot" (click)="bookSlot(slot)">
-                      <span>{{ formatSlotTime(slot, availability.timeZoneId) }}</span>
+                      <span>{{ slotRange(slot, availability.timeZoneId).first.text }}</span>
+                      @if (slotRange(slot, availability.timeZoneId).second; as viewerTime) {
+                        <span class="availability__slot-secondary">Your time: {{ viewerTime.text }} &middot; {{ viewerTime.zoneId }}</span>
+                      }
                       <span class="availability__slot-capacity">{{ slot.availableCapacity }} open</span>
                     </button>
                   }

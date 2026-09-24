@@ -10,6 +10,8 @@ export interface PendingApproval {
   quantity: number;
   expiresAtUtc: string;
   seriesId: string | null;
+  // The resource's own IANA zone - see OwnBooking.timeZoneId (booking.models.ts) for what it's for.
+  timeZoneId: string;
 }
 
 // DecideBookingApprovalRequest - used by reject. DecisionNote is optional; the API does not require a

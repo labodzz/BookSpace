@@ -9,8 +9,9 @@ import { ResourceSummary } from '../../resources/resource.models';
 import { ResourceService } from '../../resources/resource.service';
 import { resolveLuxonZone } from '../../resources/timezone.util';
 import { BookingService } from '../booking.service';
-import { parseStrictLocalDateTime } from '../local-time.util';
-import { CreateRecurringSeriesResponse, RecurrenceFrequency } from '../booking.models';
+import { DualZoneRange, detectViewerTimeZone, formatDualZoneRange, parseStrictLocalDateTime } from '../local-time.util';
+import { CreateRecurringSeriesResponse, RecurrenceFrequency, RecurringSeriesOccurrence } from '../booking.models';
+import { statusLabel, statusPillClass } from '../booking-status.util';
 
 const CONFLICT_MESSAGES: Record<string, string> = {
   'Booking.NoApproverConfigured': 'This resource requires approval, but no approver is assigned to it yet. Contact your administrator.',
@@ -71,6 +72,10 @@ export class RecurringBookingFormComponent {
 
   protected readonly conflictLabels = OCCURRENCE_CONFLICT_LABELS;
   protected readonly maxOccurrences = MAX_OCCURRENCES;
+  protected readonly statusLabel = statusLabel;
+  protected readonly statusPillClass = statusPillClass;
+
+  protected readonly viewerZoneId = detectViewerTimeZone();
 
   protected readonly startDateErrors = computed(() => this.fieldErrors()['StartDate'] ?? []);
   protected readonly timeErrors = computed(() => [...(this.fieldErrors()['StartTime'] ?? []), ...(this.fieldErrors()['EndTime'] ?? [])]);
@@ -90,6 +95,15 @@ export class RecurringBookingFormComponent {
 
   protected setEndCondition(condition: EndCondition): void {
     this.endCondition.set(condition);
+  }
+
+  // Resource-local time is primary (a series has exactly one resource), the viewer's own local time is a
+  // secondary line shown only when it differs. alwaysShowDate: true because this is a flat list of
+  // occurrences spanning many different dates with no other day-grouping context - same reasoning as My
+  // Bookings/the approval queue (see my-bookings.ts's own comment on its own range()).
+  protected occurrenceRange(occurrence: RecurringSeriesOccurrence): DualZoneRange {
+    const timeZoneId = this.result()!.timeZoneId;
+    return formatDualZoneRange(occurrence.startUtc, occurrence.endUtc, timeZoneId, this.viewerZoneId, { alwaysShowDate: true });
   }
 
   protected submit(): void {
