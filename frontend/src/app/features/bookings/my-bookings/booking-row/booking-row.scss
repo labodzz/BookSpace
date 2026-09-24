@@ -1,0 +1,6 @@
+// display: contents keeps this component invisible to layout, so its .booking-row (styled globally -
+// see styles.scss) behaves as a direct child of whatever flex list contains <app-booking-row>, exactly
+// as it did back when my-bookings.html rendered the same markup inline.
+:host {
+  display: contents;
+}

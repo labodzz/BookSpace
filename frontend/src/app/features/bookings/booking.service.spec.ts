@@ -4,13 +4,13 @@ import { TestBed } from '@angular/core/testing';
 import { environment } from '../../../environments/environment';
 import { PagedResult } from '../../core/http/paged-result';
 import { BookingService } from './booking.service';
-import { RangeBookingsResult } from './booking.models';
+import { OwnBooking, RangeBookingsResult } from './booking.models';
 import { OwnBookingWire } from './booking.mappers';
 
 // The API serializes BookingStatus as its raw numeric code (no JsonStringEnumConverter) - 1 is
 // Confirmed. These mock bodies represent the wire shape flush() sends back, not the mapped OwnBooking
 // shape the service exposes afterwards.
-function bookingsPage(count: number, startIndex: number): OwnBookingWire[] {
+function bookingsPage(count: number, startIndex: number, seriesId: string | null = null): OwnBookingWire[] {
   return Array.from({ length: count }, (_, i) => ({
     id: `booking-${startIndex + i}`,
     resourceId: 'resource-1',
@@ -21,7 +21,7 @@ function bookingsPage(count: number, startIndex: number): OwnBookingWire[] {
     cancelledAtUtc: null,
     cancelledByAdmin: false,
     cancellationReason: null,
-    seriesId: null,
+    seriesId,
   }));
 }
 
@@ -126,5 +126,62 @@ describe('BookingService.getOwnBookingsInRange', () => {
       .flush('server error', { status: 500, statusText: 'Internal Server Error' });
 
     expect(error).toBeTruthy();
+  });
+});
+
+describe('BookingService.getBookingsForSeries', () => {
+  let service: BookingService;
+  let httpTesting: HttpTestingController;
+
+  beforeEach(() => {
+    TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting()] });
+    service = TestBed.inject(BookingService);
+    httpTesting = TestBed.inject(HttpTestingController);
+  });
+
+  afterEach(() => httpTesting.verify());
+
+  it('requests bookings filtered by seriesId and returns every occurrence when they all fit on one page', () => {
+    let result: OwnBooking[] | undefined;
+    service.getBookingsForSeries('series-1').subscribe((r) => (result = r));
+
+    const req = httpTesting.expectOne((r) => r.url === BOOKINGS_URL);
+    expect(req.request.params.get('seriesId')).toBe('series-1');
+    expect(req.request.params.get('pageSize')).toBe('100');
+    req.flush({ items: bookingsPage(6, 0, 'series-1'), page: 1, pageSize: 100, totalCount: 6 } satisfies PagedResult<OwnBookingWire>);
+
+    expect(result).toHaveLength(6);
+    expect(result?.every((booking) => booking.seriesId === 'series-1')).toBe(true);
+  });
+
+  it('follows additional pages until every occurrence of the series has been fetched', () => {
+    let result: OwnBooking[] | undefined;
+    service.getBookingsForSeries('series-1').subscribe((r) => (result = r));
+
+    httpTesting
+      .expectOne((r) => r.url === BOOKINGS_URL && r.params.get('page') === '1')
+      .flush({ items: bookingsPage(100, 0, 'series-1'), page: 1, pageSize: 100, totalCount: 120 });
+    httpTesting
+      .expectOne((r) => r.url === BOOKINGS_URL && r.params.get('page') === '2')
+      .flush({ items: bookingsPage(20, 100, 'series-1'), page: 2, pageSize: 100, totalCount: 120 });
+
+    expect(result).toHaveLength(120);
+  });
+
+  // The 8-page (800-occurrence) safety cap is comfortably above the 750-occurrence ceiling a series can
+  // ever actually have, so it exists purely as a defensive bound and should never surface as a visible
+  // "truncated" state the way the calendar range fetch's does.
+  it('stops following pages at the safety cap rather than requesting indefinitely', () => {
+    let result: OwnBooking[] | undefined;
+    service.getBookingsForSeries('series-1').subscribe((r) => (result = r));
+
+    for (let page = 1; page <= 8; page++) {
+      httpTesting
+        .expectOne((r) => r.url === BOOKINGS_URL && r.params.get('page') === String(page))
+        .flush({ items: bookingsPage(100, (page - 1) * 100, 'series-1'), page, pageSize: 100, totalCount: 10_000 });
+    }
+
+    httpTesting.expectNone((r) => r.url === BOOKINGS_URL && r.params.get('page') === '9');
+    expect(result).toHaveLength(800);
   });
 });
