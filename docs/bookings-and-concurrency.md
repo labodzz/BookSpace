@@ -323,3 +323,58 @@ See [open-questions.md](open-questions.md) for the full entries: **TenantAdmin c
 user's booking** (and how that user would be notified), **booking approval workflow**
 (`RequiresApproval` -> `Pending` -> approve/reject), and **booking idempotency keys**. None of these are
 silently decided by this work packet.
+
+## 11. Frontend: the integrated browse-availability-and-book flow
+
+`BookingFormComponent` (`/bookings/new`) is a single page that merges what used to be two separate steps
+(browse `ResourceAvailabilityComponent`, then re-enter the same date/time on a bare booking form) into
+one: picking a date immediately shows that day's real availability, and selecting a free interval fills
+in Start/End directly, all without leaving the page. `ResourceAvailabilityComponent`
+(`/resources/{id}/availability`) still exists as a genuinely different, complementary tool - scanning a
+multi-day window (up to the API's own 92-day cap) to find a good day in the first place - and its own
+"Book" action on a slot now lands here with `start`/`end` query params prefilled.
+
+**No new backend endpoint or contract change was needed.** `GET /resources/{id}/availability` already
+returns everything a single day's decision needs - `openPeriods`, `blackouts`, `busyPeriods`, and the
+pre-computed, capacity-aware `bookableSlots` - so the form fetches it with `from == to == the selected
+date` (never a wider range) every time the date changes, via an RxJS `switchMap` so a fast date change
+can never let a stale response for an abandoned date overwrite a newer one.
+
+**Resource-local time throughout.** Every date/time shown or entered on this page is in the resource's
+own `TimeZoneId` (`resolveLuxonZone`, `parseStrictLocalDateTime` - see
+[availability-and-timezones.md](availability-and-timezones.md)), labeled explicitly ("Times shown in
+Europe/Sarajevo"), never the viewer's own browser zone. `parseStrictLocalDateTime`'s existing
+round-trip check still rejects a nonexistent spring-forward local time before submit; an ambiguous
+fall-back time is still accepted and resolved to Luxon's own default (the earlier of the two
+occurrences) exactly as it already was.
+
+**Frontend pre-validation vs. backend final authority.** `availability-interval.util.ts`'s
+`validateInterval` re-derives the same four rejection reasons `BookingEligibilityChecker` already
+enforces (outside open hours, blackout conflict, capacity/overlap conflict, end-before-start) from the
+exact same raw `openPeriods`/`blackouts`/`busyPeriods` data the availability response already returned -
+not a second, independently-invented availability model. This lets the form show a specific inline
+message and block Confirm before a round trip, but it is explicitly advisory: `CreateBookingCommandRequest`
+is still sent through the same `BookingEligibilityChecker` + `IResourceBookingLock` path described in §7
+above, and that remains the only authority that actually decides whether a booking is created.
+
+**The race this doesn't (and can't) close client-side**: availability is a read-model snapshot with no
+lock behind it (§7) - between the page loading a day's data and the user pressing Confirm, someone else's
+booking, a new blackout, or an archived resource can make the chosen interval genuinely invalid, and the
+live check above has no way to know that until it happens. When `POST /bookings` rejects the request with
+`Booking.OutsideAvailability`, `Booking.BlackoutConflict`, or `Booking.CapacityExceeded`, the form:
+keeps every entered field exactly as the user left it (never resets the date/time/quantity inputs),
+shows a distinct inline notice that the time became unavailable, and automatically reloads that day's
+availability so the (now-updated) slots are immediately visible again - it never automatically retries
+the create request itself, since a blind retry against the same now-known-bad interval would just fail
+the same way again.
+
+**Recurring bookings remain a separate flow**, reachable via a tab at the top of both booking pages
+(preserving `resourceId` across the switch) rather than folded into the same form - `CreateRecurringSeriesCommandRequest`'s
+per-occurrence, partial-success response (some occurrences created, some individually rejected - see
+[recurring-bookings-and-approvals.md](recurring-bookings-and-approvals.md)) is a fundamentally different
+result shape than a single booking's pass/fail, and `RecurringBookingFormComponent` still only validates
+its *first* occurrence's local time client-side, exactly as before this feature - later occurrences'
+per-date conflicts (including `NonexistentLocalTime`) are only known once the server actually generates
+and checks them. This feature does not attempt to preview a whole series' availability up front; doing
+so would require either a new backend endpoint or many per-occurrence availability calls, neither of
+which this work packet builds.

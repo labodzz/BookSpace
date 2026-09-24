@@ -23,25 +23,87 @@
     <button type="button" class="btn btn-secondary" (click)="retryLoadResource()">Try again</button>
   </div>
 } @else if (resource(); as resource) {
+  <nav class="booking-mode-tabs" aria-label="Booking type">
+    <a class="booking-mode-tabs__tab booking-mode-tabs__tab--active" [routerLink]="['/bookings/new']" [queryParams]="{ resourceId: resource.id }">
+      One-time booking
+    </a>
+    <a class="booking-mode-tabs__tab" [routerLink]="['/bookings/new-recurring']" [queryParams]="{ resourceId: resource.id }">
+      Recurring booking
+    </a>
+  </nav>
+
   <form class="card booking-form" (ngSubmit)="submit()" novalidate>
     <div>
       <p class="booking-form__eyebrow">Book</p>
       <h1>{{ resource.name }}</h1>
       <p class="field-hint">
-        Times are in {{ resource.timeZoneId }}. Capacity {{ resource.capacity }}.
+        Times shown in {{ resource.timeZoneId }}. Capacity {{ resource.capacity }}.
         {{ resource.requiresApproval ? 'This resource requires approval before it is confirmed.' : 'Bookings for this resource are confirmed instantly.' }}
       </p>
     </div>
 
     @if (formError()) {
-      <p class="banner banner-error" role="alert">{{ formError() }}</p>
+      <p class="banner" [class.banner-error]="!conflictNotice()" [class.banner-warning]="conflictNotice()" role="alert">
+        {{ formError() }}
+      </p>
     }
 
+    <div class="field booking-form__date">
+      <label for="date">Date</label>
+      <input id="date" type="date" [value]="date()" (input)="date.set($any($event.target).value)" required />
+    </div>
+
+    <div class="booking-form__availability">
+      @if (availabilityLoading()) {
+        <div class="booking-form__availability-status" aria-busy="true" aria-live="polite">
+          <span class="skeleton" style="height: 1rem; width: 40%;"></span>
+          <span class="skeleton" style="height: 2.25rem; width: 100%; margin-top: 8px;"></span>
+        </div>
+      } @else if (availabilityError()) {
+        <div class="booking-form__availability-status booking-form__availability-status--error" role="alert">
+          <span>Couldn't load availability for this date.</span>
+          <button type="button" class="btn btn-secondary" (click)="retryLoadAvailability()">Try again</button>
+        </div>
+      } @else if (dayAvailability(); as day) {
+        @if (noAvailabilityRules()) {
+          <p class="field-hint">No availability rules are configured for this day - it can't be booked.</p>
+        } @else {
+          @if (day.blackouts.length) {
+            <div class="booking-form__blackouts">
+              @for (blackout of day.blackouts; track blackout.startUtc) {
+                <span class="status-pill status-pill--rejected" [title]="blackout.reason">
+                  Blacked out {{ formatBlackoutTime(blackout) }} — {{ blackout.reason }}
+                </span>
+              }
+            </div>
+          }
+
+          @if (dayFullyBooked()) {
+            <p class="field-hint">This day is fully booked{{ day.blackouts.length ? ' or blacked out' : '' }}.</p>
+          } @else {
+            <div>
+              <p class="booking-form__availability-label">Open times — select one to fill in the times below</p>
+              <div class="booking-form__slots" role="group" aria-label="Available times">
+                @for (slot of day.bookableSlots; track slot.startUtc) {
+                  <button
+                    type="button"
+                    class="booking-form__slot"
+                    [class.booking-form__slot--selected]="isSlotSelected(slot)"
+                    [attr.aria-pressed]="isSlotSelected(slot)"
+                    (click)="selectSlot(slot)"
+                  >
+                    <span>{{ formatSlotTime(slot) }}</span>
+                    <span class="booking-form__slot-capacity">{{ slot.availableCapacity }} open</span>
+                  </button>
+                }
+              </div>
+            </div>
+          }
+        }
+      }
+    </div>
+
     <div class="booking-form__row">
-      <div class="field">
-        <label for="date">Date</label>
-        <input id="date" type="date" [value]="date()" (input)="date.set($any($event.target).value)" required />
-      </div>
       <div class="field">
         <label for="start-time">Start time</label>
         <input id="start-time" type="time" [value]="startTime()" (input)="startTime.set($any($event.target).value)" required />
@@ -51,6 +113,9 @@
         <input id="end-time" type="time" [value]="endTime()" (input)="endTime.set($any($event.target).value)" required />
       </div>
     </div>
+    @if (liveValidationMessage(); as message) {
+      <span class="field-error-text" role="alert">{{ message }}</span>
+    }
     @if (timeFieldErrors().length) {
       <span class="field-error-text">{{ timeFieldErrors().join(' ') }}</span>
     }

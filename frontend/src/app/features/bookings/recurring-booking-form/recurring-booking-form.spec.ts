@@ -46,6 +46,18 @@ describe('RecurringBookingFormComponent', () => {
 
   afterEach(() => httpTesting.verify());
 
+  it('shows a link back to the one-time booking form, preserving resourceId', () => {
+    setup();
+    flushResource('UTC');
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    const oneTimeLink = [...root.querySelectorAll('a')].find((a) => a.textContent?.trim() === 'One-time booking')!;
+    expect(oneTimeLink.getAttribute('href')).toBe('/bookings/new?resourceId=resource-1');
+    const recurringTab = [...root.querySelectorAll('a')].find((a) => a.textContent?.trim() === 'Recurring booking')!;
+    expect(recurringTab.classList.contains('booking-mode-tabs__tab--active')).toBe(true);
+  });
+
   // Same DST gap as booking-form.spec.ts: America/New_York springs forward on 2027-03-14, so 2:30 AM
   // never happens that day - the series' first occurrence must be rejected inline, not silently shifted.
   it("rejects a series whose first occurrence's start time does not exist because of a spring-forward change", () => {
