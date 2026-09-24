@@ -452,3 +452,93 @@ a[href^='/'] {
   background: var(--color-accent-soft);
   color: var(--color-text);
 }
+
+// Distinct from banner-error: used when a request failed specifically because availability changed out
+// from under the user (not a plain validation mistake) - see booking-form.ts's conflictNotice.
+.banner-warning {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+
+// Shared between the one-off and recurring booking forms, so switching between them (preserving
+// resourceId) always looks and behaves identically regardless of which one the user started on.
+.booking-mode-tabs {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.booking-mode-tabs__tab {
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.booking-mode-tabs__tab:hover {
+  border-color: var(--color-primary);
+  color: var(--color-text);
+}
+
+.booking-mode-tabs__tab--active {
+  background: var(--color-accent-soft);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+// My Bookings' individual booking row - shared globally (not scoped to my-bookings.scss) because
+// app-booking-row is its own component, and a series group's expanded occurrences render one of these
+// per occurrence from inside THAT component's template, not my-bookings.html's.
+.booking-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.booking-row:last-child {
+  border-bottom: none;
+}
+
+.booking-row__main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.booking-row__title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 600;
+}
+
+.booking-row__recurring {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+}
+
+.booking-row__time {
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+}
+
+.booking-row__quantity,
+.booking-row__cancellation {
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
+}
+
+.booking-row__end {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-2);
+}

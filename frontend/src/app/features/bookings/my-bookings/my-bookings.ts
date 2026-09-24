@@ -7,17 +7,17 @@ import { NotificationService } from '../../../core/notifications/notification.se
 import { ResourceService } from '../../resources/resource.service';
 import { CalendarService } from '../../calendar/calendar.service';
 import { CancelBookingDialogComponent } from '../cancel-booking-dialog/cancel-booking-dialog';
-import { statusLabel, statusPillClass } from '../booking-status.util';
 import { BookingService } from '../booking.service';
 import { OwnBooking } from '../booking.models';
-import { DualZoneRange, detectViewerTimeZone, formatDualZoneRange } from '../local-time.util';
+import { toLocalDateTime } from '../local-time.util';
+import { BookingListEntry, groupBookingsForDisplay } from './booking-grouping.util';
+import { BookingRowComponent } from './booking-row/booking-row';
 
 const PAGE_SIZE = 10;
-const CANCELLABLE_STATUSES: OwnBooking['status'][] = ['Pending', 'Confirmed'];
 
 @Component({
   selector: 'app-my-bookings',
-  imports: [RouterLink, CancelBookingDialogComponent],
+  imports: [RouterLink, CancelBookingDialogComponent, BookingRowComponent],
   templateUrl: './my-bookings.html',
   styleUrl: './my-bookings.scss',
 })
@@ -37,32 +37,59 @@ export class MyBookingsComponent {
   protected readonly cancelTarget = signal<OwnBooking | null>(null);
   protected readonly cancelSubmitting = signal(false);
 
-  protected readonly totalPages = computed(() => Math.max(1, Math.ceil(this.totalCount() / PAGE_SIZE)));
+  // Every occurrence of a series, keyed by seriesId, fetched separately from the main page (see
+  // loadSeriesOccurrences) so an expanded group always shows the series' COMPLETE occurrence list, not
+  // just whichever occurrences happened to land on the current page of the flat getOwnBookings listing.
+  protected readonly seriesOccurrences = signal<Record<string, OwnBooking[]>>({});
+  protected readonly expandedSeries = signal<ReadonlySet<string>>(new Set());
 
-  protected readonly viewerZoneId = detectViewerTimeZone();
+  protected readonly totalPages = computed(() => Math.max(1, Math.ceil(this.totalCount() / PAGE_SIZE)));
+  protected readonly entries = computed(() => groupBookingsForDisplay(this.bookings()));
 
   constructor() {
     this.load();
   }
 
-  protected statusPillClass = statusPillClass;
-  protected statusLabel = statusLabel;
-
   protected resourceNameFor(resourceId: string): string {
     return this.resourceNames()[resourceId] ?? 'Loading…';
   }
 
-  // Resource-local time is primary here (this row IS a specific booking of a specific resource), the
-  // viewer's own local time is the secondary line shown only when it differs (see local-time.util.ts).
-  // alwaysShowDate: true because this is a flat list spanning many different days with no other
-  // day-grouping context (unlike, say, resource-availability's per-day-heading slots) - a bare "10:00–
-  // 11:00" on every row would make two bookings weeks apart at the same time of day indistinguishable.
-  protected range(booking: OwnBooking): DualZoneRange {
-    return formatDualZoneRange(booking.startUtc, booking.endUtc, booking.timeZoneId, this.viewerZoneId, { alwaysShowDate: true });
+  protected entryKey(entry: BookingListEntry): string {
+    return entry.kind === 'single' ? entry.booking.id : entry.seriesId;
   }
 
-  protected canCancel(booking: OwnBooking): boolean {
-    return CANCELLABLE_STATUSES.includes(booking.status);
+  // The occurrences to render for an expanded series group: the fully-fetched list once it has loaded,
+  // falling back to whatever occurrences of it are already known from this page while that fetch is
+  // still in flight (or if it failed) - so expanding never shows an empty panel.
+  protected occurrencesFor(entry: Extract<BookingListEntry, { kind: 'series' }>): OwnBooking[] {
+    return this.seriesOccurrences()[entry.seriesId] ?? entry.occurrences;
+  }
+
+  protected seriesSummary(entry: Extract<BookingListEntry, { kind: 'series' }>): string {
+    const occurrences = this.occurrencesFor(entry);
+    if (occurrences.length === 0) {
+      return 'Recurring booking';
+    }
+    const sorted = [...occurrences].sort((a, b) => toLocalDateTime(a.startUtc).toMillis() - toLocalDateTime(b.startUtc).toMillis());
+    const first = toLocalDateTime(sorted[0].startUtc);
+    const last = toLocalDateTime(sorted[sorted.length - 1].startUtc);
+    const range = first.hasSame(last, 'day') ? first.toFormat('LLL d, yyyy') : `${first.toFormat('LLL d')} – ${last.toFormat('LLL d, yyyy')}`;
+    const count = occurrences.length;
+    return `${count} ${count === 1 ? 'booking' : 'bookings'} · ${range}`;
+  }
+
+  protected isExpanded(seriesId: string): boolean {
+    return this.expandedSeries().has(seriesId);
+  }
+
+  protected toggleSeries(seriesId: string): void {
+    const next = new Set(this.expandedSeries());
+    if (next.has(seriesId)) {
+      next.delete(seriesId);
+    } else {
+      next.add(seriesId);
+    }
+    this.expandedSeries.set(next);
   }
 
   protected goToPage(page: number): void {
@@ -98,6 +125,14 @@ export class MyBookingsComponent {
         this.cancelTarget.set(null);
         this.calendarService.invalidate();
         this.notificationService.showSuccess('Booking cancelled.');
+        if (target.seriesId) {
+          // The cancelled-status change (and, when cancelRemainingSeries is checked, every later
+          // occurrence's cascaded cancellation too) must be re-fetched, not left showing stale statuses -
+          // clearing the cache here makes loadSeriesOccurrences treat it as missing again after load().
+          const next = { ...this.seriesOccurrences() };
+          delete next[target.seriesId];
+          this.seriesOccurrences.set(next);
+        }
         this.load();
       },
       error: () => {
@@ -117,6 +152,7 @@ export class MyBookingsComponent {
         this.totalCount.set(result.totalCount);
         this.loading.set(false);
         this.loadResourceNames(result.items);
+        this.loadSeriesOccurrences(result.items);
       },
       error: (error: unknown) => {
         this.error.set(error instanceof HttpErrorResponse ? toApiError(error) : { status: 0, title: 'Something went wrong.' });
@@ -143,6 +179,24 @@ export class MyBookingsComponent {
         missingIds.forEach((id) => (next[id] = 'Unknown resource'));
         this.resourceNames.set(next);
       },
+    });
+  }
+
+  private loadSeriesOccurrences(bookings: OwnBooking[]): void {
+    const known = this.seriesOccurrences();
+    const missingSeriesIds = [...new Set(bookings.map((booking) => booking.seriesId))].filter(
+      (id): id is string => id !== null && !(id in known),
+    );
+
+    missingSeriesIds.forEach((seriesId) => {
+      this.bookingService.getBookingsForSeries(seriesId).subscribe({
+        next: (occurrences) => {
+          this.seriesOccurrences.set({ ...this.seriesOccurrences(), [seriesId]: occurrences });
+        },
+        // A failed enhancement fetch shouldn't break the page - occurrencesFor() already falls back to
+        // this page's own occurrences of the series when nothing is cached for it.
+        error: () => {},
+      });
     });
   }
 }

@@ -30,38 +30,37 @@
     </div>
   } @else {
     <div class="card my-bookings__list">
-      @for (booking of bookings(); track booking.id) {
-        <div class="booking-row">
-          <div class="booking-row__main">
-            <div class="booking-row__title">
-              <span>{{ resourceNameFor(booking.resourceId) }}</span>
-              @if (booking.seriesId) {
-                <span class="booking-row__recurring" title="Part of a recurring series">&#8635; recurring</span>
-              }
-            </div>
-            <p class="booking-row__time">{{ range(booking).first.text }} &middot; {{ booking.timeZoneId }}</p>
-            @if (range(booking).second; as viewerTime) {
-              <p class="booking-row__time-secondary field-hint">Your local time: {{ viewerTime.text }} &middot; {{ viewerTime.zoneId }}</p>
-            }
-            @if (booking.quantity > 1) {
-              <p class="booking-row__quantity">Quantity {{ booking.quantity }}</p>
-            }
-            @if (booking.status === 'Cancelled' && booking.cancelledAtUtc) {
-              <p class="booking-row__cancellation">
-                Cancelled{{ booking.cancelledByAdmin ? ' by an administrator' : '' }}
-                @if (booking.cancellationReason) {
-                  — {{ booking.cancellationReason }}
+      @for (entry of entries(); track entryKey(entry)) {
+        @if (entry.kind === 'single') {
+          <app-booking-row [booking]="entry.booking" [resourceName]="resourceNameFor(entry.booking.resourceId)" (cancelRequested)="openCancelDialog($event)" />
+        } @else {
+          <div class="booking-row-series">
+            <button
+              type="button"
+              class="booking-row-series__toggle"
+              [attr.aria-expanded]="isExpanded(entry.seriesId)"
+              [attr.aria-controls]="'series-' + entry.seriesId"
+              (click)="toggleSeries(entry.seriesId)"
+            >
+              <span class="booking-row-series__chevron" [class.booking-row-series__chevron--open]="isExpanded(entry.seriesId)" aria-hidden="true">
+                &#8250;
+              </span>
+              <span class="booking-row-series__title">
+                <span>{{ resourceNameFor(entry.resourceId) }}</span>
+                <span class="booking-row__recurring" title="Recurring series">&#8635; recurring</span>
+              </span>
+              <span class="booking-row-series__summary">{{ seriesSummary(entry) }}</span>
+            </button>
+
+            @if (isExpanded(entry.seriesId)) {
+              <div class="booking-row-series__occurrences" [id]="'series-' + entry.seriesId">
+                @for (occurrence of occurrencesFor(entry); track occurrence.id) {
+                  <app-booking-row [booking]="occurrence" [resourceName]="resourceNameFor(entry.resourceId)" [compact]="true" (cancelRequested)="openCancelDialog($event)" />
                 }
-              </p>
+              </div>
             }
           </div>
-          <div class="booking-row__end">
-            <span [class]="statusPillClass(booking.status)">{{ statusLabel(booking.status) }}</span>
-            @if (canCancel(booking)) {
-              <button type="button" class="btn btn-secondary" (click)="openCancelDialog(booking)">Cancel</button>
-            }
-          </div>
-        </div>
+        }
       }
     </div>
 

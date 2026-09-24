@@ -22,54 +22,68 @@
   flex-direction: column;
 }
 
-.booking-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-4);
-  padding: var(--space-4) var(--space-5);
+// A collapsed recurring series is its own bordered block (not a .booking-row) so its expanded occurrence
+// list can nest inside it without every occurrence's own .booking-row bottom border reading as if it
+// belonged to the outer list.
+.booking-row-series {
   border-bottom: 1px solid var(--color-border);
 }
 
-.booking-row:last-child {
+.booking-row-series:last-child {
   border-bottom: none;
 }
 
-.booking-row__main {
+.booking-row-series__toggle {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-4) var(--space-5);
+  background: none;
+  border: none;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
 }
 
-.booking-row__title {
+.booking-row-series__toggle:hover {
+  background: var(--color-surface-alt);
+}
+
+.booking-row-series__chevron {
+  transition: transform 0.15s ease;
+  color: var(--color-text-muted);
+}
+
+.booking-row-series__chevron--open {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .booking-row-series__chevron {
+    transition: none;
+  }
+}
+
+.booking-row-series__title {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   font-weight: 600;
 }
 
-.booking-row__recurring {
-  font-size: 0.75rem;
-  font-weight: 500;
-  color: var(--color-text-muted);
-}
-
-.booking-row__time {
+.booking-row-series__summary {
   color: var(--color-text-secondary);
   font-size: 0.875rem;
+  margin-left: auto;
 }
 
-.booking-row__quantity,
-.booking-row__cancellation {
-  color: var(--color-text-muted);
-  font-size: 0.8125rem;
-}
-
-.booking-row__end {
+.booking-row-series__occurrences {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
-  gap: var(--space-2);
+  background: var(--color-surface-alt);
+  border-top: 1px solid var(--color-border);
 }
 
 .pagination {

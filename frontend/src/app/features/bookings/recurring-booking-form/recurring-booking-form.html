@@ -63,6 +63,13 @@
     </div>
   </div>
 } @else if (resource(); as resource) {
+  <nav class="booking-mode-tabs" aria-label="Booking type">
+    <a class="booking-mode-tabs__tab" [routerLink]="['/bookings/new']" [queryParams]="{ resourceId: resource.id }">One-time booking</a>
+    <a class="booking-mode-tabs__tab booking-mode-tabs__tab--active" [routerLink]="['/bookings/new-recurring']" [queryParams]="{ resourceId: resource.id }">
+      Recurring booking
+    </a>
+  </nav>
+
   <form class="card recurring-form" (ngSubmit)="submit()" novalidate>
     <div>
       <p class="recurring-form__eyebrow">Recurring booking</p>
