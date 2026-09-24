@@ -1,5 +1,6 @@
 using BookSpace.Application.Bookings;
 using BookSpace.Application.Common;
+using BookSpace.Application.Resources;
 using BookSpace.Application.Security;
 using BookSpace.Domain.Entities;
 using BookSpace.Domain.Enums;
@@ -11,11 +12,18 @@ namespace BookSpace.Application.Tests.Bookings;
 public sealed class GetOwnBookingsQueryHandlerTests
 {
     private readonly Mock<IBookingRepository> _bookingRepository = new();
+    private readonly Mock<IResourceRepository> _resourceRepository = new();
     private readonly Mock<ICurrentUserContext> _currentUserContext = new();
 
     private static readonly Guid UserId = Guid.NewGuid();
 
-    private GetOwnBookingsQueryHandler CreateSut() => new(_bookingRepository.Object, _currentUserContext.Object);
+    private GetOwnBookingsQueryHandler CreateSut() => new(_bookingRepository.Object, _resourceRepository.Object, _currentUserContext.Object);
+
+    private static Resource CreateResource(Guid id, string timeZoneId) => new()
+    {
+        Id = id, TenantId = Guid.NewGuid(), ResourceTypeId = Guid.NewGuid(), Name = "Falcon Room",
+        Capacity = 4, Status = ResourceStatus.Active, TimeZoneId = timeZoneId,
+    };
 
     [Fact]
     public async Task Handle_QueriesByTheCallersOwnUserId_NeverAClientSuppliedOne()
@@ -154,5 +162,87 @@ public sealed class GetOwnBookingsQueryHandlerTests
         var result = await sut.Handle(new GetOwnBookingsQueryRequest(), CancellationToken.None);
 
         Assert.Equal(seriesId, Assert.Single(result.Items).SeriesId);
+    }
+
+    [Fact]
+    public async Task Handle_MapsTimeZoneId_FromABatchedResourceLookup()
+    {
+        var resourceId = Guid.NewGuid();
+        var booking = new Booking
+        {
+            Id = Guid.NewGuid(), TenantId = Guid.NewGuid(), ResourceId = resourceId, UserId = UserId,
+            StartUtc = DateTimeOffset.UtcNow, EndUtc = DateTimeOffset.UtcNow.AddHours(1),
+            Quantity = 1, Status = BookingStatus.Confirmed, CreatedAtUtc = DateTimeOffset.UtcNow,
+        };
+        _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
+        _bookingRepository
+            .Setup(r => r.GetOwnBookingsAsync(UserId, null, null, null, 1, 20, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedResult<Booking>([booking], 1, 20, 1));
+        _resourceRepository
+            .Setup(r => r.GetByIdsAsync(It.Is<IReadOnlyList<Guid>>(ids => ids.Count == 1 && ids[0] == resourceId), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([CreateResource(resourceId, "Europe/Sarajevo")]);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new GetOwnBookingsQueryRequest(), CancellationToken.None);
+
+        Assert.Equal("Europe/Sarajevo", Assert.Single(result.Items).TimeZoneId);
+    }
+
+    [Fact]
+    public async Task Handle_WithBookingsAcrossMultipleResources_QueriesResourceRepositoryOnceWithAllDistinctResourceIds()
+    {
+        var resourceId1 = Guid.NewGuid();
+        var resourceId2 = Guid.NewGuid();
+        // A duplicate ResourceId (two bookings on the same resource) proves the lookup is de-duplicated,
+        // not batched once per booking.
+        var bookings = new[]
+        {
+            new Booking { Id = Guid.NewGuid(), TenantId = Guid.NewGuid(), ResourceId = resourceId1, UserId = UserId, StartUtc = DateTimeOffset.UtcNow, EndUtc = DateTimeOffset.UtcNow.AddHours(1), Quantity = 1, Status = BookingStatus.Confirmed, CreatedAtUtc = DateTimeOffset.UtcNow },
+            new Booking { Id = Guid.NewGuid(), TenantId = Guid.NewGuid(), ResourceId = resourceId1, UserId = UserId, StartUtc = DateTimeOffset.UtcNow, EndUtc = DateTimeOffset.UtcNow.AddHours(1), Quantity = 1, Status = BookingStatus.Confirmed, CreatedAtUtc = DateTimeOffset.UtcNow },
+            new Booking { Id = Guid.NewGuid(), TenantId = Guid.NewGuid(), ResourceId = resourceId2, UserId = UserId, StartUtc = DateTimeOffset.UtcNow, EndUtc = DateTimeOffset.UtcNow.AddHours(1), Quantity = 1, Status = BookingStatus.Confirmed, CreatedAtUtc = DateTimeOffset.UtcNow },
+        };
+        _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
+        _bookingRepository
+            .Setup(r => r.GetOwnBookingsAsync(UserId, null, null, null, 1, 20, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedResult<Booking>(bookings, 1, 20, 3));
+        _resourceRepository
+            .Setup(r => r.GetByIdsAsync(It.IsAny<IReadOnlyList<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([CreateResource(resourceId1, "UTC"), CreateResource(resourceId2, "Asia/Tokyo")]);
+        var sut = CreateSut();
+
+        await sut.Handle(new GetOwnBookingsQueryRequest(), CancellationToken.None);
+
+        _resourceRepository.Verify(
+            r => r.GetByIdsAsync(It.Is<IReadOnlyList<Guid>>(ids => ids.Count == 2 && ids.Contains(resourceId1) && ids.Contains(resourceId2)), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    // Required scenario 7: display-only additions (TimeZoneId) must never alter what's actually stored/
+    // exchanged for a booking's own start/end instants.
+    [Fact]
+    public async Task Handle_NeverAltersStartUtcOrEndUtc_RegardlessOfResourceTimeZone()
+    {
+        var resourceId = Guid.NewGuid();
+        var startUtc = DateTimeOffset.Parse("2026-07-15T08:15:00Z");
+        var endUtc = DateTimeOffset.Parse("2026-07-15T09:15:00Z");
+        var booking = new Booking
+        {
+            Id = Guid.NewGuid(), TenantId = Guid.NewGuid(), ResourceId = resourceId, UserId = UserId,
+            StartUtc = startUtc, EndUtc = endUtc, Quantity = 1, Status = BookingStatus.Confirmed, CreatedAtUtc = DateTimeOffset.UtcNow,
+        };
+        _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
+        _bookingRepository
+            .Setup(r => r.GetOwnBookingsAsync(UserId, null, null, null, 1, 20, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedResult<Booking>([booking], 1, 20, 1));
+        _resourceRepository
+            .Setup(r => r.GetByIdsAsync(It.IsAny<IReadOnlyList<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([CreateResource(resourceId, "Asia/Tokyo")]);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new GetOwnBookingsQueryRequest(), CancellationToken.None);
+
+        var item = Assert.Single(result.Items);
+        Assert.Equal(startUtc, item.StartUtc);
+        Assert.Equal(endUtc, item.EndUtc);
     }
 }

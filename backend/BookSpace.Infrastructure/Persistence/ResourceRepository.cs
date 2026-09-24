@@ -51,6 +51,9 @@ internal sealed class ResourceRepository(BookSpaceDbContext dbContext) : IResour
         return new PagedResult<Resource>(items, page, pageSize, totalCount);
     }
 
+    public async Task<IReadOnlyList<Resource>> GetByIdsAsync(IReadOnlyList<Guid> ids, CancellationToken cancellationToken) =>
+        await dbContext.Resources.Where(resource => ids.Contains(resource.Id)).ToListAsync(cancellationToken);
+
     public async Task AddAsync(Resource resource, CancellationToken cancellationToken) =>
         await dbContext.Resources.AddAsync(resource, cancellationToken);
 

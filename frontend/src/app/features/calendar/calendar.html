@@ -77,7 +77,10 @@
           <h2>{{ resourceNameFor(booking.resourceId) }}</h2>
           <span [class]="statusPillClass(booking.status)">{{ statusLabel(booking.status) }}</span>
         </div>
-        <p class="dialog__summary">{{ formatDetailRange(booking) }}</p>
+        <p class="dialog__summary">{{ formatDetailRange(booking).first.text }}</p>
+        @if (formatDetailRange(booking).second; as resourceTime) {
+          <p class="field-hint">Resource's local time: {{ resourceTime.text }} &middot; {{ resourceTime.zoneId }}</p>
+        }
         @if (booking.quantity > 1) {
           <p class="field-hint">Quantity {{ booking.quantity }}</p>
         }

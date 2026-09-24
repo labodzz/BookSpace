@@ -1,5 +1,6 @@
 using BookSpace.Application.Common;
 using BookSpace.Application.Mediator;
+using BookSpace.Application.Resources;
 using BookSpace.Application.Security;
 using BookSpace.Domain.Enums;
 using FluentValidation;
@@ -20,9 +21,12 @@ public sealed record GetOwnBookingsQueryRequest(
 // was administratively cancelled" apart. SeriesId is surfaced (unlike other Booking fields we don't
 // expose) because this same query already accepts SeriesId as a filter, so the concept is already public
 // API surface - the client needs it back to tell which bookings belong to the same recurring series.
+// TimeZoneId is the booking's resource's own IANA zone (as of now, not a snapshot from booking time) -
+// lets the client show the booking's local time at the resource alongside the viewer's own local time,
+// without a separate per-booking resource lookup. See GetOwnBookingsQueryHandler for how it's populated.
 public sealed record GetOwnBookingsResponseItem(
     Guid Id, Guid ResourceId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, int Quantity, BookingStatus Status,
-    DateTimeOffset? CancelledAtUtc, bool CancelledByAdmin, string? CancellationReason, Guid? SeriesId);
+    DateTimeOffset? CancelledAtUtc, bool CancelledByAdmin, string? CancellationReason, Guid? SeriesId, string TimeZoneId);
 
 public sealed class GetOwnBookingsQueryRequestValidator : AbstractValidator<GetOwnBookingsQueryRequest>
 {
@@ -40,7 +44,8 @@ public sealed class GetOwnBookingsQueryRequestValidator : AbstractValidator<GetO
 // Deliberately has no ResourceId/TenantId/UserId parameter to accept from the client - the owner is
 // always the caller (ICurrentUserContext.UserId), never client-supplied, so a member can only ever list
 // their own bookings.
-public sealed class GetOwnBookingsQueryHandler(IBookingRepository bookingRepository, ICurrentUserContext currentUserContext)
+public sealed class GetOwnBookingsQueryHandler(
+    IBookingRepository bookingRepository, IResourceRepository resourceRepository, ICurrentUserContext currentUserContext)
     : IRequestHandler<GetOwnBookingsQueryRequest, PagedResult<GetOwnBookingsResponseItem>>
 {
     public async Task<PagedResult<GetOwnBookingsResponseItem>> Handle(GetOwnBookingsQueryRequest request, CancellationToken cancellationToken)
@@ -48,11 +53,19 @@ public sealed class GetOwnBookingsQueryHandler(IBookingRepository bookingReposit
         var paged = await bookingRepository.GetOwnBookingsAsync(
             currentUserContext.UserId!.Value, request.SeriesId, request.FromUtc, request.ToUtc, request.Page, request.PageSize, cancellationToken);
 
+        // Batched once per page, not once per booking - see IResourceRepository.GetByIdsAsync's own
+        // comment. Bounded by the distinct resource count on this one page, never by the page size.
+        var resourceIds = paged.Items.Select(booking => booking.ResourceId).Distinct().ToList();
+        var resources = resourceIds.Count == 0
+            ? []
+            : await resourceRepository.GetByIdsAsync(resourceIds, cancellationToken) ?? [];
+        var timeZoneByResourceId = resources.ToDictionary(resource => resource.Id, resource => resource.TimeZoneId);
+
         return new PagedResult<GetOwnBookingsResponseItem>(
             paged.Items.Select(booking => new GetOwnBookingsResponseItem(
                 booking.Id, booking.ResourceId, booking.StartUtc, booking.EndUtc, booking.Quantity, booking.Status,
                 booking.CancelledAtUtc, booking.CancelledByUserId is { } cancelledByUserId && cancelledByUserId != booking.UserId,
-                booking.CancellationReason, booking.SeriesId)).ToList(),
+                booking.CancellationReason, booking.SeriesId, timeZoneByResourceId.GetValueOrDefault(booking.ResourceId, string.Empty))).ToList(),
             paged.Page,
             paged.PageSize,
             paged.TotalCount);

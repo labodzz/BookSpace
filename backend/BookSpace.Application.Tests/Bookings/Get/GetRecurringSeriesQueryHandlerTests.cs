@@ -49,6 +49,21 @@ public sealed class GetRecurringSeriesQueryHandlerTests
         Assert.Equal(occurrence.Id, occurrenceResponse.Id);
     }
 
+    [Fact]
+    public async Task Handle_MapsTheSeriesOwnTimeZoneIdSnapshot()
+    {
+        var series = CreateSeries(UserId);
+        series.TimeZoneId = "Europe/Sarajevo";
+        _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
+        _recurringSeriesRepository.Setup(r => r.FindByIdAsync(series.Id, It.IsAny<CancellationToken>())).ReturnsAsync(series);
+        _bookingRepository.Setup(r => r.GetBySeriesIdAsync(series.Id, It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new GetRecurringSeriesQueryRequest(series.Id), CancellationToken.None);
+
+        Assert.Equal("Europe/Sarajevo", result.TimeZoneId);
+    }
+
     // OrderBy(StartUtc) was previously unproven - every other test uses exactly one occurrence.
     [Fact]
     public async Task Handle_WithMultipleOccurrences_OrdersThemByStartUtc()

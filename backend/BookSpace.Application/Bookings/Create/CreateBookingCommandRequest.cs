@@ -11,8 +11,10 @@ namespace BookSpace.Application.Bookings;
 public sealed record CreateBookingCommandRequest(Guid ResourceId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, int Quantity = 1)
     : IRequest<CreateBookingResponse>;
 
+// TimeZoneId is the resource's own IANA zone, included so the client can show the new booking's local
+// time at the resource without a follow-up resource lookup.
 public sealed record CreateBookingResponse(
-    Guid Id, Guid ResourceId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, int Quantity, BookingStatus Status);
+    Guid Id, Guid ResourceId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, int Quantity, BookingStatus Status, string TimeZoneId);
 
 public sealed class CreateBookingCommandRequestValidator : AbstractValidator<CreateBookingCommandRequest>
 {
@@ -113,6 +115,6 @@ public sealed class CreateBookingCommandHandler(
 
         await bookingRepository.SaveChangesAsync(cancellationToken);
 
-        return new CreateBookingResponse(booking.Id, booking.ResourceId, booking.StartUtc, booking.EndUtc, booking.Quantity, booking.Status);
+        return new CreateBookingResponse(booking.Id, booking.ResourceId, booking.StartUtc, booking.EndUtc, booking.Quantity, booking.Status, resource.TimeZoneId);
     }
 }

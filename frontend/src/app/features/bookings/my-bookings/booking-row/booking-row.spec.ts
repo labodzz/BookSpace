@@ -14,6 +14,7 @@ function wireBooking(overrides: Partial<OwnBooking> = {}): OwnBooking {
     cancelledByAdmin: false,
     cancellationReason: null,
     seriesId: null,
+    timeZoneId: 'UTC',
     ...overrides,
   };
 }
@@ -77,5 +78,42 @@ describe('BookingRowComponent', () => {
 
     expect(root().textContent).toContain('Cancelled');
     expect(root().textContent).toContain('Plans changed');
+  });
+
+  // Required scenario 5: this row must show the resource's own local time as primary, with the viewer's
+  // local time as a secondary line only when the two actually differ. The Intl mock must be installed
+  // BEFORE TestBed.createComponent runs (viewerZoneId is captured once, at construction) - configure()
+  // above already does that unconditionally, so these live in their own describe with their own mocking.
+  describe('dual timezone display', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it("shows the resource's own local time as primary, and the viewer's local time as a secondary line when the zones differ", () => {
+      vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({ timeZone: 'Asia/Tokyo' } as Intl.ResolvedDateTimeFormatOptions);
+      configure({
+        booking: wireBooking({ startUtc: '2026-07-15T08:15:00Z', endUtc: '2026-07-15T09:15:00Z', timeZoneId: 'Europe/Sarajevo' }),
+      });
+
+      const primary = root().querySelector('.booking-row__time')!;
+      const secondary = root().querySelector('.booking-row__time-secondary')!;
+      expect(primary.textContent).toContain('Jul 15');
+      expect(primary.textContent).toContain('10:15');
+      expect(primary.textContent).toContain('11:15');
+      expect(primary.textContent).toContain('Europe/Sarajevo');
+      expect(secondary.textContent).toContain('17:15');
+      expect(secondary.textContent).toContain('18:15');
+      expect(secondary.textContent).toContain('Asia/Tokyo');
+    });
+
+    it('shows only one time when the booking timezone matches the viewer zone', () => {
+      vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({ timeZone: 'Europe/Sarajevo' } as Intl.ResolvedDateTimeFormatOptions);
+      configure({
+        booking: wireBooking({ startUtc: '2026-07-15T08:15:00Z', endUtc: '2026-07-15T09:15:00Z', timeZoneId: 'Europe/Sarajevo' }),
+      });
+
+      expect(root().querySelector('.booking-row__time-secondary')).toBeNull();
+      const primary = root().querySelector('.booking-row__time')!;
+      expect(primary.textContent).toContain('10:15');
+      expect(primary.textContent).toContain('11:15');
+    });
   });
 });

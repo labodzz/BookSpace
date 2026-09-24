@@ -13,12 +13,13 @@ public sealed class GetPendingApprovalsQueryHandlerTests
     private readonly Mock<IBookingRepository> _bookingRepository = new();
     private readonly Mock<IApprovalRequestRepository> _approvalRequestRepository = new();
     private readonly Mock<IResourceApproverRepository> _resourceApproverRepository = new();
+    private readonly Mock<IResourceRepository> _resourceRepository = new();
     private readonly Mock<ICurrentUserContext> _currentUserContext = new();
 
     private static readonly Guid UserId = Guid.NewGuid();
 
     private GetPendingApprovalsQueryHandler CreateSut() =>
-        new(_bookingRepository.Object, _approvalRequestRepository.Object, _resourceApproverRepository.Object, _currentUserContext.Object);
+        new(_bookingRepository.Object, _approvalRequestRepository.Object, _resourceApproverRepository.Object, _resourceRepository.Object, _currentUserContext.Object);
 
     private static Booking CreatePendingBooking(Guid resourceId) => new()
     {
@@ -26,6 +27,17 @@ public sealed class GetPendingApprovalsQueryHandlerTests
         StartUtc = DateTimeOffset.UtcNow.AddHours(1), EndUtc = DateTimeOffset.UtcNow.AddHours(2),
         Quantity = 1, Status = BookingStatus.Pending, CreatedAtUtc = DateTimeOffset.UtcNow,
     };
+
+    private static Resource CreateResource(Guid id, string timeZoneId) => new()
+    {
+        Id = id, TenantId = Guid.NewGuid(), ResourceTypeId = Guid.NewGuid(), Name = "Falcon Room",
+        Capacity = 4, Status = ResourceStatus.Active, TimeZoneId = timeZoneId,
+    };
+
+    // Every existing test in this file sets up bookings/approval requests without ever stubbing
+    // _resourceRepository.GetByIdsAsync - an unconfigured Moq mock resolves that to null, not an empty
+    // list, which is exactly why the handler treats a null GetByIdsAsync result the same as "no resources
+    // found" (see its own `?? []`) rather than assuming Moq (or any other caller) always supplies one.
 
     [Fact]
     public async Task Handle_AsPlainApprover_ScopesToOnlyTheResourcesTheyApproveFor()
@@ -129,5 +141,27 @@ public sealed class GetPendingApprovalsQueryHandlerTests
         Assert.Empty(result);
         _approvalRequestRepository.Verify(
             r => r.GetByBookingIdsAsync(It.IsAny<IReadOnlyList<Guid>>(), It.IsAny<CancellationToken>()), Times.Never);
+        _resourceRepository.Verify(r => r.GetByIdsAsync(It.IsAny<IReadOnlyList<Guid>>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Handle_MapsTimeZoneId_FromABatchedResourceLookup()
+    {
+        var resourceId = Guid.NewGuid();
+        _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
+        _currentUserContext.SetupGet(c => c.Roles).Returns(["TenantAdmin"]);
+        var booking = CreatePendingBooking(resourceId);
+        _bookingRepository.Setup(r => r.GetPendingApprovalAsync(null, It.IsAny<CancellationToken>())).ReturnsAsync([booking]);
+        _approvalRequestRepository
+            .Setup(r => r.GetByBookingIdsAsync(It.IsAny<IReadOnlyList<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        _resourceRepository
+            .Setup(r => r.GetByIdsAsync(It.Is<IReadOnlyList<Guid>>(ids => ids.Count == 1 && ids[0] == resourceId), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([CreateResource(resourceId, "Europe/Sarajevo")]);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new GetPendingApprovalsQueryRequest(), CancellationToken.None);
+
+        Assert.Equal("Europe/Sarajevo", Assert.Single(result).TimeZoneId);
     }
 }

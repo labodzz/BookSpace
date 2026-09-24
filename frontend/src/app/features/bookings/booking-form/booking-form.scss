@@ -137,6 +137,13 @@
   max-width: 160px;
 }
 
+.booking-form__confirmation-range {
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-alt);
+  font-weight: 600;
+}
+
 .booking-form__actions {
   display: flex;
   justify-content: flex-end;

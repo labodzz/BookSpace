@@ -104,3 +104,85 @@ describe('RecurringBookingFormComponent', () => {
     expect(root.textContent).toContain('Recurring booking created');
   });
 });
+
+// A separate top-level describe (not nested above) because the viewer's zone is captured once, at
+// component construction (`viewerZoneId = detectViewerTimeZone()`) - the Intl mock must be in place
+// BEFORE TestBed.createComponent runs, which the shared setup() above already does unconditionally.
+describe('RecurringBookingFormComponent - dual timezone display', () => {
+  let fixture: ComponentFixture<RecurringBookingFormComponent>;
+  let httpTesting: HttpTestingController;
+
+  function setup(): void {
+    TestBed.configureTestingModule({
+      imports: [RecurringBookingFormComponent],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        provideRouter([]),
+        { provide: ActivatedRoute, useValue: { snapshot: { queryParamMap: convertToParamMap({ resourceId: 'resource-1' }) } } },
+      ],
+    });
+    httpTesting = TestBed.inject(HttpTestingController);
+    fixture = TestBed.createComponent(RecurringBookingFormComponent);
+  }
+
+  function flushResource(timeZoneId: string): void {
+    httpTesting.expectOne((r) => r.url === RESOURCE_URL).flush({
+      id: 'resource-1', resourceTypeId: 'type-1', name: 'Falcon Room', description: null,
+      capacity: 4, requiresApproval: false, status: 0, timeZoneId,
+    });
+  }
+
+  function submitAndFlush(timeZoneId: string): void {
+    const root = fixture.nativeElement as HTMLElement;
+    // A future date - the component rejects any start date before "today" on the real system clock.
+    setInputValue(root.querySelector('#start-date')!, '2027-07-15');
+    setInputValue(root.querySelector('#r-start-time')!, '10:15');
+    setInputValue(root.querySelector('#r-end-time')!, '11:15');
+    root.querySelector('form')!.dispatchEvent(new Event('submit'));
+
+    httpTesting.expectOne((r) => r.url === SERIES_URL).flush({
+      seriesId: 'series-1',
+      resourceId: 'resource-1',
+      requestedOccurrenceCount: 1,
+      createdOccurrences: [{ id: 'occurrence-1', startUtc: '2027-07-15T08:15:00Z', endUtc: '2027-07-15T09:15:00Z', status: 1 }],
+      conflicts: [],
+      timeZoneId,
+    });
+    fixture.detectChanges();
+  }
+
+  afterEach(() => {
+    httpTesting.verify();
+    vi.restoreAllMocks();
+  });
+
+  it("shows each created occurrence's resource-local time as primary, and the viewer's local time as a secondary line when the zones differ", () => {
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({ timeZone: 'Asia/Tokyo' } as Intl.ResolvedDateTimeFormatOptions);
+    setup();
+    flushResource('Europe/Sarajevo');
+    fixture.detectChanges();
+    submitAndFlush('Europe/Sarajevo');
+
+    const root = fixture.nativeElement as HTMLElement;
+    const occurrence = root.querySelector('.recurring-form__occurrence-time')!;
+    expect(occurrence.textContent).toContain('10:15');
+    expect(occurrence.textContent).toContain('Europe/Sarajevo');
+    expect(occurrence.textContent).toContain('Your local time');
+    expect(occurrence.textContent).toContain('17:15');
+    expect(occurrence.textContent).toContain('Asia/Tokyo');
+  });
+
+  it('shows only one time per occurrence when the resource zone matches the viewer zone', () => {
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({ timeZone: 'Europe/Sarajevo' } as Intl.ResolvedDateTimeFormatOptions);
+    setup();
+    flushResource('Europe/Sarajevo');
+    fixture.detectChanges();
+    submitAndFlush('Europe/Sarajevo');
+
+    const root = fixture.nativeElement as HTMLElement;
+    const occurrence = root.querySelector('.recurring-form__occurrence-time')!;
+    expect(occurrence.textContent).toContain('10:15');
+    expect(occurrence.textContent).not.toContain('Your local time');
+  });
+});

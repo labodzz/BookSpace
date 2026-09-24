@@ -55,7 +55,10 @@
             <ul class="approval-series__occurrences">
               @for (approval of group.items; track approval.bookingId) {
                 <li class="approval-occurrence">
-                  <span class="approval-occurrence__time">{{ formatRange(approval.startUtc, approval.endUtc) }}</span>
+                  <span class="approval-occurrence__time">{{ range(approval).first.text }} &middot; {{ approval.timeZoneId }}</span>
+                  @if (range(approval).second; as viewerTime) {
+                    <span class="approval-occurrence__time-secondary field-hint">Your local time: {{ viewerTime.text }} &middot; {{ viewerTime.zoneId }}</span>
+                  }
                   @if (rowErrors()[approval.bookingId]) {
                     <span class="field-error-text">{{ rowErrors()[approval.bookingId] }}</span>
                   }
@@ -86,7 +89,10 @@
             <div class="card approval-row">
               <div class="approval-row__main">
                 <p class="approval-row__title">{{ resourceNameFor(approval.resourceId) }}</p>
-                <p class="approval-row__time">{{ formatRange(approval.startUtc, approval.endUtc) }}</p>
+                <p class="approval-row__time">{{ range(approval).first.text }} &middot; {{ approval.timeZoneId }}</p>
+                @if (range(approval).second; as viewerTime) {
+                  <p class="approval-row__time-secondary field-hint">Your local time: {{ viewerTime.text }} &middot; {{ viewerTime.zoneId }}</p>
+                }
                 <p class="approval-row__meta">
                   Requested by user {{ approval.userId.slice(0, 8) }} &middot; Quantity {{ approval.quantity }} &middot;
                   {{ formatExpiry(approval.expiresAtUtc) }}

@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { DateTime } from 'luxon';
 import { ApiError, toApiError } from '../../../core/http/api-error';
+import { DualZoneRange, detectViewerTimeZone, formatDualZoneRange } from '../../bookings/local-time.util';
 import { BlackoutWindow, BookableSlot, ResourceAvailability, ResourceSummary } from '../resource.models';
 import { ResourceService } from '../resource.service';
 import { resolveLuxonZone } from '../timezone.util';
@@ -52,6 +53,8 @@ export class ResourceAvailabilityComponent {
 
   protected readonly fromDate = signal('');
   protected readonly toDate = signal('');
+
+  protected readonly viewerZoneId = detectViewerTimeZone();
 
   constructor() {
     this.loadResource();
@@ -106,18 +109,18 @@ export class ResourceAvailabilityComponent {
     return date.toFormat('cccc, LLL d');
   }
 
-  protected formatSlotTime(slot: BookableSlot, zone: string): string {
-    const resolvedZone = resolveLuxonZone(zone);
-    const start = DateTime.fromISO(slot.startUtc, { zone: 'utc' }).setZone(resolvedZone);
-    const end = DateTime.fromISO(slot.endUtc, { zone: 'utc' }).setZone(resolvedZone);
-    return `${start.toFormat('HH:mm')}–${end.toFormat('HH:mm')}`;
+  // Resource-local time is primary (this whole page is about one resource's own open hours), the
+  // viewer's own local time is a secondary line shown only when it differs (see local-time.util.ts).
+  // No alwaysShowDate here, unlike My Bookings/the approval queue: each slot/blackout already renders
+  // under its own day heading (formatDayHeading), so a bare "HH:mm–HH:mm" is never ambiguous - UNLESS the
+  // conversion itself crosses midnight or the two zones disagree on the date, which formatDualZoneRange
+  // still catches on its own.
+  protected slotRange(slot: BookableSlot, zone: string): DualZoneRange {
+    return formatDualZoneRange(slot.startUtc, slot.endUtc, zone, this.viewerZoneId);
   }
 
-  protected formatBlackoutTime(blackout: BlackoutWindow, zone: string): string {
-    const resolvedZone = resolveLuxonZone(zone);
-    const start = DateTime.fromISO(blackout.startUtc, { zone: 'utc' }).setZone(resolvedZone);
-    const end = DateTime.fromISO(blackout.endUtc, { zone: 'utc' }).setZone(resolvedZone);
-    return `${start.toFormat('HH:mm')}–${end.toFormat('HH:mm')}`;
+  protected blackoutRange(blackout: BlackoutWindow, zone: string): DualZoneRange {
+    return formatDualZoneRange(blackout.startUtc, blackout.endUtc, zone, this.viewerZoneId);
   }
 
   private load(): void {

@@ -22,6 +22,7 @@ function bookingsPage(count: number, startIndex: number, seriesId: string | null
     cancelledByAdmin: false,
     cancellationReason: null,
     seriesId,
+    timeZoneId: 'UTC',
   }));
 }
 

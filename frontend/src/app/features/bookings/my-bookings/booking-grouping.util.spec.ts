@@ -12,6 +12,7 @@ function booking(overrides: Partial<OwnBooking> & Pick<OwnBooking, 'id'>): OwnBo
     cancelledByAdmin: false,
     cancellationReason: null,
     seriesId: null,
+    timeZoneId: 'UTC',
     ...overrides,
   };
 }

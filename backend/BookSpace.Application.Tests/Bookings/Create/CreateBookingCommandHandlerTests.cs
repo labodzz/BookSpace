@@ -85,6 +85,19 @@ public sealed class CreateBookingCommandHandlerTests
     }
 
     [Fact]
+    public async Task Handle_WithAvailableSlot_IncludesTheResourcesOwnTimeZoneIdInTheResponse()
+    {
+        var resource = CreateResource();
+        resource.TimeZoneId = "Europe/Sarajevo";
+        SetupResource(resource, OpenAllDay(resource));
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new CreateBookingCommandRequest(resource.Id, At(10), At(11), Quantity: 1), CancellationToken.None);
+
+        Assert.Equal("Europe/Sarajevo", result.TimeZoneId);
+    }
+
+    [Fact]
     public async Task Handle_WithUnknownResource_ThrowsNotFoundException()
     {
         _currentUserContext.SetupGet(c => c.TenantId).Returns(TenantId);

@@ -218,12 +218,18 @@ describe('BookingFormComponent', () => {
     setup({ resourceId: 'resource-1' });
     const root = loadResourceAndInitialAvailability({ timeZoneId: 'America/New_York' });
     fillValidFutureBooking(root);
+    fixture.detectChanges();
+
+    // The confirmation preview is purely additive display - it must never change what's actually
+    // submitted (required scenario 7's frontend half).
+    expect(root.querySelector('.booking-form__confirmation-range')!.textContent).toContain('10:00–11:00');
+
     root.querySelector('form')!.dispatchEvent(new Event('submit'));
 
     // 2026-12-20 is standard time in America/New_York (EST, -05:00) - 10:00 local is 15:00 UTC.
     const req = httpTesting.expectOne((r) => r.url === BOOKINGS_URL);
     expect(req.request.body.startUtc).toBe('2026-12-20T15:00:00.000Z');
-    req.flush({ id: 'booking-1', resourceId: 'resource-1', startUtc: req.request.body.startUtc, endUtc: req.request.body.endUtc, quantity: 1, status: 1 });
+    req.flush({ id: 'booking-1', resourceId: 'resource-1', startUtc: req.request.body.startUtc, endUtc: req.request.body.endUtc, quantity: 1, status: 1, timeZoneId: 'America/New_York' });
   });
 
   // An unrecognized/unmapped timeZoneId falls back to the viewer's own local zone (resolveLuxonZone) -
@@ -496,5 +502,110 @@ describe('BookingFormComponent', () => {
       expect((root.querySelector('#start-time') as HTMLInputElement).value).toBe('10:00');
       expect(root.textContent).toContain("This time is outside the resource's availability.");
     });
+  });
+});
+
+// A separate top-level describe (not nested above) because the viewer's zone is captured once, at
+// component construction (`viewerZoneId = detectViewerTimeZone()`) - the Intl mock must be in place
+// BEFORE TestBed.createComponent runs, which the shared `setup()` above already does unconditionally.
+describe('BookingFormComponent - dual timezone display', () => {
+  let fixture: ComponentFixture<BookingFormComponent>;
+  let httpTesting: HttpTestingController;
+
+  function setup(): void {
+    TestBed.configureTestingModule({
+      imports: [BookingFormComponent],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        provideRouter([]),
+        { provide: ActivatedRoute, useValue: { snapshot: { queryParamMap: convertToParamMap({ resourceId: 'resource-1' }) } } },
+      ],
+    });
+    httpTesting = TestBed.inject(HttpTestingController);
+    fixture = TestBed.createComponent(BookingFormComponent);
+  }
+
+  function flushResource(timeZoneId: string): void {
+    httpTesting.expectOne((r) => r.url === RESOURCE_URL).flush({
+      id: 'resource-1', resourceTypeId: 'type-1', name: 'Falcon Room', description: null,
+      capacity: 4, requiresApproval: false, status: 0, timeZoneId,
+    });
+  }
+
+  // A huge, permissive window (year 2000 to year 2100) - these tests only care about the confirmation
+  // preview's dual-zone text, not availability edge cases. Every date change (the initial one from
+  // prefill(), and every one setInputValue('#date', ...) triggers below) fires its own fresh request -
+  // see booking-form.ts's own constructor pipeline.
+  function flushAvailability(timeZoneId: string): void {
+    const req = httpTesting.expectOne((r) => r.url === AVAILABILITY_URL);
+    const from = req.request.params.get('from')!;
+    req.flush({
+      resourceId: 'resource-1',
+      fromDate: from,
+      toDate: from,
+      timeZoneId,
+      capacity: 4,
+      openPeriods: [{ startUtc: '2000-01-01T00:00:00Z', endUtc: '2100-01-01T00:00:00Z' }],
+      blackouts: [],
+      busyPeriods: [],
+      bookableSlots: [],
+    });
+  }
+
+  function loadResourceAndInitialAvailability(timeZoneId: string): HTMLElement {
+    flushResource(timeZoneId);
+    fixture.detectChanges();
+    flushAvailability(timeZoneId); // prefill() already set today's date, firing the constructor's own fetch
+    fixture.detectChanges();
+    return fixture.nativeElement as HTMLElement;
+  }
+
+  afterEach(() => {
+    httpTesting.verify();
+    vi.restoreAllMocks();
+  });
+
+  it("shows the resource-local time as primary, and the viewer's local time as a secondary line when the zones differ", () => {
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({ timeZone: 'Asia/Tokyo' } as Intl.ResolvedDateTimeFormatOptions);
+    setup();
+    const root = loadResourceAndInitialAvailability('Europe/Sarajevo');
+
+    setInputValue(root.querySelector('#date')!, '2026-07-15');
+    fixture.detectChanges();
+    flushAvailability('Europe/Sarajevo');
+    setInputValue(root.querySelector('#start-time')!, '10:15');
+    setInputValue(root.querySelector('#end-time')!, '11:15');
+    fixture.detectChanges();
+
+    const range = root.querySelector('.booking-form__confirmation-range')!;
+    expect(range.textContent).toContain('10:15–11:15');
+    expect(range.textContent).toContain('Europe/Sarajevo');
+    expect(range.textContent).toContain('Your local time: 17:15–18:15');
+    expect(range.textContent).toContain('Asia/Tokyo');
+  });
+
+  it('shows only one time when the resource zone matches the viewer zone', () => {
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({ timeZone: 'Europe/Sarajevo' } as Intl.ResolvedDateTimeFormatOptions);
+    setup();
+    const root = loadResourceAndInitialAvailability('Europe/Sarajevo');
+
+    setInputValue(root.querySelector('#date')!, '2026-07-15');
+    fixture.detectChanges();
+    flushAvailability('Europe/Sarajevo');
+    setInputValue(root.querySelector('#start-time')!, '10:15');
+    setInputValue(root.querySelector('#end-time')!, '11:15');
+    fixture.detectChanges();
+
+    const range = root.querySelector('.booking-form__confirmation-range')!;
+    expect(range.textContent).toContain('10:15–11:15');
+    expect(range.textContent).not.toContain('Your local time');
+  });
+
+  it('shows no confirmation preview until the date and both times are filled in', () => {
+    setup();
+    const root = loadResourceAndInitialAvailability('UTC');
+
+    expect(root.querySelector('.booking-form__confirmation-range')).toBeNull();
   });
 });

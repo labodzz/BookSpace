@@ -30,6 +30,22 @@
       {{ result.createdOccurrences.length && result.createdOccurrences[0].status === 'Pending' ? '(awaiting approval)' : '' }}.
     </p>
 
+    @if (result.createdOccurrences.length) {
+      <ul class="recurring-form__occurrences">
+        @for (occurrence of result.createdOccurrences; track occurrence.id) {
+          <li class="recurring-form__occurrence">
+            <span class="recurring-form__occurrence-time">
+              {{ occurrenceRange(occurrence).first.text }} &middot; {{ result.timeZoneId }}
+              @if (occurrenceRange(occurrence).second; as viewerTime) {
+                <span class="field-hint">Your local time: {{ viewerTime.text }} &middot; {{ viewerTime.zoneId }}</span>
+              }
+            </span>
+            <span [class]="statusPillClass(occurrence.status)">{{ statusLabel(occurrence.status) }}</span>
+          </li>
+        }
+      </ul>
+    }
+
     @if (result.conflicts.length) {
       <div class="recurring-form__conflicts">
         <p class="field-hint">{{ result.conflicts.length }} occurrence(s) could not be booked:</p>
