@@ -1,5 +1,6 @@
 using BookSpace.Application.Common;
 using BookSpace.Application.Mediator;
+using BookSpace.Application.Security;
 using BookSpace.Domain.Enums;
 using FluentValidation;
 
@@ -27,13 +28,21 @@ public sealed class GetResourcesQueryRequestValidator : AbstractValidator<GetRes
     }
 }
 
-public sealed class GetResourcesQueryHandler(IResourceRepository resourceRepository)
+public sealed class GetResourcesQueryHandler(IResourceRepository resourceRepository, ICurrentUserContext currentUserContext)
     : IRequestHandler<GetResourcesQueryRequest, PagedResult<GetResourcesResponseItem>>
 {
     public async Task<PagedResult<GetResourcesResponseItem>> Handle(GetResourcesQueryRequest request, CancellationToken cancellationToken)
     {
+        // A plain Member/Approver browsing the standard resource list should only ever see resources they
+        // can actually act on - an Inactive/Maintenance/Archived resource isn't bookable, so surfacing it
+        // (or letting a client force it via ?status=) would be confusing noise, not useful information.
+        // TenantAdmin/SysAdmin manage the full lifecycle (including setting a new resource up before it's
+        // Active), so they keep seeing - and can explicitly filter to - every status, unchanged.
+        var isPrivileged = currentUserContext.Roles.Contains("TenantAdmin") || currentUserContext.Roles.Contains("SysAdmin");
+        var status = isPrivileged ? request.Status : ResourceStatus.Active;
+
         var paged = await resourceRepository.GetPagedAsync(
-            request.Page, request.PageSize, request.ResourceTypeId, request.Status, cancellationToken);
+            request.Page, request.PageSize, request.ResourceTypeId, status, cancellationToken);
 
         return new PagedResult<GetResourcesResponseItem>(
             paged.Items.Select(resource => new GetResourcesResponseItem(

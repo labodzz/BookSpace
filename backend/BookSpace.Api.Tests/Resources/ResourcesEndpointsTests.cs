@@ -34,7 +34,68 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<ResourceResponse>(JsonOptions);
         Assert.Equal(4, body!.Capacity);
-        Assert.Equal(ResourceStatus.Active, body.Status);
+        // A brand-new resource starts Inactive, never Active - it has no AvailabilityRule yet, so it
+        // can't yet be activated (see UpdateResourceCommandHandler's Resource.AvailabilityRuleRequired
+        // check, covered end-to-end by CreateResourceThenActivate_WithoutAndThenWithAnAvailabilityRule
+        // below).
+        Assert.Equal(ResourceStatus.Inactive, body.Status);
+    }
+
+    // End-to-end proof of the activation invariant (Resource.AvailabilityRuleRequired): a brand-new
+    // resource cannot be activated until it has at least one AvailabilityRule, and activation succeeds
+    // once one exists - covers both halves over the real HTTP pipeline, not just the mocked unit tests
+    // in BookSpace.Application.Tests.
+    [Fact]
+    public async Task CreateResourceThenActivate_WithoutAndThenWithAnAvailabilityRule_FailsThenSucceeds()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resourceName = $"Activation Flow Room {Guid.NewGuid()}";
+        var resource = await CreateResourceAsync(client, resourceName);
+
+        var activateWithNoRules = await client.PutAsJsonAsync($"/resources/{resource.Id}", new
+        {
+            resourceTypeId = TestDataSeeder.ResourceTypeId, name = resourceName, capacity = 4,
+            requiresApproval = false, timeZoneId = "UTC", status = ResourceStatus.Active,
+        });
+        Assert.Equal(HttpStatusCode.Conflict, activateWithNoRules.StatusCode);
+        Assert.Equal("Resource.AvailabilityRuleRequired", await ReadErrorCodeAsync(activateWithNoRules));
+
+        var addRuleResponse = await client.PostAsJsonAsync($"/resources/{resource.Id}/availability-rules",
+            new { dayOfWeek = DayOfWeek.Monday, startTime = "09:00:00", endTime = "17:00:00" });
+        Assert.Equal(HttpStatusCode.Created, addRuleResponse.StatusCode);
+
+        var activateWithRule = await client.PutAsJsonAsync($"/resources/{resource.Id}", new
+        {
+            resourceTypeId = TestDataSeeder.ResourceTypeId, name = resourceName, capacity = 4,
+            requiresApproval = false, timeZoneId = "UTC", status = ResourceStatus.Active,
+        });
+        Assert.Equal(HttpStatusCode.OK, activateWithRule.StatusCode);
+        var activated = await activateWithRule.Content.ReadFromJsonAsync<ResourceResponse>(JsonOptions);
+        Assert.Equal(ResourceStatus.Active, activated!.Status);
+    }
+
+    // Removing the last availability rule of an Active resource must be rejected - an Active resource
+    // with zero open hours is exactly the state the activation invariant above exists to prevent from
+    // ever being reached, from either direction.
+    [Fact]
+    public async Task DeleteAvailabilityRule_TheLastOneOnAnActiveResource_ReturnsConflict()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resourceName = $"Last Rule Room {Guid.NewGuid()}";
+        var resource = await CreateResourceAsync(client, resourceName);
+        var ruleResponse = await client.PostAsJsonAsync($"/resources/{resource.Id}/availability-rules",
+            new { dayOfWeek = DayOfWeek.Monday, startTime = "09:00:00", endTime = "17:00:00" });
+        var rule = await ruleResponse.Content.ReadFromJsonAsync<AvailabilityRuleResponse>(JsonOptions);
+        await client.PutAsJsonAsync($"/resources/{resource.Id}", new
+        {
+            resourceTypeId = TestDataSeeder.ResourceTypeId, name = resourceName, capacity = 4,
+            requiresApproval = false, timeZoneId = "UTC", status = ResourceStatus.Active,
+        });
+
+        var deleteResponse = await client.DeleteAsync($"/resources/{resource.Id}/availability-rules/{rule!.Id}");
+
+        Assert.Equal(HttpStatusCode.Conflict, deleteResponse.StatusCode);
+        Assert.Equal("Resource.AvailabilityRuleRequired", await ReadErrorCodeAsync(deleteResponse));
     }
 
     // [Authorize(Roles = "TenantAdmin,SysAdmin")] on every mutation in this controller had never
@@ -285,7 +346,9 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
             capacity = 8,
             requiresApproval = false,
             timeZoneId = "UTC",
-            status = ResourceStatus.Active,
+            // Inactive, not Active - this test is about the SysAdmin RBAC path succeeding, not about the
+            // activation invariant, and the freshly-created resource has no AvailabilityRule yet.
+            status = ResourceStatus.Inactive,
         });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);

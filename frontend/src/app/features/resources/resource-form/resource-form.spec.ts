@@ -138,10 +138,12 @@ describe('ResourceFormComponent', () => {
         requiresApproval: false,
         timeZoneId: 'UTC',
       });
-      req.flush(wireResource());
+      // A new resource comes back Inactive (no AvailabilityRule yet) - see CreateResourceCommandHandler.
+      req.flush(wireResource({ status: 1 }));
       fixture.detectChanges();
 
-      expect(router.navigate).toHaveBeenCalledWith(['/resources', 'resource-1']);
+      // Sent straight to setup, not the detail page - see resource-form.ts's create-mode navigation.
+      expect(router.navigate).toHaveBeenCalledWith(['/resources', 'resource-1', 'manage-availability']);
       expect(TestBed.inject(NotificationService).toasts()).toEqual([expect.objectContaining({ message: 'Resource created.' })]);
     });
 

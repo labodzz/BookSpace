@@ -224,6 +224,62 @@ describe('ResourceAvailabilityManageComponent', () => {
     });
   });
 
+  describe('setup checklist and activation (Inactive/Maintenance resource)', () => {
+    it('does not show the setup checklist for an Active resource', () => {
+      configure();
+      flushAll({ status: 0 });
+
+      expect(root().textContent).not.toContain('Finish setting up this resource');
+    });
+
+    it('shows the setup checklist with Activate disabled while there are no rules yet', () => {
+      configure();
+      flushAll({ status: 1 }); // Inactive
+
+      expect(root().textContent).toContain('Finish setting up this resource');
+      expect(root().textContent).toContain('Add at least one availability rule below');
+      expect(buttonWithText('Activate resource').disabled).toBe(true);
+    });
+
+    it('enables Activate once at least one rule exists, and activating switches the resource to Active', () => {
+      configure();
+      flushAll({ status: 1 }, [{ id: 'r1', resourceId: RESOURCE_ID, dayOfWeek: 1, startTime: '09:00:00', endTime: '17:00:00' }]);
+
+      const activateButton = buttonWithText('Activate resource');
+      expect(activateButton.disabled).toBe(false);
+      activateButton.click();
+
+      const req = httpTesting.expectOne((r) => r.url === RESOURCE_URL && r.method === 'PUT');
+      expect(req.request.body).toEqual({
+        resourceTypeId: 'type-1', name: 'Falcon Room', description: null, capacity: 4, requiresApproval: false,
+        timeZoneId: 'America/New_York', status: 0,
+      });
+      req.flush(wireResource({ status: 0 }));
+      fixture.detectChanges();
+
+      expect(root().textContent).toContain('Active');
+      expect(root().textContent).not.toContain('Finish setting up this resource');
+      expect(TestBed.inject(NotificationService).toasts()).toEqual([expect.objectContaining({ message: 'Resource activated.' })]);
+    });
+
+    it('shows an inline error and keeps the checklist visible if activation fails', () => {
+      configure();
+      flushAll({ status: 1 }, [{ id: 'r1', resourceId: RESOURCE_ID, dayOfWeek: 1, startTime: '09:00:00', endTime: '17:00:00' }]);
+
+      buttonWithText('Activate resource').click();
+      httpTesting
+        .expectOne((r) => r.url === RESOURCE_URL && r.method === 'PUT')
+        .flush(
+          { title: 'Conflict', detail: 'Add at least one availability rule before activating this resource.', errorCode: 'Resource.AvailabilityRuleRequired' },
+          { status: 409, statusText: 'Conflict' },
+        );
+      fixture.detectChanges();
+
+      expect(root().textContent).toContain('Add at least one availability rule before activating this resource.');
+      expect(root().textContent).toContain('Finish setting up this resource');
+    });
+  });
+
   describe('blackout periods', () => {
     function openCreateDialog(): void {
       buttonWithText('Add blackout').click();

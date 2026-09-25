@@ -1,5 +1,6 @@
 using BookSpace.Application.Common;
 using BookSpace.Application.Resources;
+using BookSpace.Application.Security;
 using BookSpace.Domain.Entities;
 using BookSpace.Domain.Enums;
 using Moq;
@@ -10,8 +11,17 @@ namespace BookSpace.Application.Tests.Resources;
 public sealed class GetResourcesQueryHandlerTests
 {
     private readonly Mock<IResourceRepository> _resourceRepository = new();
+    private readonly Mock<ICurrentUserContext> _currentUserContext = new();
 
-    private GetResourcesQueryHandler CreateSut() => new(_resourceRepository.Object);
+    public GetResourcesQueryHandlerTests()
+    {
+        // Every existing test in this file predates role-based filtering and exercises the
+        // pass-request-status-through-unchanged path - default to a privileged role so none of them need
+        // to know about it; the tests specifically exercising the new filtering below override this.
+        _currentUserContext.SetupGet(c => c.Roles).Returns(new[] { "TenantAdmin" });
+    }
+
+    private GetResourcesQueryHandler CreateSut() => new(_resourceRepository.Object, _currentUserContext.Object);
 
     [Fact]
     public async Task Handle_MapsPagedResourcesToResponses()
@@ -65,5 +75,54 @@ public sealed class GetResourcesQueryHandlerTests
         Assert.Equal(5, result.PageSize);
         _resourceRepository.Verify(
             r => r.GetPagedAsync(3, 5, resourceTypeId, ResourceStatus.Maintenance, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Theory]
+    [InlineData("Member")]
+    [InlineData("Approver")]
+    public async Task Handle_AsAPlainMemberOrApprover_ForcesTheStatusFilterToActiveRegardlessOfWhatWasRequested(string role)
+    {
+        _currentUserContext.SetupGet(c => c.Roles).Returns(new[] { role });
+        _resourceRepository
+            .Setup(r => r.GetPagedAsync(1, 20, null, ResourceStatus.Active, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedResult<Resource>([], 1, 20, 0));
+        var sut = CreateSut();
+
+        // Requests every Archived resource, hoping to see them - a Member/Approver must never actually get
+        // anything but Active back, no matter what status the client asks for.
+        await sut.Handle(new GetResourcesQueryRequest(Status: ResourceStatus.Archived), CancellationToken.None);
+
+        _resourceRepository.Verify(
+            r => r.GetPagedAsync(1, 20, null, ResourceStatus.Active, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Handle_AsTenantAdmin_PassesTheRequestedStatusThroughUnchanged()
+    {
+        _currentUserContext.SetupGet(c => c.Roles).Returns(new[] { "TenantAdmin" });
+        _resourceRepository
+            .Setup(r => r.GetPagedAsync(1, 20, null, ResourceStatus.Inactive, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedResult<Resource>([], 1, 20, 0));
+        var sut = CreateSut();
+
+        await sut.Handle(new GetResourcesQueryRequest(Status: ResourceStatus.Inactive), CancellationToken.None);
+
+        _resourceRepository.Verify(
+            r => r.GetPagedAsync(1, 20, null, ResourceStatus.Inactive, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Handle_AsSysAdmin_PassesTheRequestedStatusThroughUnchanged()
+    {
+        _currentUserContext.SetupGet(c => c.Roles).Returns(new[] { "SysAdmin" });
+        _resourceRepository
+            .Setup(r => r.GetPagedAsync(1, 20, null, ResourceStatus.Archived, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedResult<Resource>([], 1, 20, 0));
+        var sut = CreateSut();
+
+        await sut.Handle(new GetResourcesQueryRequest(Status: ResourceStatus.Archived), CancellationToken.None);
+
+        _resourceRepository.Verify(
+            r => r.GetPagedAsync(1, 20, null, ResourceStatus.Archived, It.IsAny<CancellationToken>()), Times.Once);
     }
 }

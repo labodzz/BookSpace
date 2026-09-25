@@ -13,12 +13,24 @@ public sealed class UpdateResourceCommandHandlerTests
 {
     private readonly Mock<IResourceRepository> _resourceRepository = new();
     private readonly Mock<IBookingAvailabilityRepository> _bookingAvailabilityRepository = new();
+    private readonly Mock<IAvailabilityRuleRepository> _availabilityRuleRepository = new();
+
+    public UpdateResourceCommandHandlerTests()
+    {
+        // Every existing test in this file targets ResourceStatus.Active as its request status but predates
+        // the activation-requires-a-rule invariant - default to "at least one rule exists" so none of them
+        // have to know about this check; the tests specifically exercising the new invariant below override
+        // this per-test.
+        _availabilityRuleRepository
+            .Setup(r => r.GetByResourceIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new AvailabilityRule { Id = Guid.NewGuid(), DayOfWeek = DayOfWeek.Monday, StartTime = new TimeOnly(8, 0), EndTime = new TimeOnly(17, 0) }]);
+    }
 
     // The lock is a pass-through here (no real DB/transaction in a handler test) - the actual
     // capacity-reduction-vs-booking-creation race this lock closes is proven against real SQL Server in
     // BookSpace.Infrastructure.Tests (UpdateResourceCapacityConcurrencyTests).
     private UpdateResourceCommandHandler CreateSut() =>
-        new(new PassThroughResourceBookingLock(), _resourceRepository.Object, _bookingAvailabilityRepository.Object);
+        new(new PassThroughResourceBookingLock(), _resourceRepository.Object, _bookingAvailabilityRepository.Object, _availabilityRuleRepository.Object);
 
     private static Resource CreateResource(Guid? id = null) => new()
     {
@@ -242,7 +254,7 @@ public sealed class UpdateResourceCommandHandlerTests
             .Setup(l => l.RunExclusiveAsync(
                 It.IsAny<Guid>(), It.IsAny<Func<CancellationToken, Task<UpdateResourceResponse>>>(), It.IsAny<CancellationToken>()))
             .Returns<Guid, Func<CancellationToken, Task<UpdateResourceResponse>>, CancellationToken>((_, operation, ct) => operation(ct));
-        var sut = new UpdateResourceCommandHandler(lockMock.Object, _resourceRepository.Object, _bookingAvailabilityRepository.Object);
+        var sut = new UpdateResourceCommandHandler(lockMock.Object, _resourceRepository.Object, _bookingAvailabilityRepository.Object, _availabilityRuleRepository.Object);
         var request = new UpdateResourceCommandRequest(
             resource.Id, resource.ResourceTypeId, resource.Name, resource.Description, resource.Capacity, resource.RequiresApproval, resource.TimeZoneId, resource.Status);
 
@@ -250,5 +262,45 @@ public sealed class UpdateResourceCommandHandlerTests
 
         lockMock.Verify(l => l.RunExclusiveAsync(
             resource.Id, It.IsAny<Func<CancellationToken, Task<UpdateResourceResponse>>>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Handle_ActivatingAResourceWithNoAvailabilityRules_ThrowsConflictExceptionWithoutSaving()
+    {
+        var resource = CreateResource();
+        resource.Status = ResourceStatus.Inactive;
+        _resourceRepository.Setup(r => r.FindByIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(resource);
+        _resourceRepository.Setup(r => r.ResourceTypeExistsAsync(resource.ResourceTypeId, It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        _resourceRepository.Setup(r => r.ExistsByNameAsync(resource.Name, resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(false);
+        _availabilityRuleRepository
+            .Setup(r => r.GetByResourceIdAsync(resource.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<AvailabilityRule>)[]);
+        var sut = CreateSut();
+        var request = new UpdateResourceCommandRequest(resource.Id, resource.ResourceTypeId, resource.Name, resource.Description, resource.Capacity, resource.RequiresApproval, resource.TimeZoneId, ResourceStatus.Active);
+
+        var exception = await Assert.ThrowsAsync<ConflictException>(() => sut.Handle(request, CancellationToken.None));
+
+        Assert.Equal(ErrorCodes.ResourceAvailabilityRuleRequired, exception.ErrorCode);
+        _resourceRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Handle_ActivatingAResourceWithAtLeastOneAvailabilityRule_Succeeds()
+    {
+        var resource = CreateResource();
+        resource.Status = ResourceStatus.Inactive;
+        _resourceRepository.Setup(r => r.FindByIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(resource);
+        _resourceRepository.Setup(r => r.ResourceTypeExistsAsync(resource.ResourceTypeId, It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        _resourceRepository.Setup(r => r.ExistsByNameAsync(resource.Name, resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(false);
+        _availabilityRuleRepository
+            .Setup(r => r.GetByResourceIdAsync(resource.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new AvailabilityRule { Id = Guid.NewGuid(), DayOfWeek = DayOfWeek.Monday, StartTime = new TimeOnly(8, 0), EndTime = new TimeOnly(17, 0) }]);
+        var sut = CreateSut();
+        var request = new UpdateResourceCommandRequest(resource.Id, resource.ResourceTypeId, resource.Name, resource.Description, resource.Capacity, resource.RequiresApproval, resource.TimeZoneId, ResourceStatus.Active);
+
+        var result = await sut.Handle(request, CancellationToken.None);
+
+        Assert.Equal(ResourceStatus.Active, result.Status);
+        _resourceRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 }

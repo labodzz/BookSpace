@@ -63,7 +63,12 @@ public sealed class CreateResourceCommandHandler(IResourceRepository resourceRep
             Description = request.Description,
             Capacity = request.Capacity,
             RequiresApproval = request.RequiresApproval,
-            Status = ResourceStatus.Active,
+            // Starts Inactive, never Active: a brand-new resource has no AvailabilityRule yet, so letting
+            // it look bookable immediately would let a Member reach the booking form only to be rejected
+            // at submit time for a reason the UI never told them about. UpdateResourceCommandHandler
+            // rejects flipping this to Active until at least one rule exists - see
+            // docs/resource-lifecycle-and-capacity.md.
+            Status = ResourceStatus.Inactive,
             TimeZoneId = request.TimeZoneId,
         };
 

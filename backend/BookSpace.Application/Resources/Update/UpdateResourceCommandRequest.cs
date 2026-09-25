@@ -55,7 +55,8 @@ public sealed class UpdateResourceCommandRequestValidator : AbstractValidator<Up
 public sealed class UpdateResourceCommandHandler(
     IResourceBookingLock resourceBookingLock,
     IResourceRepository resourceRepository,
-    IBookingAvailabilityRepository bookingAvailabilityRepository)
+    IBookingAvailabilityRepository bookingAvailabilityRepository,
+    IAvailabilityRuleRepository availabilityRuleRepository)
     : IRequestHandler<UpdateResourceCommandRequest, UpdateResourceResponse>
 {
     public Task<UpdateResourceResponse> Handle(UpdateResourceCommandRequest request, CancellationToken cancellationToken) =>
@@ -80,6 +81,21 @@ public sealed class UpdateResourceCommandHandler(
         if (await resourceRepository.ExistsByNameAsync(request.Name, excludingResourceId: request.Id, cancellationToken))
         {
             throw new ConflictException($"A resource named '{request.Name}' already exists.", ErrorCodes.ResourceNameConflict);
+        }
+
+        // A resource can only be Active while it has at least one AvailabilityRule - Active-with-no-open-
+        // hours is exactly the confusing "looks bookable but isn't" state this whole invariant exists to
+        // prevent (see docs/resource-lifecycle-and-capacity.md). Checked against the requested target
+        // status, not just a Status change, so this also catches an edit that leaves Status untouched but
+        // would otherwise leave an Active/no-rule resource in place.
+        if (request.Status == ResourceStatus.Active)
+        {
+            var rules = await availabilityRuleRepository.GetByResourceIdAsync(resource.Id, cancellationToken);
+            if (rules.Count == 0)
+            {
+                throw new ConflictException(
+                    "Add at least one availability rule before activating this resource.", ErrorCodes.ResourceAvailabilityRuleRequired);
+            }
         }
 
         if (request.Capacity < resource.Capacity)

@@ -44,6 +44,18 @@ export class ResourceAvailabilityManageComponent {
   protected readonly isArchived = computed(() => this.resource()?.status === 'Archived');
   protected readonly zone = computed(() => resolveLuxonZone(this.resource()?.timeZoneId ?? 'UTC'));
 
+  // A resource lands here Inactive right after creation (no AvailabilityRule yet), or an admin may have
+  // deliberately deactivated one that already has rules to edit them - either way, Maintenance/Inactive
+  // both need the same "finish setup, then activate" nudge; Active needs none, and Archived is terminal
+  // (isArchived() above already covers that separately).
+  protected readonly needsSetup = computed(() => {
+    const status = this.resource()?.status;
+    return status === 'Inactive' || status === 'Maintenance';
+  });
+
+  protected readonly activating = signal(false);
+  protected readonly activationError = signal<string | null>(null);
+
   protected readonly rules = signal<AvailabilityRule[]>([]);
   protected readonly rulesLoading = signal(true);
   protected readonly rulesError = signal<ApiError | null>(null);
@@ -112,6 +124,45 @@ export class ResourceAvailabilityManageComponent {
   protected dismissConflictWarning(): void {
     this.conflictWarning.set(null);
   }
+
+  // Sends a full UpdateResourceCommandRequest (the backend has no partial-patch endpoint) with every
+  // field unchanged except Status - the same request shape resource-form.ts's own Edit mode sends, just
+  // built from the already-loaded resource instead of a form. The backend is the actual authority here:
+  // it rejects this with Resource.AvailabilityRuleRequired if the rule list is somehow empty by the time
+  // this lands, regardless of what canActivate() already checked client-side.
+  protected activate(): void {
+    const resource = this.resource();
+    if (!resource || this.activating() || !this.canActivate()) {
+      return;
+    }
+
+    this.activating.set(true);
+    this.activationError.set(null);
+    this.resourceService
+      .updateResource(resource.id, {
+        resourceTypeId: resource.resourceTypeId,
+        name: resource.name,
+        description: resource.description,
+        capacity: resource.capacity,
+        requiresApproval: resource.requiresApproval,
+        timeZoneId: resource.timeZoneId,
+        status: 'Active',
+      })
+      .subscribe({
+        next: (updated) => {
+          this.activating.set(false);
+          this.resource.set(updated);
+          this.notificationService.showSuccess('Resource activated.');
+        },
+        error: (error: unknown) => {
+          this.activating.set(false);
+          const apiError = error instanceof HttpErrorResponse ? toApiError(error) : { status: 0, title: 'Something went wrong.' };
+          this.activationError.set(apiError.detail ?? apiError.title);
+        },
+      });
+  }
+
+  protected readonly canActivate = computed(() => this.sortedRules().length > 0);
 
   // --- Availability rules ---
 

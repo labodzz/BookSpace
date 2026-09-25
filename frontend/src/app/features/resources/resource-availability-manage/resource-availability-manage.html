@@ -40,6 +40,33 @@
     </p>
   }
 
+  @if (needsSetup()) {
+    <section class="card manage-availability__setup">
+      <h2>Finish setting up this resource</h2>
+      <ul class="manage-availability__checklist">
+        <li class="manage-availability__checklist-item manage-availability__checklist-item--done">Resource details saved</li>
+        <li
+          class="manage-availability__checklist-item"
+          [class.manage-availability__checklist-item--done]="canActivate()"
+        >
+          Add at least one availability rule
+        </li>
+        <li class="manage-availability__checklist-item">Activate the resource</li>
+      </ul>
+
+      @if (activationError()) {
+        <p class="banner banner-error" role="alert">{{ activationError() }}</p>
+      }
+
+      <button type="button" class="btn btn-primary" [disabled]="!canActivate() || activating()" (click)="activate()">
+        {{ activating() ? 'Activating…' : 'Activate resource' }}
+      </button>
+      @if (!canActivate()) {
+        <p class="field-hint">Add at least one availability rule below before you can activate this resource.</p>
+      }
+    </section>
+  }
+
   @if (conflictWarning(); as warning) {
     <div class="banner banner-error manage-availability__conflict-warning" role="alert">
       <div>

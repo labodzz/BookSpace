@@ -168,6 +168,23 @@ export class BookingFormComponent {
     return result && result.status !== 'valid' ? LIVE_VALIDATION_MESSAGES[result.status] : null;
   });
 
+  // Gates the Confirm button itself, not just submit() - the user should never be invited to click a
+  // button that's already known to fail, only to find out why after the fact. Deliberately does NOT
+  // additionally check noAvailabilityRules()/dayFullyBooked(): both are coarser, slot-list-based UI hints
+  // that can disagree with the exact chosen interval (e.g. a valid custom interval that doesn't line up
+  // with a precomputed "whole slot" boundary) - liveValidation() re-derives the real answer directly from
+  // the same raw openPeriods/blackouts/busyPeriods/capacity data and is the single source of truth here,
+  // exactly as it already is for submit()'s own client-side block.
+  protected readonly canConfirmBooking = computed(() => {
+    if (this.availabilityLoading() || this.availabilityError()) {
+      return false;
+    }
+    if (!this.date() || !this.startTime() || !this.endTime() || this.nonexistentLocalTime()) {
+      return false;
+    }
+    return this.liveValidation()?.status === 'valid';
+  });
+
   constructor() {
     if (this.resourceId) {
       this.loadResource();

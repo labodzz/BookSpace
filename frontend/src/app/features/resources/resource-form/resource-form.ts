@@ -119,7 +119,12 @@ export class ResourceFormComponent {
       next: (resource) => {
         this.submitting.set(false);
         this.notificationService.showSuccess(this.isEditMode() ? 'Resource updated.' : 'Resource created.');
-        this.router.navigate(['/resources', resource.id]);
+        // A brand-new resource starts Inactive (no AvailabilityRule yet - see CreateResourceCommandHandler),
+        // so send the admin straight to where they set it up rather than to a detail page that would just
+        // tell them it can't be booked yet. An edit still goes to the detail page as before.
+        this.router.navigate(
+          this.isEditMode() ? ['/resources', resource.id] : ['/resources', resource.id, 'manage-availability'],
+        );
       },
       error: (error: unknown) => {
         this.submitting.set(false);
