@@ -14,6 +14,7 @@ internal static class ErrorCodes
     public const string ResourceNotFound = "Resource.NotFound";
     public const string ResourceTypeNotFound = "Resource.ResourceTypeNotFound";
     public const string ResourceNameConflict = "Resource.NameConflict";
+    public const string ResourceAvailabilityRuleRequired = "Resource.AvailabilityRuleRequired";
 
     public const string AvailabilityRuleNotFound = "AvailabilityRule.NotFound";
     public const string AvailabilityRuleConflict = "AvailabilityRule.Conflict";

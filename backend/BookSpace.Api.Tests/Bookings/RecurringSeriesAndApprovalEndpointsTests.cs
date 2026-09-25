@@ -587,10 +587,11 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
         using var approverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeUnassignedApproverEmail);
 
         using var adminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resourceName = $"Live Grant Room {Guid.NewGuid()}";
         var createResourceResponse = await adminClient.PostAsJsonAsync("/resources", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId,
-            name = $"Live Grant Room {Guid.NewGuid()}",
+            name = resourceName,
             capacity = 2,
             requiresApproval = true,
             timeZoneId = "UTC",
@@ -601,6 +602,14 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
             await adminClient.PostAsJsonAsync($"/resources/{resource!.Id}/availability-rules",
                 new { dayOfWeek, startTime = "00:00:00", endTime = "23:59:59" });
         }
+        // A brand-new resource starts Inactive (no rule existed yet at creation time) - activate it now
+        // that rules are in place, matching the real admin flow (Manage availability -> Activate).
+        var activateResponse = await adminClient.PutAsJsonAsync($"/resources/{resource!.Id}", new
+        {
+            resourceTypeId = TestDataSeeder.ResourceTypeId, name = resourceName, capacity = 2,
+            requiresApproval = true, timeZoneId = "UTC", status = ResourceStatus.Active,
+        });
+        Assert.Equal(HttpStatusCode.OK, activateResponse.StatusCode);
 
         // The assignment must exist before the booking is created - CreateBookingCommandHandler itself
         // rejects a RequiresApproval resource with zero configured approvers (Booking.NoApproverConfigured).
@@ -630,10 +639,11 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     public async Task RemoveResourceApprover_ThenApproveWithTheSameToken_IsImmediatelyRejected()
     {
         using var adminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resourceName = $"Live Revoke Room {Guid.NewGuid()}";
         var createResourceResponse = await adminClient.PostAsJsonAsync("/resources", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId,
-            name = $"Live Revoke Room {Guid.NewGuid()}",
+            name = resourceName,
             capacity = 2,
             requiresApproval = true,
             timeZoneId = "UTC",
@@ -644,6 +654,14 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
             await adminClient.PostAsJsonAsync($"/resources/{resource!.Id}/availability-rules",
                 new { dayOfWeek, startTime = "00:00:00", endTime = "23:59:59" });
         }
+        // A brand-new resource starts Inactive (no rule existed yet at creation time) - activate it now
+        // that rules are in place, matching the real admin flow (Manage availability -> Activate).
+        var activateResponse = await adminClient.PutAsJsonAsync($"/resources/{resource!.Id}", new
+        {
+            resourceTypeId = TestDataSeeder.ResourceTypeId, name = resourceName, capacity = 2,
+            requiresApproval = true, timeZoneId = "UTC", status = ResourceStatus.Active,
+        });
+        Assert.Equal(HttpStatusCode.OK, activateResponse.StatusCode);
         // Two approvers, so removing one does not hit the RemoveResourceApprover.LastRemaining guard.
         await adminClient.PostAsJsonAsync($"/resources/{resource!.Id}/approvers", new { userId = TestDataSeeder.AcmeApproverUserId });
         await adminClient.PostAsJsonAsync($"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
@@ -670,10 +688,11 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     public async Task CreateBooking_ForResourceRequiringApprovalWithNoConfiguredApprovers_ReturnsConflictWithNoApproverConfiguredCode()
     {
         using var adminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var resourceName = $"No Approver Room {Guid.NewGuid()}";
         var createResourceResponse = await adminClient.PostAsJsonAsync("/resources", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId,
-            name = $"No Approver Room {Guid.NewGuid()}",
+            name = resourceName,
             capacity = 2,
             requiresApproval = true,
             timeZoneId = "UTC",
@@ -684,6 +703,14 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
             await adminClient.PostAsJsonAsync($"/resources/{resource!.Id}/availability-rules",
                 new { dayOfWeek, startTime = "00:00:00", endTime = "23:59:59" });
         }
+        // A brand-new resource starts Inactive (no rule existed yet at creation time) - activate it now
+        // that rules are in place, matching the real admin flow (Manage availability -> Activate).
+        var activateResponse = await adminClient.PutAsJsonAsync($"/resources/{resource!.Id}", new
+        {
+            resourceTypeId = TestDataSeeder.ResourceTypeId, name = resourceName, capacity = 2,
+            requiresApproval = true, timeZoneId = "UTC", status = ResourceStatus.Active,
+        });
+        Assert.Equal(HttpStatusCode.OK, activateResponse.StatusCode);
         var start = TestDataSeeder.AvailabilityAnchorUtc.AddHours(2).AddDays(70);
 
         var response = await adminClient.PostAsJsonAsync("/bookings", new { resourceId = resource!.Id, startUtc = start, endUtc = start.AddHours(1), quantity = 1 });

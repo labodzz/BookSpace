@@ -28,7 +28,8 @@ export interface ResourceSummary {
 }
 
 // CreateResourceRequest - POST /resources. Status isn't settable here; the backend always creates a
-// new resource as Active.
+// new resource as Inactive (it has no AvailabilityRule yet) - see CreateResourceCommandHandler and
+// resource-form.ts's post-create redirect to Manage availability.
 export interface CreateResourceRequest {
   resourceTypeId: string;
   name: string;

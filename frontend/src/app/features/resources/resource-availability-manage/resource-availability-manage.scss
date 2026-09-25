@@ -37,6 +37,38 @@
   font-size: 1.5rem;
 }
 
+.manage-availability__setup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  border: 1px solid var(--color-primary);
+}
+
+.manage-availability__checklist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.manage-availability__checklist-item {
+  color: var(--color-text-secondary);
+}
+
+.manage-availability__checklist-item::before {
+  content: '○ ';
+}
+
+.manage-availability__checklist-item--done {
+  color: var(--color-text);
+}
+
+.manage-availability__checklist-item--done::before {
+  content: '✓ ';
+}
+
 .manage-availability__header p {
   margin-top: var(--space-1);
 }

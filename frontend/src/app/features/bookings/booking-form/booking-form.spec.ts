@@ -440,14 +440,51 @@ describe('BookingFormComponent', () => {
       expect((fixture.nativeElement as HTMLElement).textContent).toContain('This day is fully booked');
     });
 
-    it('shows a distinct message when the day has no availability rules at all', () => {
+    it('shows a distinct message when the day has no open periods, and keeps Confirm disabled', () => {
       setup({ resourceId: 'resource-1' });
       flushResource();
       fixture.detectChanges();
       flushAvailability({ openPeriods: [] });
       fixture.detectChanges();
 
-      expect((fixture.nativeElement as HTMLElement).textContent).toContain('No availability rules are configured for this day');
+      const root = fixture.nativeElement as HTMLElement;
+      expect(root.textContent).toContain('This resource is not available on the selected date. Choose another date.');
+      const confirmButton = [...root.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Confirm booking') as HTMLButtonElement;
+      expect(confirmButton.disabled).toBe(true);
+    });
+
+    it('disables Confirm booking while availability is still loading for the selected date', () => {
+      setup({ resourceId: 'resource-1' });
+      flushResource();
+      fixture.detectChanges();
+      // Deliberately left unflushed - availabilityLoading() is still true.
+
+      const root = fixture.nativeElement as HTMLElement;
+      const confirmButton = [...root.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Confirm booking') as HTMLButtonElement;
+      expect(confirmButton.disabled).toBe(true);
+
+      flushAvailability();
+    });
+
+    it('disables Confirm booking for an interval outside the resource\'s open hours, and enables it once a valid interval is entered', () => {
+      setup({ resourceId: 'resource-1' });
+      const root = loadResourceAndInitialAvailability({ capacity: 4 });
+      setInputValue(root.querySelector('#date')!, '2026-06-01');
+      fixture.detectChanges();
+      flushAvailability({ openPeriods: [{ startUtc: '2026-06-01T09:00:00Z', endUtc: '2026-06-01T17:00:00Z' }] });
+      fixture.detectChanges();
+
+      const confirmButton = () => [...root.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Confirm booking') as HTMLButtonElement;
+
+      setInputValue(root.querySelector('#start-time')!, '18:00');
+      setInputValue(root.querySelector('#end-time')!, '19:00');
+      fixture.detectChanges();
+      expect(confirmButton().disabled).toBe(true);
+
+      setInputValue(root.querySelector('#start-time')!, '10:00');
+      setInputValue(root.querySelector('#end-time')!, '11:00');
+      fixture.detectChanges();
+      expect(confirmButton().disabled).toBe(false);
     });
 
     it('shows a retry button when the availability fetch fails, and retry re-issues the request', () => {

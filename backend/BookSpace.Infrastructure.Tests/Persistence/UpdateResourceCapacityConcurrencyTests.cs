@@ -78,7 +78,8 @@ public sealed class UpdateResourceCapacityConcurrencyTests : IAsyncLifetime
             var handler = new UpdateResourceCommandHandler(
                 new ResourceBookingLock(dbContext, NullLogger<ResourceBookingLock>.Instance),
                 new ResourceRepository(dbContext),
-                new BookingAvailabilityRepository(dbContext));
+                new BookingAvailabilityRepository(dbContext),
+                new AvailabilityRuleRepository(dbContext));
             var resource = await dbContext.Resources.SingleAsync(r => r.Id == resourceId);
             try
             {
@@ -189,7 +190,8 @@ public sealed class UpdateResourceCapacityConcurrencyTests : IAsyncLifetime
         var handler = new UpdateResourceCommandHandler(
             new ResourceBookingLock(dbContext, NullLogger<ResourceBookingLock>.Instance),
             new ResourceRepository(dbContext),
-            new BookingAvailabilityRepository(dbContext));
+            new BookingAvailabilityRepository(dbContext),
+            new AvailabilityRuleRepository(dbContext));
         var resource = await dbContext.Resources.SingleAsync(r => r.Id == resourceId);
 
         return await handler.Handle(

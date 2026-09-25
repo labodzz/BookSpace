@@ -47,6 +47,13 @@ public sealed class OptimisticConcurrencyTests : IAsyncLifetime
             Id = _resourceId, TenantId = _tenantId, ResourceTypeId = resourceTypeId, Name = "Concurrency Test Room",
             Capacity = 4, RequiresApproval = false, Status = ResourceStatus.Active, TimeZoneId = "UTC",
         });
+        // Required for the resource to legitimately stay Active through UpdateResourceCommandHandler -
+        // see Resource.AvailabilityRuleRequired.
+        dbContext.AvailabilityRules.Add(new AvailabilityRule
+        {
+            Id = Guid.NewGuid(), TenantId = _tenantId, ResourceId = _resourceId,
+            DayOfWeek = DayOfWeek.Monday, StartTime = TimeOnly.MinValue, EndTime = TimeOnly.MaxValue,
+        });
         dbContext.BlackoutPeriods.Add(new BlackoutPeriod
         {
             Id = _blackoutPeriodId, TenantId = _tenantId, ResourceId = _resourceId,
@@ -150,7 +157,8 @@ public sealed class OptimisticConcurrencyTests : IAsyncLifetime
             var handler = new UpdateResourceCommandHandler(
                 new ResourceBookingLock(dbContext, NullLogger<ResourceBookingLock>.Instance),
                 new ResourceRepository(dbContext),
-                new BookingAvailabilityRepository(dbContext));
+                new BookingAvailabilityRepository(dbContext),
+                new AvailabilityRuleRepository(dbContext));
             try
             {
                 await handler.Handle(
@@ -173,7 +181,8 @@ public sealed class OptimisticConcurrencyTests : IAsyncLifetime
             var handler = new UpdateResourceCommandHandler(
                 new ResourceBookingLock(dbContext, NullLogger<ResourceBookingLock>.Instance),
                 new ResourceRepository(dbContext),
-                new BookingAvailabilityRepository(dbContext));
+                new BookingAvailabilityRepository(dbContext),
+                new AvailabilityRuleRepository(dbContext));
             try
             {
                 await handler.Handle(

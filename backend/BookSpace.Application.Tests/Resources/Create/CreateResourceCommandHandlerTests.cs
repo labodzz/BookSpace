@@ -29,10 +29,14 @@ public sealed class CreateResourceCommandHandlerTests
         var result = await sut.Handle(request, CancellationToken.None);
 
         Assert.Equal("Conference Room A", result.Name);
-        Assert.Equal(ResourceStatus.Active, result.Status);
+        // A brand-new resource always starts Inactive, never Active - it has no AvailabilityRule yet, so
+        // letting it look bookable immediately would let a Member reach the booking form only to be
+        // rejected at submit time. UpdateResourceCommandHandler is the only way to flip it to Active, and
+        // only once at least one rule exists.
+        Assert.Equal(ResourceStatus.Inactive, result.Status);
         Assert.Equal(resourceTypeId, result.ResourceTypeId);
         _resourceRepository.Verify(r => r.AddAsync(
-            It.Is<Resource>(res => res.TenantId == tenantId && res.Name == "Conference Room A" && res.Status == ResourceStatus.Active),
+            It.Is<Resource>(res => res.TenantId == tenantId && res.Name == "Conference Room A" && res.Status == ResourceStatus.Inactive),
             It.IsAny<CancellationToken>()), Times.Once);
         _resourceRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
