@@ -192,10 +192,7 @@ describe('ApprovalQueueComponent', () => {
   });
 });
 
-// A separate top-level describe (not nested above) because the viewer's zone is captured once, at
-// component construction (`viewerZoneId = detectViewerTimeZone()`) - the Intl mock must be in place
-// BEFORE TestBed.createComponent runs, which the shared beforeEach above already does unconditionally.
-describe('ApprovalQueueComponent - dual timezone display', () => {
+describe('ApprovalQueueComponent - resource-local time display', () => {
   let fixture: ComponentFixture<ApprovalQueueComponent>;
   let httpTesting: HttpTestingController;
 
@@ -227,7 +224,9 @@ describe('ApprovalQueueComponent - dual timezone display', () => {
     vi.restoreAllMocks();
   });
 
-  it("shows the resource's own local time as primary, and the approver's local time as a secondary line when the zones differ", () => {
+  // The approver's own browser/local time is intentionally not shown here - an approver decides based on
+  // the resource's own schedule, not their own timezone (see the comment on ApprovalQueueComponent.range()).
+  it("shows only the resource's own local time, never the approver's browser time", () => {
     vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({ timeZone: 'Asia/Tokyo' } as Intl.ResolvedDateTimeFormatOptions);
     configure();
     flushApproval('Europe/Sarajevo');
@@ -235,21 +234,10 @@ describe('ApprovalQueueComponent - dual timezone display', () => {
 
     const root = fixture.nativeElement as HTMLElement;
     const primary = root.querySelector('.approval-row__time')!;
-    const secondary = root.querySelector('.approval-row__time-secondary')!;
     expect(primary.textContent).toContain('10:15');
     expect(primary.textContent).toContain('Europe/Sarajevo');
-    expect(secondary.textContent).toContain('17:15');
-    expect(secondary.textContent).toContain('Asia/Tokyo');
-  });
-
-  it('shows only one time when the resource zone matches the approver zone', () => {
-    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({ timeZone: 'Europe/Sarajevo' } as Intl.ResolvedDateTimeFormatOptions);
-    configure();
-    flushApproval('Europe/Sarajevo');
-    fixture.detectChanges();
-
-    const root = fixture.nativeElement as HTMLElement;
     expect(root.querySelector('.approval-row__time-secondary')).toBeNull();
-    expect(root.querySelector('.approval-row__time')!.textContent).toContain('10:15');
+    expect(root.textContent).not.toContain('Your local time');
+    expect(root.textContent).not.toContain('17:15');
   });
 });
