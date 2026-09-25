@@ -8,7 +8,7 @@ import { CalendarService } from '../../calendar/calendar.service';
 import { ResourceService } from '../../resources/resource.service';
 import { ApprovalService } from '../approval.service';
 import { PendingApproval } from '../approval.models';
-import { DualZoneRange, detectViewerTimeZone, formatDualZoneRange } from '../../bookings/local-time.util';
+import { formatDualZoneRange } from '../../bookings/local-time.util';
 
 type Decision = 'approve' | 'reject';
 
@@ -48,8 +48,6 @@ export class ApprovalQueueComponent {
   protected readonly groupNotes = signal<Record<string, string>>({});
   protected readonly groupErrors = signal<Record<string, string>>({});
   protected readonly submittingGroupIds = signal<Set<string>>(new Set());
-
-  protected readonly viewerZoneId = detectViewerTimeZone();
 
   protected readonly loading = signal(true);
   protected readonly error = signal<ApiError | null>(null);
@@ -118,12 +116,14 @@ export class ApprovalQueueComponent {
     return this.submittingGroupIds().has(seriesId);
   }
 
-  // Resource-local time is primary (an approver cares about the resource's own business hours), the
-  // viewer's own local time is a secondary line shown only when it differs. alwaysShowDate: true because
-  // this is a flat queue spanning many different days with no other day-grouping context - same
-  // reasoning as My Bookings (see my-bookings.ts's own comment on its own range()).
-  protected range(approval: PendingApproval): DualZoneRange {
-    return formatDualZoneRange(approval.startUtc, approval.endUtc, approval.timeZoneId, this.viewerZoneId, { alwaysShowDate: true });
+  // Resource-local time only - an approver cares about the resource's own business hours, and the
+  // viewer's own local time added no value here (the approver is deciding based on the resource's
+  // schedule, not their own). alwaysShowDate: true because this is a flat queue spanning many different
+  // days with no other day-grouping context - same reasoning as My Bookings. Passing the resource's own
+  // zone as both arguments reuses formatDualZoneRange's date-formatting/midnight-crossing logic while its
+  // same-zone suppression guarantees `second` is always null, so there's nothing else to render.
+  protected range(approval: PendingApproval): string {
+    return formatDualZoneRange(approval.startUtc, approval.endUtc, approval.timeZoneId, approval.timeZoneId, { alwaysShowDate: true }).first.text;
   }
 
   protected formatExpiry(expiresAtUtc: string): string {
