@@ -29,6 +29,9 @@ assumptions and not merely from audit findings. Start here, then follow links in
   options, and the trigger that should force an answer. Do not treat anything here as settled.
 - **[next-work-packet-handoff.md](next-work-packet-handoff.md)** - what the next Work Packet needs to
   check against before implementation starts.
+- **[container-deployment.md](container-deployment.md)** - the multi-stage Dockerfile, local Podman
+  Compose setup, production migrations/bootstrap, and the Azure Container Apps environment variables/
+  secrets needed to deploy.
 
 See [AI-USAGE.md](../AI-USAGE.md) for the transparency log of how AI assistance was used while building
 this project, and the top-level [README.md](../README.md) for setup/running instructions.

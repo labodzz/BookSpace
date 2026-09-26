@@ -1,0 +1,59 @@
+# Local Podman/Docker Compose setup - NOT used in Azure (Azure uses Azure SQL Database, never a SQL
+# Server container - see docs/container-deployment.md). Two services: bookspace-db (SQL Server 2022,
+# local-only) and bookspace-app (this repo's own Dockerfile, run with ASPNETCORE_ENVIRONMENT=Development
+# so the existing dev-only migrate+seed path runs, same as `dotnet run` locally).
+#
+# Start:  podman compose -f compose.local.yaml up --build -d
+# Stop:   podman compose -f compose.local.yaml down            (keeps the database volume)
+# Wipe:   podman compose -f compose.local.yaml down -v         (DESTROYS the database volume - see docs)
+
+services:
+  bookspace-db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: ${DB_SA_PASSWORD}
+    ports:
+      - "1433:1433"
+    volumes:
+      - bookspace-sql-data:/var/opt/mssql
+    networks:
+      - bookspace-net
+    # depends_on.condition below already waits for this, but that ordering guarantee isn't identical
+    # across every Compose provider/version - see the app's own EnableRetryOnFailure note below, which
+    # is what actually makes the app resilient if this healthcheck is ever ignored.
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  bookspace-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      # bookspace-db is the other container's *service name* on the shared network below, resolved by
+      # Compose's internal DNS - never localhost, which inside this container would mean itself.
+      ConnectionStrings__BookSpace: "Server=bookspace-db,1433;Database=BookSpace;User Id=sa;Password=${DB_SA_PASSWORD};TrustServerCertificate=True"
+      Auth__Issuer: BookSpace
+      Auth__Audience: BookSpace
+      Auth__SigningKey: ${AUTH_SIGNING_KEY}
+      Auth__AccessTokenMinutes: "15"
+      Auth__RefreshTokenDays: "14"
+      Cors__AllowedOrigins__0: "http://localhost:8080"
+    ports:
+      - "8080:8080"
+    depends_on:
+      bookspace-db:
+        condition: service_healthy
+    networks:
+      - bookspace-net
+
+networks:
+  bookspace-net:
+
+volumes:
+  bookspace-sql-data:
