@@ -11,6 +11,7 @@ using BookSpace.Infrastructure;
 using BookSpace.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
@@ -55,8 +56,11 @@ try
         // The compact-JSON file sink is the "queryable, not just readable" structured store for
         // everything other than Development - skipped in the Testing environment too, so the test
         // suite never writes log files to disk.
-        var writeStructuredFile = !context.HostingEnvironment.IsDevelopment()
-            && context.HostingEnvironment.EnvironmentName != "Testing";
+        // Off by default everywhere, including Production: a container's non-root user has no write
+        // access to a local "logs" directory, and Azure Container Apps collects stdout/stderr anyway
+        // (the console sink above is never disabled). Explicitly set Logging__WriteStructuredFile=true
+        // for a non-container deployment that wants the queryable compact-JSON file store back.
+        var writeStructuredFile = context.Configuration.GetValue<bool?>("Logging:WriteStructuredFile") ?? false;
 
         loggerConfiguration
             .MinimumLevel.Information()
@@ -202,12 +206,52 @@ try
 
     var app = builder.Build();
 
+    // Must be the very first middleware: everything downstream (HTTPS redirection below, in
+    // particular) makes its scheme-based decisions from HttpContext.Request.Scheme, which this
+    // middleware is what corrects from X-Forwarded-Proto in the first place. Azure Container Apps
+    // terminates TLS at its own ingress and forwards plain HTTP to the container - without this, the
+    // app would see every request as HTTP and UseHttpsRedirection would redirect a request the client
+    // already made over HTTPS, forever. Opt-in via ASPNETCORE_FORWARDEDHEADERS_ENABLED=true, not
+    // unconditional - a non-container deployment reachable directly from the internet must not trust
+    // client-supplied forwarded headers by default.
+    if (builder.Configuration.GetValue<bool>("ASPNETCORE_FORWARDEDHEADERS_ENABLED"))
+    {
+        var forwardedHeadersOptions = new ForwardedHeadersOptions
+        {
+            ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
+        };
+        // Azure Container Apps' own ingress is the only network path that can reach this container -
+        // it is never exposed directly to the internet - so the proxy hop is always trusted, and its
+        // address isn't a fixed value this could list here instead of clearing.
+        forwardedHeadersOptions.KnownIPNetworks.Clear();
+        forwardedHeadersOptions.KnownProxies.Clear();
+        app.UseForwardedHeaders(forwardedHeadersOptions);
+    }
+
     // Configure the HTTP request pipeline.
     if (app.Environment.IsDevelopment())
     {
         app.MapOpenApi();
         await app.Services.MigrateAndSeedDevelopmentDatabaseAsync();
     }
+
+    // Production counterpart to the Development block above - both opt-in via configuration, and
+    // mutually exclusive in what they do (never seeds). See DatabaseOptions/BootstrapOptions and
+    // docs/container-deployment.md. Bootstrap always runs after any migration step, and is itself a
+    // no-op unless Bootstrap:Enabled is true - see ProductionBootstrapper.
+    if (builder.Configuration.GetValue<bool>("Database:ApplyMigrationsOnStartup"))
+    {
+        await app.Services.MigrateProductionDatabaseAsync();
+    }
+    await app.Services.BootstrapProductionAdminAsync();
+
+    // Serves the Angular production build the container's Dockerfile copies into wwwroot. Static
+    // files first (and default-file-mapped) so a request for a real built asset - or "/" - is answered
+    // directly; MapFallbackToFile below (registered after routing) is what turns an unmatched deep
+    // link like /resources/{id} into the Angular app instead of a 404, and always has lower priority
+    // than an actual controller route or a real static file, regardless of registration order.
+    app.UseDefaultFiles();
+    app.UseStaticFiles();
 
     // Correlation ID first (outermost) so every log below - including the request-logging summary
     // line and anything the exception handler logs - carries it. Request logging wraps the
@@ -234,11 +278,29 @@ try
 
     app.MapControllers();
 
+    // Liveness: never touches the database - Azure Container Apps (or any orchestrator) should be able
+    // to tell the process itself is up even while the database is unreachable, so this and /health/db
+    // are deliberately separate checks rather than one endpoint conflating both concerns.
+    app.MapGet("/health", () => Results.Ok(new { status = "healthy" })).AllowAnonymous();
+
+    // Readiness: a real, awaited round trip to the database. Returns a non-2xx status when unreachable
+    // (rather than always 200 with a text field an orchestrator would have to parse) so this composes
+    // correctly with standard HTTP health-check tooling. Never echoes the database name - a public,
+    // anonymous endpoint has no reason to disclose that.
     app.MapGet("/health/db", async (BookSpaceDbContext dbContext, CancellationToken cancellationToken) =>
     {
         var isConnected = await dbContext.Database.CanConnectAsync(cancellationToken);
-        return Results.Ok(new { database = dbContext.Database.GetDbConnection().Database, status = isConnected ? "connected" : "unreachable" });
+        return isConnected
+            ? Results.Ok(new { status = "connected" })
+            : Results.Json(new { status = "unreachable" }, statusCode: StatusCodes.Status503ServiceUnavailable);
     }).AllowAnonymous();
+
+    // Anonymous: the app has a global authenticated-fallback policy (see AddAuthorization above), and
+    // without this override an unauthenticated deep link would 401 before Angular's own router ever
+    // gets a chance to redirect to /login. Registered last for readability only - MapFallbackToFile
+    // endpoints always have the lowest match priority, so a real controller route or an actual static
+    // file already served above is never shadowed by this regardless of declaration order.
+    app.MapFallbackToFile("index.html").AllowAnonymous();
 
     app.Run();
 }

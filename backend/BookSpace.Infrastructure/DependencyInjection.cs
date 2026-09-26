@@ -8,6 +8,8 @@ using BookSpace.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace BookSpace.Infrastructure;
 
@@ -18,9 +20,17 @@ public static class DependencyInjection
         var connectionString = configuration.GetConnectionString("BookSpace")
             ?? throw new InvalidOperationException("Connection string 'BookSpace' is not configured.");
 
-        services.AddDbContext<BookSpaceDbContext>(options => options.UseSqlServer(connectionString));
+        // A serverless Azure SQL database can be paused and take a moment to resume, so the very first
+        // connection after idle can transiently fail - retried automatically here rather than surfacing
+        // as a hard error. Bounded (not infinite): a genuinely down/misconfigured database still fails
+        // after the last retry, it just no longer fails on the *first* transient blip.
+        services.AddDbContext<BookSpaceDbContext>(options => options.UseSqlServer(
+            connectionString,
+            sqlOptions => sqlOptions.EnableRetryOnFailure(maxRetryCount: 5, maxRetryDelay: TimeSpan.FromSeconds(10), errorNumbersToAdd: null)));
 
         services.Configure<AuthOptions>(configuration.GetSection("Auth"));
+        services.Configure<DatabaseOptions>(configuration.GetSection("Database"));
+        services.Configure<BootstrapOptions>(configuration.GetSection("Bootstrap"));
         services.AddSingleton<IPasswordHasher, PasswordHasher>();
         services.AddSingleton<IJwtTokenGenerator, JwtTokenGenerator>();
         services.AddScoped<IUserRepository, UserRepository>();
@@ -51,5 +61,30 @@ public static class DependencyInjection
 
         await dbContext.Database.MigrateAsync(cancellationToken);
         await DevelopmentSeeder.SeedAsync(dbContext, passwordHasher, cancellationToken);
+    }
+
+    // Production counterpart to the block above: applies pending migrations without ever seeding
+    // (DevelopmentSeeder's known test accounts/password must never reach a real database). Only called
+    // from Program.cs when Database:ApplyMigrationsOnStartup is explicitly true - see DatabaseOptions
+    // and docs/container-deployment.md for the maxReplicas=1 requirement this implies.
+    public static async Task MigrateProductionDatabaseAsync(this IServiceProvider services, CancellationToken cancellationToken = default)
+    {
+        using var scope = services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<BookSpaceDbContext>();
+        await dbContext.Database.MigrateAsync(cancellationToken);
+    }
+
+    // Only called from Program.cs after any migration step above has already completed - see
+    // ProductionBootstrapper for the idempotency/validation rules and BootstrapOptions for the
+    // configuration shape.
+    public static async Task BootstrapProductionAdminAsync(this IServiceProvider services, CancellationToken cancellationToken = default)
+    {
+        using var scope = services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<BookSpaceDbContext>();
+        var passwordHasher = scope.ServiceProvider.GetRequiredService<IPasswordHasher>();
+        var options = scope.ServiceProvider.GetRequiredService<IOptions<BootstrapOptions>>().Value;
+        var logger = scope.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("BookSpace.Bootstrap");
+
+        await ProductionBootstrapper.SeedAsync(dbContext, passwordHasher, options, logger, cancellationToken);
     }
 }
