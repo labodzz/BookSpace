@@ -1,10 +1,12 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Threading.RateLimiting;
+using BookSpace.Api.BackgroundJobs;
 using BookSpace.Api.ErrorHandling;
 using BookSpace.Api.Logging;
 using BookSpace.Api.Security;
 using BookSpace.Application;
+using BookSpace.Application.BackgroundJobs;
 using BookSpace.Application.Logging;
 using BookSpace.Application.Security;
 using BookSpace.Infrastructure;
@@ -15,6 +17,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using Serilog;
 using Serilog.Events;
@@ -162,6 +165,17 @@ try
 
     builder.Services.AddApplication();
     builder.Services.AddInfrastructure(builder.Configuration);
+
+    // WP-8 background jobs foundation only - see docs/background-jobs.md. ValidateOnStart() runs
+    // BackgroundJobsOptionsValidator immediately at startup (not lazily on first resolution), so a
+    // misconfigured PollIntervalSeconds fails fast instead of only surfacing once the worker polls.
+    // Disabled by default (BackgroundJobsOptions.Enabled), so this has no effect on Development,
+    // Testing, or an unconfigured deployment until BackgroundJobs:Enabled=true is set explicitly.
+    builder.Services.AddOptions<BackgroundJobsOptions>()
+        .Bind(builder.Configuration.GetSection("BackgroundJobs"))
+        .ValidateOnStart();
+    builder.Services.AddSingleton(TimeProvider.System);
+    builder.Services.AddHostedService<BackgroundJobsWorker>();
 
     builder.Services.AddHttpContextAccessor();
     builder.Services.AddScoped<ICurrentUserContext, CurrentUserContext>();
