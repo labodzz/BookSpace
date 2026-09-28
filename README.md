@@ -64,6 +64,12 @@ pending migrations and seeds a sample dataset automatically on startup. To apply
 dotnet ef database update --project BookSpace.Infrastructure --startup-project BookSpace.Api
 ```
 
+## Container deployment
+
+The app can also be built and run as a single container (Angular served by ASP.NET from `wwwroot`),
+locally via Podman Compose or deployed to Azure Container Apps. See
+[docs/container-deployment.md](docs/container-deployment.md).
+
 ## Branching
 
 - `master` — always deployable; nothing is committed here directly.

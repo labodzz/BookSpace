@@ -29,6 +29,9 @@ assumptions and not merely from audit findings. Start here, then follow links in
   options, and the trigger that should force an answer. Do not treat anything here as settled.
 - **[next-work-packet-handoff.md](next-work-packet-handoff.md)** - what the next Work Packet needs to
   check against before implementation starts.
+- **[container-deployment.md](container-deployment.md)** - the multi-stage Dockerfile, local Podman
+  Compose setup, production migrations/bootstrap, and the Azure Container Apps environment variables/
+  secrets needed to deploy.
 - **[background-jobs.md](background-jobs.md)** - the WP-8 hosted-service foundation (periodic loop,
   per-cycle DI scope, cancellation/shutdown, configuration) - not the real WP-8 jobs themselves yet.
 

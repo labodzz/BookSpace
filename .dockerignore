@@ -1,0 +1,34 @@
+# Version control / local tooling - never needed inside the build context.
+.git
+.github
+.claude
+.vs/
+.vscode/
+.idea/
+
+# Build output - always regenerated inside the image, never trusted from the host.
+**/bin/
+**/obj/
+frontend/node_modules/
+frontend/dist/
+frontend/.angular/
+
+# Test results / coverage.
+**/TestResults/
+backend/CoverageReport/
+
+# Local logs.
+logs/
+**/*.log
+
+# Local secrets/environment overrides - never baked into an image.
+.env
+.env.*
+!.env.example
+
+# Postman workspace - local API-testing setup, not part of the app.
+.postman/
+postman/
+
+# Documentation - not needed to build or run the app.
+**/*.md
