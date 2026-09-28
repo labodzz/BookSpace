@@ -1,9 +1,11 @@
 using System.Reflection;
 using BookSpace.Application.Auth;
+using BookSpace.Application.BackgroundJobs;
 using BookSpace.Application.Logging;
 using BookSpace.Application.Mediator;
 using FluentValidation;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 
 namespace BookSpace.Application;
 
@@ -13,6 +15,11 @@ public static class DependencyInjection
     {
         services.AddScoped<IAuthenticationService, AuthenticationService>();
         services.AddSingleton<ICorrelationIdContext, CorrelationIdContext>();
+
+        // Scoped: resolved fresh per cycle by BackgroundJobsWorker (BookSpace.Api), never held by that
+        // singleton itself - see docs/background-jobs.md.
+        services.AddScoped<IBackgroundJobCycle, NoOpBackgroundJobCycle>();
+        services.AddSingleton<IValidateOptions<BackgroundJobsOptions>, BackgroundJobsOptionsValidator>();
 
         var applicationAssembly = typeof(DependencyInjection).Assembly;
 

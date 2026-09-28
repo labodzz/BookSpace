@@ -32,6 +32,8 @@ assumptions and not merely from audit findings. Start here, then follow links in
 - **[container-deployment.md](container-deployment.md)** - the multi-stage Dockerfile, local Podman
   Compose setup, production migrations/bootstrap, and the Azure Container Apps environment variables/
   secrets needed to deploy.
+- **[background-jobs.md](background-jobs.md)** - the WP-8 hosted-service foundation (periodic loop,
+  per-cycle DI scope, cancellation/shutdown, configuration) - not the real WP-8 jobs themselves yet.
 
 See [AI-USAGE.md](../AI-USAGE.md) for the transparency log of how AI assistance was used while building
 this project, and the top-level [README.md](../README.md) for setup/running instructions.
