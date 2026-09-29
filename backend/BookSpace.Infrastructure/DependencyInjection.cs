@@ -1,4 +1,5 @@
 using BookSpace.Application.Auth;
+using BookSpace.Application.BackgroundJobs;
 using BookSpace.Application.Bookings;
 using BookSpace.Application.ResourceTypes;
 using BookSpace.Application.Resources;
@@ -47,6 +48,7 @@ public static class DependencyInjection
         services.AddScoped<IRecurringSeriesRepository, RecurringSeriesRepository>();
         services.AddScoped<IApprovalRequestRepository, ApprovalRequestRepository>();
         services.AddScoped<ITenantRepository, TenantRepository>();
+        services.AddScoped<IJobLeaseStore, JobLeaseStore>();
 
         return services;
     }
