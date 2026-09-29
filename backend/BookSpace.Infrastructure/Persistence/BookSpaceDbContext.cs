@@ -23,6 +23,7 @@ public sealed class BookSpaceDbContext(DbContextOptions<BookSpaceDbContext> opti
     public DbSet<RecurringSeries> RecurringSeries => Set<RecurringSeries>();
     public DbSet<Booking> Bookings => Set<Booking>();
     public DbSet<ApprovalRequest> ApprovalRequests => Set<ApprovalRequest>();
+    public DbSet<JobLease> JobLeases => Set<JobLease>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {

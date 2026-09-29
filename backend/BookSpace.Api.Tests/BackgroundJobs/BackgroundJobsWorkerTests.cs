@@ -10,7 +10,11 @@ namespace BookSpace.Api.Tests.BackgroundJobs;
 
 // Unit tests against BackgroundJobsWorker directly (no WebApplicationFactory/real host needed) - a
 // minimal ServiceCollection supplies IServiceScopeFactory, and FakeTimeProvider stands in for real
-// time so no test here depends on an actual 30-second (or any) real delay elapsing.
+// time so no test here depends on an actual 30-second (or any) real delay elapsing. Every test that
+// isn't specifically about lease behavior uses AlwaysAcquiringLeaseCoordinator, a trivial stub that
+// always "wins" the lease instantly - the real acquire/renew/release SQL is exercised separately (real
+// LocalDB) in BookSpace.Infrastructure.Tests, and JobLeaseCoordinator's own heartbeat scheduling is
+// exercised separately in BookSpace.Application.Tests.
 public sealed class BackgroundJobsWorkerTests
 {
     private static readonly TimeSpan RealTimeTestTimeout = TimeSpan.FromSeconds(5);
@@ -84,6 +88,49 @@ public sealed class BackgroundJobsWorkerTests
         Assert.Empty(recorder.InstanceIds);
     }
 
+    // The lease-integration half of docs/background-jobs.md's "Job lease lock" protocol: when the
+    // coordinator reports the lease is already held elsewhere, the worker must skip the cycle entirely
+    // rather than run IBackgroundJobCycle anyway.
+    [Fact]
+    public async Task RunCycleAsync_WhenTheLeaseIsNotAcquired_NeverRunsTheCycle()
+    {
+        var recorder = new CycleRecorder();
+        var scopeFactory = BuildScopeFactory(recorder);
+        var timeProvider = new FakeTimeProvider();
+        var worker = CreateWorker(scopeFactory, timeProvider, leaseCoordinator: new StubJobLeaseCoordinator(acquires: false), pollIntervalSeconds: 30);
+
+        await worker.StartAsync(CancellationToken.None);
+        timeProvider.Advance(TimeSpan.FromSeconds(30));
+        timeProvider.Advance(TimeSpan.FromSeconds(30));
+        await worker.StopAsync(CancellationToken.None);
+
+        Assert.Empty(recorder.InstanceIds);
+    }
+
+    // A heartbeat losing the lease mid-cycle (JobLeaseCoordinator cancels IJobLease.LeaseLostToken) must
+    // reach the running cycle as a cancellation signal - proven here by a cycle that blocks until its
+    // token is cancelled, with the worker's own linked-token wiring being the only thing that could ever
+    // unblock it.
+    [Fact]
+    public async Task RunCycleAsync_WhenTheLeaseIsLostMidCycle_CancelsTheCyclesToken()
+    {
+        var services = new ServiceCollection();
+        var blockingCycle = new BlockingUntilCancelledCycle();
+        services.AddSingleton<IBackgroundJobCycle>(blockingCycle);
+        var scopeFactory = services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
+
+        var stubLease = new StubJobLease();
+        var worker = CreateWorker(scopeFactory, new FakeTimeProvider(), leaseCoordinator: new StubJobLeaseCoordinator(lease: stubLease));
+
+        await worker.StartAsync(CancellationToken.None);
+        await blockingCycle.WaitUntilStartedAsync(RealTimeTestTimeout);
+
+        stubLease.SimulateLeaseLost();
+
+        await blockingCycle.WaitUntilCancelledAsync(RealTimeTestTimeout);
+        await worker.StopAsync(CancellationToken.None);
+    }
+
     private static IServiceScopeFactory BuildScopeFactory(CycleRecorder recorder)
     {
         var services = new ServiceCollection();
@@ -93,12 +140,69 @@ public sealed class BackgroundJobsWorkerTests
     }
 
     private static BackgroundJobsWorker CreateWorker(
-        IServiceScopeFactory scopeFactory, TimeProvider timeProvider, bool enabled = true, int pollIntervalSeconds = 30) =>
+        IServiceScopeFactory scopeFactory,
+        TimeProvider timeProvider,
+        bool enabled = true,
+        int pollIntervalSeconds = 30,
+        IJobLeaseCoordinator? leaseCoordinator = null) =>
         new(
             scopeFactory,
+            leaseCoordinator ?? new StubJobLeaseCoordinator(),
             Options.Create(new BackgroundJobsOptions { Enabled = enabled, PollIntervalSeconds = pollIntervalSeconds }),
             timeProvider,
             NullLogger<BackgroundJobsWorker>.Instance);
+
+    // Always "wins" the lease instantly (unless told not to) - the real acquire/renew/release SQL is
+    // exercised separately against LocalDB, not here.
+    private sealed class StubJobLeaseCoordinator(bool acquires = true, IJobLease? lease = null) : IJobLeaseCoordinator
+    {
+        public Task<IJobLease?> TryAcquireAsync(string jobName, CancellationToken cancellationToken) =>
+            Task.FromResult(acquires ? lease ?? new StubJobLease() : null);
+    }
+
+    private sealed class StubJobLease : IJobLease
+    {
+        private readonly CancellationTokenSource _leaseLostCts = new();
+
+        public string JobName => BackgroundJobsWorker.PrimaryCycleJobName;
+        public string OwnerId => "stub-owner";
+        public CancellationToken LeaseLostToken => _leaseLostCts.Token;
+
+        public void SimulateLeaseLost() => _leaseLostCts.Cancel();
+
+        public ValueTask DisposeAsync()
+        {
+            _leaseLostCts.Dispose();
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    // Blocks on its own cancellation token until cancelled, then records that it observed cancellation -
+    // the test spy for proving the worker's linked token (stoppingToken + lease.LeaseLostToken) actually
+    // reaches IBackgroundJobCycle.RunCycleAsync.
+    private sealed class BlockingUntilCancelledCycle : IBackgroundJobCycle
+    {
+        private readonly TaskCompletionSource _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _observedCancellation = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task RunCycleAsync(CancellationToken cancellationToken)
+        {
+            _started.TrySetResult();
+            try
+            {
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                _observedCancellation.TrySetResult();
+                throw;
+            }
+        }
+
+        public Task WaitUntilStartedAsync(TimeSpan timeout) => _started.Task.WaitAsync(timeout);
+
+        public Task WaitUntilCancelledAsync(TimeSpan timeout) => _observedCancellation.Task.WaitAsync(timeout);
+    }
 
     // Records which *instance* ran each cycle (not just how many) - the test spy for proving a fresh
     // IServiceScope (and therefore a fresh scoped IBackgroundJobCycle) backs every cycle.

@@ -217,5 +217,15 @@ internal static class BookSpaceModelConfiguration
             entity.HasOne<Booking>().WithMany().HasForeignKey(request => request.BookingId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne<User>().WithMany().HasForeignKey(request => request.ApproverId).OnDelete(DeleteBehavior.Restrict);
         });
+
+        builder.Entity<JobLease>(entity =>
+        {
+            entity.ToTable("JobLeases");
+            // JobName as the primary key (not merely a unique index) is the physical guarantee that two
+            // active lease rows for the same job can never exist - see docs/background-jobs.md.
+            entity.HasKey(lease => lease.JobName);
+            entity.Property(lease => lease.JobName).HasMaxLength(200);
+            entity.Property(lease => lease.OwnerId).HasMaxLength(200).IsRequired();
+        });
     }
 }

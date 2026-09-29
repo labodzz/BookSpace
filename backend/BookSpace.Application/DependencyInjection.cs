@@ -21,6 +21,12 @@ public static class DependencyInjection
         services.AddScoped<IBackgroundJobCycle, NoOpBackgroundJobCycle>();
         services.AddSingleton<IValidateOptions<BackgroundJobsOptions>, BackgroundJobsOptionsValidator>();
 
+        // Singleton: one stable OwnerId, and one lease coordinator holding only IServiceScopeFactory, for
+        // this instance's entire lifetime - see docs/background-jobs.md ("Job lease lock"). Neither ever
+        // holds a scoped IJobLeaseStore/DbContext directly.
+        services.AddSingleton<IBackgroundJobInstanceIdentity, BackgroundJobInstanceIdentity>();
+        services.AddSingleton<IJobLeaseCoordinator, JobLeaseCoordinator>();
+
         var applicationAssembly = typeof(DependencyInjection).Assembly;
 
         services.AddScoped<IMediator, DefaultMediator>();
