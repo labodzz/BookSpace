@@ -241,11 +241,19 @@ internal static class BookSpaceModelConfiguration
             // pre-authentication global lookup (User.Email), and a notification idempotency key has no
             // comparable reason to be compared across tenants.
             entity.HasIndex(item => new { item.TenantId, item.IdempotencyKey }).IsUnique();
-            // Supports the future retry processor's "due items" query (WHERE Status = 'Pending' AND
-            // AvailableAtUtc <= now ORDER BY AvailableAtUtc) - filtered to Pending only, like Resource's
-            // and Invitation's filtered indexes elsewhere in this file, so the index shrinks as items are
-            // marked Sent instead of growing unbounded forever.
-            entity.HasIndex(item => item.AvailableAtUtc).HasFilter("[Status] = 'Pending'");
+            // Supports the due-batch query (WHERE Status = 'Pending' AND AvailableAtUtc <= now ORDER BY
+            // AvailableAtUtc) - filtered to Pending only, like Resource's and Invitation's filtered
+            // indexes elsewhere in this file, so the index shrinks as items are marked Sent instead of
+            // growing unbounded forever. INCLUDE makes it a COVERING index for NotificationOutboxReader's
+            // exact projection - empirically confirmed (see docs/background-jobs.md, "Due-batch query and
+            // its index") that WITHOUT these INCLUDE columns, SQL Server's optimizer chose a full
+            // Clustered Index Scan over seeking this index, even at realistic due/total selectivity,
+            // because satisfying the SELECT would otherwise need a key lookup per matching row. With them,
+            // it chooses an Index Seek instead.
+            entity.HasIndex(item => item.AvailableAtUtc)
+                .HasFilter("[Status] = 'Pending'")
+                .IncludeProperties(
+                    item => new { item.TenantId, item.NotificationType, item.RecipientUserId, item.PayloadJson, item.CreatedAtUtc, item.AttemptCount });
             entity.HasOne<Tenant>().WithMany().HasForeignKey(item => item.TenantId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne<User>().WithMany().HasForeignKey(item => item.RecipientUserId).OnDelete(DeleteBehavior.Restrict);
         });

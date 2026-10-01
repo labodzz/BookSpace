@@ -34,6 +34,18 @@ public sealed class BackgroundJobsOptionsValidator : IValidateOptions<Background
                 + "so a single delayed heartbeat does not immediately cost the instance its lease.");
         }
 
+        if (options.BatchSize <= 0)
+        {
+            return ValidateOptionsResult.Fail("BackgroundJobs:BatchSize must be a positive number of items.");
+        }
+
+        if (options.BatchSize > BackgroundJobsOptions.MaxBatchSize)
+        {
+            return ValidateOptionsResult.Fail(
+                $"BackgroundJobs:BatchSize must not exceed {BackgroundJobsOptions.MaxBatchSize} - "
+                + "a misconfigured value should never let one poll pull an unbounded number of rows into memory.");
+        }
+
         return ValidateOptionsResult.Success;
     }
 }

@@ -460,6 +460,170 @@ only ever protected one *job cycle* at a time, never an individual row within it
 stale-approval job, an ICS feed, or any frontend change. All of that is future WP-8 work built on top of
 the `NotificationOutboxItem` table and `INotificationOutboxWriter` this task adds.
 
+## Due-batch query
+
+A later WP-8 branch than the outbox table above. Its goal: read due notification-outbox work in bounded,
+configurable batches, using the database to do the filtering/ordering/limiting - never "load everything,
+then filter in application code."
+
+### What "due" means, precisely
+
+Using the actual `NotificationOutboxItem` model (see "Notification outbox" above - nothing here invents a
+field or status that model does not have), an item is due when, at the moment of the query:
+
+- `Status == NotificationOutboxStatus.Pending` - not yet sent. (`NotificationOutboxStatus` currently has
+  exactly two members, `Pending` and `Sent` - there is no terminal-failure/dead-letter status yet. A test,
+  `NotificationOutboxStatus_HasNoTerminalFailureStatusYet_...`, asserts this directly so that whenever a
+  future retry-processor task *does* add one, that test fails as a deliberate reminder to also exclude it
+  here, rather than a due-item query silently returning dead-lettered rows forever.)
+- `AvailableAtUtc <= now` - its scheduled availability instant (or retry backoff target - see
+  "Notification outbox" above for why those are the same field) has already passed.
+
+No other field decides "due" - in particular, `AttemptCount` is read-but-not-filtered-on (nothing here
+limits attempts or dead-letters anything; that is explicitly next-task work).
+
+### Why a bounded batch, and why not just load the whole table
+
+A production outbox can accumulate a large backlog (thousands of reminders scheduled for the same
+morning, say). Loading all of it into application memory on every poll would make memory usage scale with
+backlog size, not with how much work the application can realistically act on per cycle - exactly the
+failure mode a bounded batch exists to prevent. `GetDueBatchAsync(batchSize, ct)` always returns **at
+most** `batchSize` items, and the limit is enforced by the database itself (a SQL `TOP`), not by fetching
+more and truncating client-side.
+
+### The query shape
+
+```csharp
+dbContext.NotificationOutboxItems
+    .IgnoreQueryFilters()
+    .AsNoTracking()
+    .Where(item => item.Status == NotificationOutboxStatus.Pending && item.AvailableAtUtc <= DateTimeOffset.UtcNow)
+    .OrderBy(item => item.AvailableAtUtc)
+    .ThenBy(item => item.CreatedAtUtc)
+    .ThenBy(item => item.Id)
+    .Take(batchSize)
+    .Select(item => new DueNotificationOutboxItem(/* ... */))
+    .ToListAsync(cancellationToken);
+```
+
+`Where`, `OrderBy`/`ThenBy`, and `Take` all run in SQL, confirmed directly against the generated SQL
+(`IQueryable.ToQueryString()`), not assumed from reading the LINQ:
+
+```sql
+SELECT TOP(@p) [n].[Id], [n].[TenantId], [n].[NotificationType], [n].[RecipientUserId],
+               [n].[PayloadJson], [n].[AvailableAtUtc], [n].[CreatedAtUtc], [n].[AttemptCount]
+FROM [NotificationOutboxItems] AS [n]
+WHERE [n].[Status] = N'Pending' AND [n].[AvailableAtUtc] <= CAST(SYSUTCDATETIME() AS datetimeoffset)
+ORDER BY [n].[AvailableAtUtc], [n].[CreatedAtUtc], [n].[Id]
+```
+
+Note what is **not** selected: `Status` and `IdempotencyKey` are used only in the `WHERE`/uniqueness
+story, never returned - `DueNotificationOutboxItem` (the projection) carries only what a future processor
+actually needs. `.AsNoTracking()` is technically redundant once the query ends in `.Select()` into a
+non-entity record (EF never tracks a projected result regardless), but is kept anyway for
+defense-in-depth clarity, matching the same choice in `NotificationOutboxWriter`.
+
+### Clock source for the due-batch query
+
+`DateTimeOffset.UtcNow` is written directly inline in the `Where` clause above - not captured into a
+local variable first. This matters: EF Core's SQL Server provider recognizes `DateTimeOffset.UtcNow`
+written this way as server-evaluable and translates it to `CAST(SYSUTCDATETIME() AS datetimeoffset)`,
+confirmed in the generated SQL above - the comparison is evaluated **by the database**, using the
+database's own clock, not this application instance's local clock. Several application instances share
+this one query; anchoring "now" to the one clock they all query against (rather than each instance's own,
+possibly skewed, local `DateTime.UtcNow`) means they never disagree about which items are currently due.
+This is the same clock-authority principle the WP-8 lease lock established for lease expiry, now reached
+through idiomatic LINQ rather than raw SQL - worth calling out since `NotificationOutboxWriter`
+deliberately does *not* do this for its own `CreatedAtUtc`/`AvailableAtUtc` writes (see "Notification
+outbox" above for why that asymmetry is intentional: a write recording "now" once isn't a multi-instance
+agreement question the way repeatedly deciding "is this due yet" is).
+
+### Deterministic ordering
+
+`ORDER BY AvailableAtUtc, CreatedAtUtc, Id` - oldest-due-first, with two tie-breakers:
+
+1. **`CreatedAtUtc`** - among items that became due at the exact same instant (realistic, not just
+   theoretical: a future reminder job scheduling many bookings' reminders for one shared computed
+   instant would produce exactly this), the one that was actually enqueued earlier is processed first - a
+   more meaningful secondary order than falling straight to an arbitrary id comparison.
+2. **`Id`** - the final, always-unique tie-breaker, for the (rarer still) case of two items sharing both
+   `AvailableAtUtc` and `CreatedAtUtc`. Without it, two rows tied on every other column would have no
+   guaranteed order at all - SQL Server does not promise any particular order for ties beyond what the
+   `ORDER BY` clause actually specifies. A test proves this specific case is still deterministic by
+   running the identical query twice against unchanged, fully-tied data and asserting both calls return
+   the same sequence - not by asserting a specific absolute order, since SQL Server's `uniqueidentifier`
+   sort order does not match .NET's `Guid.CompareTo`, and asserting against that mismatch would encode the
+   wrong assumption.
+
+### The index: empirically confirmed, not assumed
+
+The WP-8 notification-outbox task already added a filtered index,
+`IX_NotificationOutboxItems_AvailableAtUtc` (`WHERE [Status] = 'Pending'`), anticipating this exact query
+shape. Checking it empirically (seeding a realistic LocalDB table - a majority of rows `Sent`, most
+`Pending` rows scheduled in the future, a small handful actually due - and inspecting the real execution
+plan) showed that index, *as it originally stood*, was **not actually used**: SQL Server chose a full
+`Clustered Index Scan` over seeking it, because the index covered only `AvailableAtUtc` - satisfying the
+`SELECT`'s other columns from a nonclustered index seek would have needed a key lookup per matching row,
+and the optimizer judged a full scan cheaper than that.
+
+This task's one migration, `AddNotificationOutboxDueIndexCoveringColumns`, adds `INCLUDE` columns to that
+same index (`TenantId`, `NotificationType`, `RecipientUserId`, `PayloadJson`, `CreatedAtUtc`,
+`AttemptCount` - exactly `DueNotificationOutboxItem`'s projected columns) so it becomes a **covering**
+index for this query - nothing needed from the base table at all. Re-running the identical plan check
+afterward showed SQL Server switch to an `Index Seek` on that index, `ORDERED FORWARD`, with roughly a 6x
+lower estimated subtree cost than the scan. The migration touches only this one index (`DROP INDEX` +
+`CREATE INDEX`, both against `NotificationOutboxItems`) - it does not edit the earlier, already-merged
+`AddNotificationOutbox` migration, and touches no other table.
+
+### `BatchSize` configuration
+
+```json
+"BackgroundJobs": {
+  "BatchSize": 50
+}
+```
+
+- **Default `50`** - callers (eventually `BackgroundJobsWorker`) read this from
+  `IOptions<BackgroundJobsOptions>.Value.BatchSize` rather than any caller hardcoding a number.
+- **`BackgroundJobsOptionsValidator`** rejects a non-positive value (same `ValidateOnStart()` mechanism
+  every other `BackgroundJobs:*` setting already uses) and rejects a value above
+  `BackgroundJobsOptions.MaxBatchSize` (`1000`) - generous for any realistic per-poll volume this system
+  needs, while still guaranteeing a configuration typo (an extra stray zero, say) can never make a single
+  poll try to pull an unbounded number of rows into memory. `GetDueBatchAsync` itself also rejects a
+  non-positive `batchSize` argument directly (`ArgumentOutOfRangeException`), independent of whether the
+  caller actually went through validated options.
+
+### Tenant behavior
+
+`GetDueBatchAsync` is a **system-wide background read**: it must see due items across every tenant in one
+query, which is exactly why it calls `.IgnoreQueryFilters()` - the same narrow, justified exception
+pattern `docs/tenant-isolation.md` already documents for `IUserRepository.FindByEmailAsync`, applied here
+for the first time to a *different* reason (a background worker with no `ICurrentUserContext.TenantId` at
+all, rather than a pre-authentication lookup). Each returned `DueNotificationOutboxItem` still carries its
+own `TenantId`, so a future processor always knows which tenant's context to act in without a second
+lookup per item. This bypass is scoped to exactly this one query in `NotificationOutboxReader` - it does
+not relax the global filter for anything else. A dedicated test (`OrdinaryTenantScopedQuery_...`) proves
+an ordinary, tenant-scoped query against the very same table is completely unaffected: it still only ever
+sees its own tenant's rows.
+
+### Why this is not wired into the worker yet
+
+`NoOpBackgroundJobCycle` still does nothing. Wiring `GetDueBatchAsync` into the real cycle today would
+mean fetching the same batch of due items on every poll with nothing yet acting on them, re-fetching an
+identical batch forever - there is no email sender, no per-item success/retry/dead-letter handling, and
+nothing here ever marks an item as sent or increments `AttemptCount`. The intended future call chain:
+
+```text
+BackgroundJobsWorker
+  -> acquire the job lease (already built - see "Job lease lock" above)
+  -> run the cycle
+      -> GetDueBatchAsync(BatchSize)
+      -> a future per-item processor: send, then mark Sent / bump AttemptCount and reschedule / dead-letter
+```
+
+That per-item processor, its retry/backoff computation, and wiring it into `IBackgroundJobCycle` are the
+next task's work, not this one's.
+
 ## What the hosted-service foundation and lease lock branches did not implement
 
 Reminder emails, no-show processing, stale-approval handling, an email provider, retry/backoff beyond
