@@ -266,11 +266,206 @@ last successful heartbeat - it can never get permanently stuck.
 - **`InstanceName`** (optional) - human-readable label folded into this instance's `OwnerId` (see "Owner
   identity" above); falls back to `Environment.MachineName` when unset.
 
-## What this branch does not implement
+## Notification outbox
+
+A later WP-8 branch than the lease lock above. Its goal: every logical notification (a booking
+confirmation, a cancellation, a reminder, ...) is durably recorded in the database **exactly once**, even
+when the command/job that decided to send it is retried, two application instances race to create the
+same notification, the application restarts mid-decision, or a genuine concurrency race occurs. **This
+branch does not send any email.** It only persists the *decision* "this notification should eventually be
+sent" exactly once - a later sender task reads rows this branch creates and actually delivers them.
+
+### Why an in-memory flag (or a plain "did I already do this" check) is not enough
+
+A naive approach - keep a `HashSet<string>` of already-sent keys in memory, or do a `SELECT` to check
+"does this notification already exist" before an `INSERT` - looks correct for a single request on a
+single instance, but fails in exactly the scenarios this task is required to survive:
+
+- **An in-memory flag is lost on restart.** The whole point of "durable" is that the record survives the
+  process that created it dying immediately afterward - an in-memory set cannot.
+- **An in-memory flag is per-instance.** Two application instances (the whole reason the WP-8 lease lock
+  exists) each have their own memory - instance A's flag says nothing about what instance B has decided.
+- **`SELECT exists, then INSERT` is a classic TOCTOU race.** Two concurrent callers (two requests, two
+  instances, a retried command racing the original) can both run the `SELECT`, both see "doesn't exist
+  yet," and both proceed to `INSERT` - exactly the anti-pattern the WP-8 lease lock task already called
+  out for job-lease acquisition, and the same fix applies here: the database's own unique constraint, not
+  an application-level check, has to be the actual guarantee.
+
+### How `IdempotencyKey` prevents a duplicate record
+
+`IdempotencyKey` (`NotificationOutboxItem`, `BookSpace.Domain.Entities`) is a deterministic string that
+identifies **one specific logical notification**, not just "a notification for this booking" - e.g.
+`booking:{bookingId}:confirmation` (one booking has exactly one confirmation) vs.
+`booking:{bookingId}:reminder:{scheduledUtc}` (one booking can have several distinct reminders, one per
+scheduled instant, each its own key). A caller that re-decides to enqueue the same logical notification -
+because a command was retried, a job cycle reran, or two instances both reached the same decision -
+always computes the *same* key, so the database can recognize "this exact thing was already recorded,"
+not just "something for this booking exists." **No business event is wired to produce these keys in this
+branch** - the examples above describe a future caller's intent, not anything this branch's code
+constructs or depends on.
+
+### Why the unique constraint is the real guarantee, not `IdempotencyKey` alone
+
+A string being "deterministic" only means two *computations* of it agree - it says nothing about what
+happens when two callers holding that same computed value both try to persist a row at the same instant.
+That guarantee comes from `IX_NotificationOutboxItems_TenantId_IdempotencyKey`, a **unique index** on
+`(TenantId, IdempotencyKey)` (see "Tenant scope of the unique constraint" below for why that pair, not
+`IdempotencyKey` alone). `NotificationOutboxWriter.EnqueueAsync` never does "check, then insert": it always
+attempts the insert directly, and lets the database decide:
+
+```text
+INSERT the row
+    succeeds -> this caller created it: EnqueueOutcome.Created
+    fails with SQL error 2601/2627 (duplicate key) -> someone already recorded it: EnqueueOutcome.AlreadyExists
+    fails with anything else -> a real, unexpected failure - propagates, never reported as a duplicate
+```
+
+Two concurrent callers racing for the identical `(TenantId, IdempotencyKey)` therefore always resolve to
+exactly one row: one insert commits, the other's commit is physically rejected by the index and is
+reported back as the normal, expected `AlreadyExists` outcome - never an unhandled exception, and never a
+second row. `EnqueueAsync` catches *only* SQL errors 2601 (unique index) and 2627 (unique/primary key
+constraint) - any other `DbUpdateException` (a foreign-key violation, a transient connection failure, ...)
+propagates untouched, so a genuinely unexpected database error can never be silently misreported as "this
+was already enqueued." After a caught duplicate-key failure, the failed entity is explicitly detached
+from the `DbContext`'s change tracker - EF Core leaves a failed `SaveChangesAsync`'s entities tracked as
+`Added` otherwise, which would make the *next* `SaveChangesAsync` on that same (shared, scoped) `DbContext`
+try to re-insert the identical row and fail identically, or get bundled into an unrelated caller's next
+commit.
+
+### Clock convention - not the lease lock's SQL-authoritative clock
+
+`CreatedAtUtc` and the default `AvailableAtUtc` are written using this application instance's own
+`DateTimeOffset.UtcNow` - the ordinary convention every other timestamp in this schema already follows
+(`Booking.CreatedAtUtc`, `ApprovalRequest.RequestedAtUtc`, ...), **not** the lease lock's
+`SYSUTCDATETIME()`-only rule. That distinction is deliberate, not an oversight: the lease lock needed the
+database's own clock specifically because two *different instances* compare a lease's expiry against each
+other's writes to decide mutual-exclusion ownership - any clock skew between instances could make them
+disagree about who owns the lock. Nothing about the outbox depends on two instances agreeing on exactly
+when "now" was at enqueue time; a few seconds of skew in `AvailableAtUtc` only shifts a future scheduling
+decision by a few seconds, never a correctness or ownership question. The actual idempotency guarantee
+here comes entirely from the unique index, not from any clock.
+
+### Tenant scope of the unique constraint
+
+The constraint is on **`(TenantId, IdempotencyKey)`**, not `IdempotencyKey` alone - matching this schema's
+existing convention for tenant-owned uniqueness (`Resource` is unique per `(TenantId, Name)`,
+`ResourceType` per `(TenantId, Name)`, not globally). `User.Email` is the one deliberate exception, and
+only because login must resolve a user by email *before* any tenant is known - there is no comparable
+reason for a notification idempotency key to ever need comparing across tenants. In practice, every
+example key given above already embeds a globally-unique `bookingId` GUID, so a cross-tenant collision
+could not happen today regardless - but the constraint does not rely on that being true of every future
+key format. Scoping to `(TenantId, IdempotencyKey)` stays correct even for a hypothetical future
+notification type whose key is built from something less inherently unique than a GUID.
+
+### How this will share a transaction with a future business write
+
+`NotificationOutboxWriter.EnqueueAsync` calls `SaveChangesAsync` itself, which looks like a departure from
+the rest of this codebase's repository convention (`AddAsync` staged, a separate caller-controlled
+`SaveChangesAsync` later - see `BookingRepository`, `ResourceRepository`, etc.). This is deliberate:
+`EnqueueAsync`'s whole contract is to answer, immediately and definitively, "was a new row created or did
+one already exist" - an answer only the database's own constraint can give, not something that can be
+deferred to some later, caller-controlled commit.
+
+That said, every repository in this codebase - including `NotificationOutboxWriter` - operates on the
+*same shared, scoped `BookSpaceDbContext`* within one request/handler (see `CreateBookingCommandHandler`:
+`bookingRepository.AddAsync(booking, ct)` and `approvalRequestRepository.AddAsync(approval, ct)` both just
+stage changes; a single later `bookingRepository.SaveChangesAsync(ct)` commits both together, because
+there is no separate per-repository connection or transaction - the "unit of work" in this codebase *is*
+the shared `DbContext`). The same mechanism gives a future business handler exactly the atomic commit this
+task requires, with no explicit transaction wrapper needed:
+
+```csharp
+// Future handler (NOT implemented by this task):
+await bookingRepository.AddAsync(booking, cancellationToken);           // staged, not yet saved
+var enqueueResult = await notificationOutboxWriter.EnqueueAsync(        // this call's own SaveChangesAsync
+    confirmationRequest, cancellationToken);                            // commits BOTH rows together
+```
+
+Because `bookingRepository.AddAsync` only stages the booking (it does not call `SaveChangesAsync` itself),
+and `EnqueueAsync` is called afterward on the *same* `DbContext`, `EnqueueAsync`'s own `SaveChangesAsync`
+persists the new `Booking` row and the new `NotificationOutboxItem` row in one transaction - exactly the
+"booking confirmed + confirmation enqueued = one atomic commit" requirement. If that `SaveChangesAsync`
+fails for any reason, neither row is persisted; there is no possible outcome where the booking is
+confirmed but the notification silently never existed, or vice versa.
+
+**A known, currently-accepted limitation of this mechanism**: `EnqueueAsync`'s narrow catch
+(`SqlException.Number is 2601 or 2627`) cannot yet distinguish "my own `(TenantId, IdempotencyKey)`
+constraint fired" from "some other unique constraint on an entity staged earlier in the same
+`SaveChangesAsync` call also fired at the same moment" - both currently resolve to
+`EnqueueOutcome.AlreadyExists`, which would be the wrong answer in the (today, impossible, since nothing
+calls `EnqueueAsync` from a handler yet) scenario where the business entity's *own* uniqueness check is
+what actually collided. Whichever future task wires a real business handler into this writer should
+revisit this if the business write it is combined with has its own unique constraint capable of
+colliding at the same instant.
+
+### What this task guarantees - and does not
+
+> **Guarantee: one durable outbox row per `(TenantId, IdempotencyKey)`.**
+
+That is the entire guarantee. It does **not** mean an email is ever sent, and it does **not** mean
+"exactly-once email delivery." A future sender task can:
+1. Read a `Pending` row.
+2. Successfully call an external email provider.
+3. Crash, or lose its database connection, **before** updating that row to `Sent`.
+
+The row is still `Pending` afterward, and a retry processor will correctly try again - which means the
+*email* could be sent twice, even though the *outbox row* was created exactly once. **A durable,
+uniquely-keyed record of "this should be sent" is not the same thing as "this was sent exactly once."**
+Closing that remaining gap is the sender task's responsibility, not this one's - typically via the email
+provider's own idempotency key support where available (many providers accept a client-supplied dedup
+key), plus carefully documenting the actual delivery semantics (at-least-once, with the possibility of a
+rare duplicate email, is a normal and often-accepted outcome for this kind of system - "exactly-once
+delivery" across an unreliable external call is not achievable by the outbox alone, only "exactly-once
+intent to deliver").
+
+### Tenant behavior for a future background reader
+
+`NotificationOutboxItem` is `ITenantOwned` - an ordinary web request reading it is correctly scoped by
+`BookSpaceDbContext`'s global tenant query filter, exactly like every other tenant-owned entity (see
+`docs/tenant-isolation.md`). A future retry/batch processor, however, is a background worker with **no**
+`ICurrentUserContext.TenantId` (no HTTP request, no JWT claim) - and the tenant filter *fails closed* on a
+null tenant context, meaning it would see **zero** rows, not every tenant's rows, if it queried this table
+through the ordinary filtered path. That processor must read due items the same explicitly-unscoped way
+`IUserRepository.FindByEmailAsync` already does for its own narrow, justified reason (see
+`docs/tenant-isolation.md`'s exception table): a dedicated repository method using `.IgnoreQueryFilters()`
+to see every tenant's due items in one query, while every other, ordinary (web-request-scoped) read of
+this table keeps going through the normal filtered path with no special handling. This task does not add
+that repository method (no batch processor exists yet - see below) - this section exists so the next task
+that adds one does not have to rediscover why the plain filtered path cannot work for it.
+
+### Due-item index
+
+`IX_NotificationOutboxItems_AvailableAtUtc` is filtered to `Status = 'Pending'` (the same filtered-index
+pattern `Resource`'s and `Invitation`'s unique indexes already use elsewhere in this schema), so it
+supports exactly the future retry processor's query shape - due, unsent items, oldest first, in a bounded
+batch:
+
+```sql
+SELECT TOP (@batchSize) *
+FROM NotificationOutboxItems
+WHERE Status = 'Pending' AND AvailableAtUtc <= SYSUTCDATETIME()
+ORDER BY AvailableAtUtc ASC;
+```
+
+The index shrinks as items transition to `Sent` and fall out of the filter, rather than growing
+unbounded forever as the table accumulates history.
+
+### What this task does not implement
+
+An email provider, actually sending any email, the reminder/confirmation/cancellation/rejection event
+integrations that would call `EnqueueAsync` (the `IdempotencyKey` examples above describe future intent
+only - no booking handler constructs one yet), a batch/retry processor that reads `Pending` rows, any
+retry/backoff execution, a distributed claim mechanism for an individual outbox row (the WP-8 lease lock
+only ever protected one *job cycle* at a time, never an individual row within it), the no-show job, the
+stale-approval job, an ICS feed, or any frontend change. All of that is future WP-8 work built on top of
+the `NotificationOutboxItem` table and `INotificationOutboxWriter` this task adds.
+
+## What the hosted-service foundation and lease lock branches did not implement
 
 Reminder emails, no-show processing, stale-approval handling, an email provider, retry/backoff beyond
-"log and continue to the next poll," idempotency/outbox tables, an ICS feed, or any new booking business
-logic. All of that is future WP-8 work, layered on top of `IBackgroundJobCycle` without needing to change
-`BackgroundJobsWorker`, `JobLeaseCoordinator`, or `JobLeaseStore` themselves. In particular: the lease
-lock is infrastructure for *scheduling*, not for *correctness of business side effects* - see "What this
-guarantees, and what it does not" above.
+"log and continue to the next poll," an ICS feed, or any new booking business logic. All of that remains
+future WP-8 work, layered on top of `IBackgroundJobCycle` without needing to change `BackgroundJobsWorker`,
+`JobLeaseCoordinator`, or `JobLeaseStore` themselves. In particular: the lease lock is infrastructure for
+*scheduling*, not for *correctness of business side effects* (see "What this guarantees, and what it does
+not" above), and the notification outbox is infrastructure for *durable, deduplicated intent*, not for
+*guaranteed email delivery* (see "What this task guarantees - and does not" above).

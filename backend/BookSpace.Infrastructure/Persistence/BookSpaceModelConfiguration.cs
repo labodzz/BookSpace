@@ -227,5 +227,27 @@ internal static class BookSpaceModelConfiguration
             entity.Property(lease => lease.JobName).HasMaxLength(200);
             entity.Property(lease => lease.OwnerId).HasMaxLength(200).IsRequired();
         });
+
+        builder.Entity<NotificationOutboxItem>(entity =>
+        {
+            entity.ToTable("NotificationOutboxItems");
+            entity.HasKey(item => item.Id);
+            entity.Property(item => item.NotificationType).HasMaxLength(100).IsRequired();
+            entity.Property(item => item.IdempotencyKey).HasMaxLength(NotificationOutboxItem.MaxIdempotencyKeyLength).IsRequired();
+            entity.Property(item => item.PayloadJson).IsRequired();
+            entity.Property(item => item.Status).HasConversion<string>().HasMaxLength(20);
+            // Tenant-scoped, not globally unique - see docs/background-jobs.md for why: this schema's
+            // convention scopes uniqueness to the tenant-owning column for everything except a
+            // pre-authentication global lookup (User.Email), and a notification idempotency key has no
+            // comparable reason to be compared across tenants.
+            entity.HasIndex(item => new { item.TenantId, item.IdempotencyKey }).IsUnique();
+            // Supports the future retry processor's "due items" query (WHERE Status = 'Pending' AND
+            // AvailableAtUtc <= now ORDER BY AvailableAtUtc) - filtered to Pending only, like Resource's
+            // and Invitation's filtered indexes elsewhere in this file, so the index shrinks as items are
+            // marked Sent instead of growing unbounded forever.
+            entity.HasIndex(item => item.AvailableAtUtc).HasFilter("[Status] = 'Pending'");
+            entity.HasOne<Tenant>().WithMany().HasForeignKey(item => item.TenantId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<User>().WithMany().HasForeignKey(item => item.RecipientUserId).OnDelete(DeleteBehavior.Restrict);
+        });
     }
 }

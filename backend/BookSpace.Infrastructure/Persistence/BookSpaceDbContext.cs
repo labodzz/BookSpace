@@ -24,6 +24,7 @@ public sealed class BookSpaceDbContext(DbContextOptions<BookSpaceDbContext> opti
     public DbSet<Booking> Bookings => Set<Booking>();
     public DbSet<ApprovalRequest> ApprovalRequests => Set<ApprovalRequest>();
     public DbSet<JobLease> JobLeases => Set<JobLease>();
+    public DbSet<NotificationOutboxItem> NotificationOutboxItems => Set<NotificationOutboxItem>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
