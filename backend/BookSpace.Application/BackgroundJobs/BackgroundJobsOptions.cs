@@ -6,6 +6,13 @@ namespace BookSpace.Application.BackgroundJobs;
 // actually be doing in Development, Testing, or an unconfigured deployment.
 public sealed class BackgroundJobsOptions
 {
+    // Upper bound BackgroundJobsOptionsValidator enforces for BatchSize - a misconfigured value (a typo
+    // adding a stray zero, say) can never make a single poll try to pull an unbounded number of rows into
+    // memory. 1000 is generous for the per-poll volume this system is expected to need while still being
+    // small enough that materializing a full batch of DueNotificationOutboxItem projections is cheap -
+    // see docs/background-jobs.md ("BatchSize configuration") for the reasoning.
+    public const int MaxBatchSize = 1000;
+
     public bool Enabled { get; init; }
     public int PollIntervalSeconds { get; init; } = 30;
 
@@ -23,4 +30,10 @@ public sealed class BackgroundJobsOptions
     // process id and a per-startup GUID are always appended too, since more than one process can share a
     // machine/container name.
     public string? InstanceName { get; init; }
+
+    // Maximum number of due notification-outbox items NotificationOutboxReader.GetDueBatchAsync returns
+    // in one call - see docs/background-jobs.md ("Due-batch query"). Bounded (BackgroundJobsOptionsValidator
+    // enforces 1..MaxBatchSize) so a backlog of thousands of due items is always processed in fixed-size
+    // slices, never loaded all at once.
+    public int BatchSize { get; init; } = 50;
 }

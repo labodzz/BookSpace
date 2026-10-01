@@ -51,6 +51,7 @@ public static class DependencyInjection
         services.AddScoped<ITenantRepository, TenantRepository>();
         services.AddScoped<IJobLeaseStore, JobLeaseStore>();
         services.AddScoped<INotificationOutboxWriter, NotificationOutboxWriter>();
+        services.AddScoped<INotificationOutboxReader, NotificationOutboxReader>();
 
         return services;
     }
