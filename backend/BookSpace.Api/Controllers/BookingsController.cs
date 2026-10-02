@@ -14,7 +14,7 @@ namespace BookSpace.Api.Controllers;
 // (below) are gated to Approver/TenantAdmin/SysAdmin at the route, with a further in-handler check that a
 // plain Approver is actually assigned to the specific resource (see ApprovalAuthorization).
 [ApiController]
-[Route("bookings")]
+[Route("api/bookings")]
 [Authorize]
 public sealed class BookingsController(IMediator mediator) : ControllerBase
 {

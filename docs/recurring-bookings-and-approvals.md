@@ -227,11 +227,11 @@ vs. one-off-in-a-series occurrence creation) correctly for each.
 
 ## 11. Cancellation semantics
 
-**One occurrence** (`DELETE /bookings/{id}`, `CancelRemainingSeries` omitted or `false`): only that
+**One occurrence** (`DELETE /api/bookings/{id}`, `CancelRemainingSeries` omitted or `false`): only that
 `Booking` row is cancelled - identical to a one-off booking's cancellation (WP-4). Other occurrences in
 the same series are never touched.
 
-**Remaining series** (`DELETE /bookings/{id}?cancelRemainingSeries=true`): cancels the target occurrence
+**Remaining series** (`DELETE /api/bookings/{id}?cancelRemainingSeries=true`): cancels the target occurrence
 **and** every other occurrence in the same series with `StartUtc >= ` the target's own `StartUtc`, that
 is still in a cancellable status (`Pending` or `Confirmed`). Earlier occurrences (`StartUtc` before the
 target) are never touched, regardless of their status. Occurrences already `Completed`, `NoShow`,
@@ -243,7 +243,7 @@ silently ignores `cancelRemainingSeries=true` - there is no "remaining series" f
 never part of one, and rejecting the flag as an error would be a pointless extra failure mode for no
 benefit.
 
-This extends the *existing* `DELETE /bookings/{id}` endpoint/handler rather than adding a new route -
+This extends the *existing* `DELETE /api/bookings/{id}` endpoint/handler rather than adding a new route -
 API-shape decision confirmed directly rather than assumed.
 
 ## 12. Blackout-after-series behavior

@@ -9,7 +9,7 @@ using Microsoft.AspNetCore.RateLimiting;
 namespace BookSpace.Api.Controllers;
 
 [ApiController]
-[Route("auth")]
+[Route("api/auth")]
 [AllowAnonymous]
 public sealed class AuthController(
     IMediator mediator, IProblemDetailsService problemDetailsService, ICorrelationIdContext correlationIdContext) : ControllerBase
@@ -53,7 +53,7 @@ public sealed class AuthController(
     }
 
     // 204, no tokens - accepting an invitation only activates the account; the caller logs in
-    // separately afterward via POST /auth/login (see docs/user-administration.md §4). A failure never
+    // separately afterward via POST /api/auth/login (see docs/user-administration.md §4). A failure never
     // distinguishes unknown/expired/revoked/already-accepted/no-longer-Invited - same generic-401
     // philosophy login/refresh already apply to their own failures. The raw token is never logged here
     // or anywhere downstream (AcceptInvitationCommandRequestValidator/AuthenticationService) - only its

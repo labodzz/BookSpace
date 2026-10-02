@@ -5,7 +5,7 @@ import { catchError, switchMap, throwError } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import { AuthService } from '../auth/auth.service';
 
-const AUTH_ENDPOINTS = ['/auth/login', '/auth/refresh', '/auth/logout'];
+const AUTH_ENDPOINTS = ['/api/auth/login', '/api/auth/refresh', '/api/auth/logout'];
 
 const ABSOLUTE_URL_SCHEME = /^[a-z][a-z\d+.-]*:\/\//i;
 const PROTOCOL_RELATIVE_URL = /^\/\//;
@@ -41,6 +41,11 @@ function resolveApiOrigin(apiUrl: string, documentOrigin: string | null): { orig
   if (!apiUrl) {
     return { origin: documentOrigin, basePath: '' };
   }
+  if (apiUrl.startsWith('/')) {
+    // A bare path (e.g. '/api') is always same-origin - it names a base path under this page's own
+    // origin, not a separate host, so it's never parseable as an absolute URL on its own.
+    return { origin: documentOrigin, basePath: normalizeBasePath(apiUrl) };
+  }
   try {
     const parsed = new URL(apiUrl);
     return { origin: parsed.origin, basePath: normalizeBasePath(parsed.pathname) };
@@ -69,9 +74,16 @@ export function isApiRequest(url: string, apiUrl: string, documentOrigin: string
 
   if (!ABSOLUTE_URL_SCHEME.test(url)) {
     // A genuinely relative URL always resolves against the CURRENT page's origin, so it can only be
-    // "the API" when apiUrl itself means same-origin (apiUrl === '') - a configured, separate API
-    // origin is never reachable through a bare relative path.
-    return apiUrl === '';
+    // "the API" when apiUrl itself means same-origin: either no restriction at all (apiUrl === '') or
+    // a same-origin base path (apiUrl is itself a bare path like '/api') the request must fall under -
+    // a configured, separate API origin is never reachable through a bare relative path.
+    if (apiUrl === '') {
+      return true;
+    }
+    if (apiUrl.startsWith('/')) {
+      return pathMatchesBase(url.split(/[?#]/)[0], normalizeBasePath(apiUrl));
+    }
+    return false;
   }
 
   let target: URL;

@@ -14,5 +14,5 @@ public interface IAuthenticationService
 // since IAuthenticationService is this response's true owner, the same way LoginResponse's home is
 // really about what LoginAsync returns, not about LoginCommandRequest specifically. No Tokens field:
 // accepting an invitation never issues a session - the caller logs in separately afterward via
-// POST /auth/login (see docs/user-administration.md §4).
+// POST /api/auth/login (see docs/user-administration.md §4).
 public sealed record AcceptInvitationResponse(bool Succeeded, string? ErrorCode = null);

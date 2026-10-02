@@ -24,7 +24,7 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var email = $"invitee-{Guid.NewGuid()}@acme.integration-test";
 
-        var response = await client.PostAsJsonAsync("/users/invitations", new { email, firstName = "New", lastName = "Hire", roles = new[] { "Member" } });
+        var response = await client.PostAsJsonAsync("/api/users/invitations", new { email, firstName = "New", lastName = "Hire", roles = new[] { "Member" } });
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<InviteUserResponse>(JsonOptions);
@@ -38,7 +38,7 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
 
-        var response = await client.PostAsJsonAsync("/users/invitations", new
+        var response = await client.PostAsJsonAsync("/api/users/invitations", new
         {
             email = $"invitee-{Guid.NewGuid()}@acme.integration-test", firstName = "New", lastName = "Hire", roles = new[] { "Member" },
         });
@@ -51,7 +51,7 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
 
-        var response = await client.PostAsJsonAsync("/users/invitations", new
+        var response = await client.PostAsJsonAsync("/api/users/invitations", new
         {
             email = $"invitee-{Guid.NewGuid()}@acme.integration-test", firstName = "New", lastName = "Hire", roles = Array.Empty<string>(),
         });
@@ -64,7 +64,7 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
 
-        var response = await client.PostAsJsonAsync("/users/invitations", new
+        var response = await client.PostAsJsonAsync("/api/users/invitations", new
         {
             email = $"invitee-{Guid.NewGuid()}@acme.integration-test", firstName = "New", lastName = "Hire", roles = Array.Empty<string>(),
         });
@@ -77,7 +77,7 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.PostAsJsonAsync("/users/invitations", new
+        var response = await client.PostAsJsonAsync("/api/users/invitations", new
         {
             email = TestDataSeeder.GlobexAdminEmail, firstName = "Someone", lastName = "Else", roles = Array.Empty<string>(),
         });
@@ -91,7 +91,7 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.PostAsJsonAsync("/users/invitations", new
+        var response = await client.PostAsJsonAsync("/api/users/invitations", new
         {
             email = $"invitee-{Guid.NewGuid()}@acme.integration-test", firstName = "New", lastName = "Hire", roles = new[] { "SysAdmin" },
         });
@@ -106,14 +106,14 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var email = $"reinvite-{Guid.NewGuid()}@acme.integration-test";
-        var firstInvite = await client.PostAsJsonAsync("/users/invitations", new { email, firstName = "New", lastName = "Hire", roles = new[] { "Member" } });
+        var firstInvite = await client.PostAsJsonAsync("/api/users/invitations", new { email, firstName = "New", lastName = "Hire", roles = new[] { "Member" } });
         var firstToken = (await firstInvite.Content.ReadFromJsonAsync<InviteUserResponse>(JsonOptions))!.InvitationToken;
 
-        var secondInvite = await client.PostAsJsonAsync("/users/invitations", new { email, firstName = "New", lastName = "Hire", roles = new[] { "Member" } });
+        var secondInvite = await client.PostAsJsonAsync("/api/users/invitations", new { email, firstName = "New", lastName = "Hire", roles = new[] { "Member" } });
         Assert.Equal(HttpStatusCode.Created, secondInvite.StatusCode);
 
         var acceptWithOldToken = await client.PostAsJsonAsync(
-            "/auth/accept-invitation", new { token = firstToken, password = "a-New-Passw0rd!" });
+            "/api/auth/accept-invitation", new { token = firstToken, password = "a-New-Passw0rd!" });
 
         Assert.Equal(HttpStatusCode.Unauthorized, acceptWithOldToken.StatusCode);
     }
@@ -125,18 +125,18 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var adminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var email = $"activated-{Guid.NewGuid()}@acme.integration-test";
-        var invite = await adminClient.PostAsJsonAsync("/users/invitations", new { email, firstName = "New", lastName = "Hire", roles = new[] { "Member" } });
+        var invite = await adminClient.PostAsJsonAsync("/api/users/invitations", new { email, firstName = "New", lastName = "Hire", roles = new[] { "Member" } });
         var invitation = (await invite.Content.ReadFromJsonAsync<InviteUserResponse>(JsonOptions))!;
 
         using var anonymousClient = _factory.CreateClient();
         var acceptResponse = await anonymousClient.PostAsJsonAsync(
-            "/auth/accept-invitation", new { token = invitation.InvitationToken, password = "a-New-Passw0rd!" });
+            "/api/auth/accept-invitation", new { token = invitation.InvitationToken, password = "a-New-Passw0rd!" });
 
         Assert.Equal(HttpStatusCode.NoContent, acceptResponse.StatusCode);
         // No access/refresh token in the response body - login is a separate, subsequent step.
         Assert.Empty(await acceptResponse.Content.ReadAsByteArrayAsync());
 
-        var loginResponse = await anonymousClient.PostAsJsonAsync("/auth/login", new { email, password = "a-New-Passw0rd!" });
+        var loginResponse = await anonymousClient.PostAsJsonAsync("/api/auth/login", new { email, password = "a-New-Passw0rd!" });
         Assert.Equal(HttpStatusCode.OK, loginResponse.StatusCode);
     }
 
@@ -145,12 +145,12 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var adminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var email = $"reused-{Guid.NewGuid()}@acme.integration-test";
-        var invite = await adminClient.PostAsJsonAsync("/users/invitations", new { email, firstName = "New", lastName = "Hire", roles = Array.Empty<string>() });
+        var invite = await adminClient.PostAsJsonAsync("/api/users/invitations", new { email, firstName = "New", lastName = "Hire", roles = Array.Empty<string>() });
         var token = (await invite.Content.ReadFromJsonAsync<InviteUserResponse>(JsonOptions))!.InvitationToken;
         using var anonymousClient = _factory.CreateClient();
-        await anonymousClient.PostAsJsonAsync("/auth/accept-invitation", new { token, password = "a-New-Passw0rd!" });
+        await anonymousClient.PostAsJsonAsync("/api/auth/accept-invitation", new { token, password = "a-New-Passw0rd!" });
 
-        var secondAttempt = await anonymousClient.PostAsJsonAsync("/auth/accept-invitation", new { token, password = "a-Different-Passw0rd!" });
+        var secondAttempt = await anonymousClient.PostAsJsonAsync("/api/auth/accept-invitation", new { token, password = "a-Different-Passw0rd!" });
 
         Assert.Equal(HttpStatusCode.Unauthorized, secondAttempt.StatusCode);
     }
@@ -160,7 +160,7 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var client = _factory.CreateClient();
 
-        var response = await client.PostAsJsonAsync("/auth/accept-invitation", new { token = "not-a-real-token", password = "a-New-Passw0rd!" });
+        var response = await client.PostAsJsonAsync("/api/auth/accept-invitation", new { token = "not-a-real-token", password = "a-New-Passw0rd!" });
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
@@ -170,7 +170,7 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var client = _factory.CreateClient();
 
-        var response = await client.PostAsJsonAsync("/auth/accept-invitation", new { token = "whatever", password = "short" });
+        var response = await client.PostAsJsonAsync("/api/auth/accept-invitation", new { token = "whatever", password = "short" });
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
@@ -182,7 +182,7 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.GetAsync($"/users/{TestDataSeeder.AcmeApproverUserId}");
+        var response = await client.GetAsync($"/api/users/{TestDataSeeder.AcmeApproverUserId}");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<UserDetailResponse>(JsonOptions);
@@ -196,7 +196,7 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.GetAsync($"/users/{TestDataSeeder.GlobexAdminUserId}");
+        var response = await client.GetAsync($"/api/users/{TestDataSeeder.GlobexAdminUserId}");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
@@ -209,7 +209,7 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var created = await CreateActiveUserAsync(client, "Original", "Name");
 
-        var response = await client.PutAsJsonAsync($"/users/{created.UserId}", new { firstName = "Updated", lastName = "Person" });
+        var response = await client.PutAsJsonAsync($"/api/users/{created.UserId}", new { firstName = "Updated", lastName = "Person" });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<UserDetailResponse>(JsonOptions);
@@ -222,7 +222,7 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
 
-        var response = await client.PutAsJsonAsync($"/users/{TestDataSeeder.AcmeApproverUserId}", new { firstName = "Should", lastName = "BeForbidden" });
+        var response = await client.PutAsJsonAsync($"/api/users/{TestDataSeeder.AcmeApproverUserId}", new { firstName = "Should", lastName = "BeForbidden" });
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -232,7 +232,7 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.PutAsJsonAsync($"/users/{TestDataSeeder.GlobexAdminUserId}", new { firstName = "Should", lastName = "NotApply" });
+        var response = await client.PutAsJsonAsync($"/api/users/{TestDataSeeder.GlobexAdminUserId}", new { firstName = "Should", lastName = "NotApply" });
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
@@ -245,7 +245,7 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var created = await CreateActiveUserAsync(client, "To", "Deactivate");
 
-        var response = await client.DeleteAsync($"/users/{created.UserId}");
+        var response = await client.DeleteAsync($"/api/users/{created.UserId}");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<UserDetailResponse>(JsonOptions);
@@ -257,9 +257,9 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var created = await CreateActiveUserAsync(client, "Already", "Inactive");
-        await client.DeleteAsync($"/users/{created.UserId}");
+        await client.DeleteAsync($"/api/users/{created.UserId}");
 
-        var response = await client.DeleteAsync($"/users/{created.UserId}");
+        var response = await client.DeleteAsync($"/api/users/{created.UserId}");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<UserDetailResponse>(JsonOptions);
@@ -271,7 +271,7 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
 
-        var response = await client.DeleteAsync($"/users/{TestDataSeeder.AcmeApproverUserId}");
+        var response = await client.DeleteAsync($"/api/users/{TestDataSeeder.AcmeApproverUserId}");
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -281,7 +281,7 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.DeleteAsync($"/users/{TestDataSeeder.AcmeAdminUserId}");
+        var response = await client.DeleteAsync($"/api/users/{TestDataSeeder.AcmeAdminUserId}");
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         Assert.Equal("User.SelfLockout", await ReadErrorCodeAsync(response));
@@ -310,9 +310,9 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var secondAdmin = await CreateActiveUserAsync(client, "Second", "Admin");
-        await client.PostAsJsonAsync($"/users/{secondAdmin.UserId}/roles", new { role = "TenantAdmin" });
+        await client.PostAsJsonAsync($"/api/users/{secondAdmin.UserId}/roles", new { role = "TenantAdmin" });
 
-        var response = await client.DeleteAsync($"/users/{secondAdmin.UserId}");
+        var response = await client.DeleteAsync($"/api/users/{secondAdmin.UserId}");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
@@ -322,10 +322,10 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var created = await CreateActiveUserAsync(client, "Will", "BeDeactivated");
-        await client.DeleteAsync($"/users/{created.UserId}");
+        await client.DeleteAsync($"/api/users/{created.UserId}");
 
         using var anonymousClient = _factory.CreateClient();
-        var loginResponse = await anonymousClient.PostAsJsonAsync("/auth/login", new { email = created.Email, password = created.Password });
+        var loginResponse = await anonymousClient.PostAsJsonAsync("/api/auth/login", new { email = created.Email, password = created.Password });
 
         Assert.Equal(HttpStatusCode.Unauthorized, loginResponse.StatusCode);
     }
@@ -335,9 +335,9 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var created = await CreateActiveUserAsync(client, "To", "Reactivate");
-        await client.DeleteAsync($"/users/{created.UserId}");
+        await client.DeleteAsync($"/api/users/{created.UserId}");
 
-        var response = await client.PostAsync($"/users/{created.UserId}/reactivate", null);
+        var response = await client.PostAsync($"/api/users/{created.UserId}/reactivate", null);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<UserDetailResponse>(JsonOptions);
@@ -350,7 +350,7 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var created = await CreateActiveUserAsync(client, "Already", "Active");
 
-        var response = await client.PostAsync($"/users/{created.UserId}/reactivate", null);
+        var response = await client.PostAsync($"/api/users/{created.UserId}/reactivate", null);
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         Assert.Equal("User.StatusConflict", await ReadErrorCodeAsync(response));
@@ -361,11 +361,11 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var created = await CreateActiveUserAsync(client, "Will", "BeReactivated");
-        await client.DeleteAsync($"/users/{created.UserId}");
-        await client.PostAsync($"/users/{created.UserId}/reactivate", null);
+        await client.DeleteAsync($"/api/users/{created.UserId}");
+        await client.PostAsync($"/api/users/{created.UserId}/reactivate", null);
 
         using var anonymousClient = _factory.CreateClient();
-        var loginResponse = await anonymousClient.PostAsJsonAsync("/auth/login", new { email = created.Email, password = created.Password });
+        var loginResponse = await anonymousClient.PostAsJsonAsync("/api/auth/login", new { email = created.Email, password = created.Password });
 
         Assert.Equal(HttpStatusCode.OK, loginResponse.StatusCode);
     }
@@ -378,7 +378,7 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var created = await CreateActiveUserAsync(client, "Role", "Recipient");
 
-        var response = await client.PostAsJsonAsync($"/users/{created.UserId}/roles", new { role = "Approver" });
+        var response = await client.PostAsJsonAsync($"/api/users/{created.UserId}/roles", new { role = "Approver" });
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<AssignRoleResponse>(JsonOptions);
@@ -390,7 +390,7 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.PostAsJsonAsync($"/users/{TestDataSeeder.AcmeApproverUserId}/roles", new { role = "Approver" });
+        var response = await client.PostAsJsonAsync($"/api/users/{TestDataSeeder.AcmeApproverUserId}/roles", new { role = "Approver" });
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         Assert.Equal("User.RoleConflict", await ReadErrorCodeAsync(response));
@@ -401,7 +401,7 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.PostAsJsonAsync($"/users/{TestDataSeeder.AcmeMemberUserId}/roles", new { role = "SysAdmin" });
+        var response = await client.PostAsJsonAsync($"/api/users/{TestDataSeeder.AcmeMemberUserId}/roles", new { role = "SysAdmin" });
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
@@ -411,7 +411,7 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
 
-        var response = await client.PostAsJsonAsync($"/users/{TestDataSeeder.AcmeApproverUserId}/roles", new { role = "TenantAdmin" });
+        var response = await client.PostAsJsonAsync($"/api/users/{TestDataSeeder.AcmeApproverUserId}/roles", new { role = "TenantAdmin" });
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -421,9 +421,9 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var created = await CreateActiveUserAsync(client, "Role", "Loser");
-        await client.PostAsJsonAsync($"/users/{created.UserId}/roles", new { role = "Approver" });
+        await client.PostAsJsonAsync($"/api/users/{created.UserId}/roles", new { role = "Approver" });
 
-        var response = await client.DeleteAsync($"/users/{created.UserId}/roles/Approver");
+        var response = await client.DeleteAsync($"/api/users/{created.UserId}/roles/Approver");
 
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
     }
@@ -433,7 +433,7 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.DeleteAsync($"/users/{TestDataSeeder.AcmeMemberUserId}/roles/TenantAdmin");
+        var response = await client.DeleteAsync($"/api/users/{TestDataSeeder.AcmeMemberUserId}/roles/TenantAdmin");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Equal("User.RoleNotAssigned", await ReadErrorCodeAsync(response));
@@ -444,7 +444,7 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.DeleteAsync($"/users/{TestDataSeeder.AcmeAdminUserId}/roles/TenantAdmin");
+        var response = await client.DeleteAsync($"/api/users/{TestDataSeeder.AcmeAdminUserId}/roles/TenantAdmin");
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         Assert.Equal("User.SelfLockout", await ReadErrorCodeAsync(response));
@@ -464,9 +464,9 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var secondAdmin = await CreateActiveUserAsync(client, "Second", "Admin");
-        await client.PostAsJsonAsync($"/users/{secondAdmin.UserId}/roles", new { role = "TenantAdmin" });
+        await client.PostAsJsonAsync($"/api/users/{secondAdmin.UserId}/roles", new { role = "TenantAdmin" });
 
-        var response = await client.DeleteAsync($"/users/{secondAdmin.UserId}/roles/TenantAdmin");
+        var response = await client.DeleteAsync($"/api/users/{secondAdmin.UserId}/roles/TenantAdmin");
 
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
     }
@@ -479,7 +479,7 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.DeleteAsync($"/users/{TestDataSeeder.AcmeApproverUserId}/roles/Approver");
+        var response = await client.DeleteAsync($"/api/users/{TestDataSeeder.AcmeApproverUserId}/roles/Approver");
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         Assert.Equal("User.ApproverAssignmentsExist", await ReadErrorCodeAsync(response));
@@ -490,7 +490,7 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.DeleteAsync($"/users/{TestDataSeeder.AcmeSysAdminUserId}/roles/SysAdmin");
+        var response = await client.DeleteAsync($"/api/users/{TestDataSeeder.AcmeSysAdminUserId}/roles/SysAdmin");
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
@@ -505,15 +505,15 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var created = await CreateActiveUserAsync(client, "Stale", "Claims");
         using var subjectClient = _factory.CreateClient();
-        var loginResponse = await subjectClient.PostAsJsonAsync("/auth/login", new { email = created.Email, password = created.Password });
+        var loginResponse = await subjectClient.PostAsJsonAsync("/api/auth/login", new { email = created.Email, password = created.Password });
         var tokens = await loginResponse.Content.ReadFromJsonAsync<TokensResponse>(JsonOptions);
         subjectClient.DefaultRequestHeaders.Authorization = new("Bearer", tokens!.AccessToken);
 
-        await client.PostAsJsonAsync($"/users/{created.UserId}/roles", new { role = "TenantAdmin" });
+        await client.PostAsJsonAsync($"/api/users/{created.UserId}/roles", new { role = "TenantAdmin" });
 
         // Still carries only the roles from login time - the already-issued token has no TenantAdmin
         // claim, so an admin-only action must still be forbidden with this exact token.
-        var attemptAdminAction = await subjectClient.GetAsync("/users");
+        var attemptAdminAction = await subjectClient.GetAsync("/api/users");
         Assert.Equal(HttpStatusCode.Forbidden, attemptAdminAction.StatusCode);
     }
 
@@ -522,11 +522,11 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     private async Task<(Guid UserId, string Email, string Password)> CreateActiveUserAsync(HttpClient adminClient, string firstName, string lastName)
     {
         var email = $"{Guid.NewGuid()}@acme.integration-test";
-        var invite = await adminClient.PostAsJsonAsync("/users/invitations", new { email, firstName, lastName, roles = new[] { "Member" } });
+        var invite = await adminClient.PostAsJsonAsync("/api/users/invitations", new { email, firstName, lastName, roles = new[] { "Member" } });
         var invitation = (await invite.Content.ReadFromJsonAsync<InviteUserResponse>(JsonOptions))!;
         const string password = "a-New-Passw0rd!";
         using var anonymousClient = _factory.CreateClient();
-        await anonymousClient.PostAsJsonAsync("/auth/accept-invitation", new { token = invitation.InvitationToken, password });
+        await anonymousClient.PostAsJsonAsync("/api/auth/accept-invitation", new { token = invitation.InvitationToken, password });
         return (invitation.UserId, email, password);
     }
 
@@ -539,7 +539,7 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     private async Task<HttpClient> AuthenticatedClientAsync(string email)
     {
         var client = _factory.CreateClient();
-        var loginResponse = await client.PostAsJsonAsync("/auth/login", new { email, password = TestDataSeeder.Password });
+        var loginResponse = await client.PostAsJsonAsync("/api/auth/login", new { email, password = TestDataSeeder.Password });
         loginResponse.EnsureSuccessStatusCode();
         var loginBody = await loginResponse.Content.ReadFromJsonAsync<TokensResponse>(JsonOptions);
         client.DefaultRequestHeaders.Authorization = new("Bearer", loginBody!.AccessToken);

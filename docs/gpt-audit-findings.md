@@ -28,7 +28,7 @@ product/design decision before fixing.
 
 - [ ] S1 — `isApiRequest` prefix match can leak bearer token to a look-alike origin — TODO
 - [ ] S2 — login timing can reveal whether an email exists — TODO
-- [ ] S3 — `/auth/refresh` and `/auth/logout` have no rate limit — TODO
+- [ ] S3 — `/api/auth/refresh` and `/api/auth/logout` have no rate limit — TODO
 - [ ] S4 — no max length on email/password/refresh-token inputs — TODO
 - [ ] S5 — cancellation reason sent as a URL query parameter — TODO
 - [ ] S6 — failed-login log includes raw attacker-supplied email — TODO

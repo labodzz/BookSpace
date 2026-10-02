@@ -277,7 +277,7 @@ ownership/idempotency/terminal-state rules. `IntervalMathTests.cs` gained direct
 **`BookSpace.Api.Tests/Bookings/BookingsEndpointsTests.cs`** (SQLite, real HTTP pipeline): auth/RBAC
 wiring, ProblemDetails/`errorCode` shape on the wire, cross-tenant 404 on both create and cancel,
 cross-user 404 on cancel (same tenant, different owner), the freed-capacity-after-cancellation proof
-against the real `/resources/{id}/availability` endpoint.
+against the real `/api/resources/{id}/availability` endpoint.
 
 **`BookSpace.Infrastructure.Tests/Persistence/BookingConcurrencyTests.cs`** (real SQL Server LocalDB,
 throwaway database per test-class run, same pattern as `OptimisticConcurrencyTests`) - this is the only
@@ -307,7 +307,7 @@ All three were run five consecutive times during development with zero flaky fai
   ever needs to accept a high rate of concurrent, genuinely-disjoint bookings.
 - `Resource.RequiresApproval` is not wired into booking creation (§1) - every booking this work packet
   creates is `Confirmed` regardless of that flag.
-- No idempotency-key support on `POST /bookings` - a client retrying a timed-out request could create a
+- No idempotency-key support on `POST /api/bookings` - a client retrying a timed-out request could create a
   duplicate booking. See [open-questions.md](open-questions.md#idempotency).
 - `TenantAdmin`/`SysAdmin` can cancel another user's booking (§2), but there is still no *active*
   notification (email/push/in-app) telling the affected owner it happened - only an audit trail visible
@@ -334,7 +334,7 @@ in Start/End directly, all without leaving the page. `ResourceAvailabilityCompon
 multi-day window (up to the API's own 92-day cap) to find a good day in the first place - and its own
 "Book" action on a slot now lands here with `start`/`end` query params prefilled.
 
-**No new backend endpoint or contract change was needed.** `GET /resources/{id}/availability` already
+**No new backend endpoint or contract change was needed.** `GET /api/resources/{id}/availability` already
 returns everything a single day's decision needs - `openPeriods`, `blackouts`, `busyPeriods`, and the
 pre-computed, capacity-aware `bookableSlots` - so the form fetches it with `from == to == the selected
 date` (never a wider range) every time the date changes, via an RxJS `switchMap` so a fast date change
@@ -360,7 +360,7 @@ above, and that remains the only authority that actually decides whether a booki
 **The race this doesn't (and can't) close client-side**: availability is a read-model snapshot with no
 lock behind it (§7) - between the page loading a day's data and the user pressing Confirm, someone else's
 booking, a new blackout, or an archived resource can make the chosen interval genuinely invalid, and the
-live check above has no way to know that until it happens. When `POST /bookings` rejects the request with
+live check above has no way to know that until it happens. When `POST /api/bookings` rejects the request with
 `Booking.OutsideAvailability`, `Booking.BlackoutConflict`, or `Booking.CapacityExceeded`, the form:
 keeps every entered field exactly as the user left it (never resets the date/time/quantity inputs),
 shows a distinct inline notice that the time became unavailable, and automatically reloads that day's

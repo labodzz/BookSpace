@@ -7,7 +7,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace BookSpace.Api.Controllers;
 
 [ApiController]
-[Route("users")]
+[Route("api/users")]
 [Authorize]
 public sealed class UsersController(IMediator mediator) : ControllerBase
 {

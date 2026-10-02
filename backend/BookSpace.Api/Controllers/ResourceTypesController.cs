@@ -9,7 +9,7 @@ namespace BookSpace.Api.Controllers;
 // one when creating a resource. Every POST/PUT/DELETE is admin-only, same convention as
 // ResourcesController.
 [ApiController]
-[Route("resource-types")]
+[Route("api/resource-types")]
 [Authorize]
 public sealed class ResourceTypesController(IMediator mediator) : ControllerBase
 {

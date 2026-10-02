@@ -10,7 +10,7 @@ namespace BookSpace.Api.Controllers;
 // approvers/availability to decide what to book. Every POST/PUT/DELETE is admin-only, since managing
 // a resource's setup is a TenantAdmin responsibility, not a Member one.
 [ApiController]
-[Route("resources")]
+[Route("api/resources")]
 [Authorize]
 public sealed class ResourcesController(IMediator mediator) : ControllerBase
 {
