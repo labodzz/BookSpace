@@ -1,5 +1,6 @@
 using BookSpace.Application.Common;
 using BookSpace.Application.Mediator;
+using BookSpace.Application.Notifications;
 using BookSpace.Application.Security;
 using BookSpace.Domain.Entities;
 using BookSpace.Domain.Enums;
@@ -38,7 +39,8 @@ public sealed class CancelBookingCommandRequestValidator : AbstractValidator<Can
 // Cancellation never needs IResourceBookingLock: removing an active booking can only reduce summed
 // demand, which can never turn a valid capacity state into an invalid one, so an ordinary load-mutate-
 // save is sufficient - see docs/bookings-and-concurrency.md.
-public sealed class CancelBookingCommandHandler(IBookingRepository bookingRepository, ICurrentUserContext currentUserContext)
+public sealed class CancelBookingCommandHandler(
+    IBookingRepository bookingRepository, ICurrentUserContext currentUserContext, INotificationOutboxWriter notificationOutboxWriter)
     : IRequestHandler<CancelBookingCommandRequest, CancelBookingResponse>
 {
     private static readonly BookingStatus[] CancellableStatuses = [BookingStatus.Pending, BookingStatus.Confirmed];
@@ -71,6 +73,13 @@ public sealed class CancelBookingCommandHandler(IBookingRepository bookingReposi
 
             CancelOccurrence(booking, request.Reason);
 
+            // Every booking ACTUALLY cancelled by this call (the primary, plus any cascaded sibling) gets
+            // exactly one cancellation notification - one idempotent outbox item per cancelled occurrence,
+            // never one for the whole series, so a future sender's per-booking message stays consistent
+            // with every other booking lifecycle notification. Tracked here as the source of what to
+            // enqueue below.
+            var cancelledBookings = new List<Booking> { booking };
+
             // Every OTHER occurrence in the same series that starts at or after this one, and is still
             // in a cancellable status - never occurrences that already ran their course (Completed/
             // NoShow), were already Rejected, or predate this one. A booking with no SeriesId (a one-off
@@ -86,11 +95,23 @@ public sealed class CancelBookingCommandHandler(IBookingRepository bookingReposi
                     }
 
                     CancelOccurrence(occurrence, request.Reason);
+                    cancelledBookings.Add(occurrence);
                     cascadedIds.Add(occurrence.Id);
                 }
             }
 
-            await bookingRepository.SaveChangesAsync(cancellationToken);
+            // EnqueueAsync calls SaveChangesAsync itself: the first call below commits the primary AND
+            // every cascaded sibling's Cancelled mutation (all staged above) together with that first
+            // outbox row, in one transaction; each further call (one per additional cascaded cancellation)
+            // then commits only its own outbox row, since the booking rows are already saved by then - the
+            // same accepted, narrow gap documented for CreateRecurringSeriesCommandHandler and
+            // ApproveBookingCommandHandler's own multi-occurrence commits. There is no separate
+            // bookingRepository.SaveChangesAsync call here: a failure on the very first EnqueueAsync call
+            // leaves no booking mutation persisted at all.
+            foreach (var cancelledBooking in cancelledBookings)
+            {
+                await notificationOutboxWriter.EnqueueAsync(BookingNotificationFactory.Cancellation(cancelledBooking), cancellationToken);
+            }
         }
 
         return new CancelBookingResponse(booking.Id, booking.ResourceId, booking.StartUtc, booking.EndUtc, booking.Quantity, booking.Status, cascadedIds);

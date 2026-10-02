@@ -1,5 +1,6 @@
 using BookSpace.Application.Bookings;
 using BookSpace.Application.Common;
+using BookSpace.Application.Notifications;
 using BookSpace.Application.Resources;
 using BookSpace.Application.Security;
 using BookSpace.Domain.Entities;
@@ -20,24 +21,32 @@ public sealed class CreateBookingCommandHandlerTests
     private readonly Mock<IApprovalRequestRepository> _approvalRequestRepository = new();
     private readonly Mock<ITenantRepository> _tenantRepository = new();
     private readonly Mock<ICurrentUserContext> _currentUserContext = new();
+    private readonly Mock<INotificationOutboxWriter> _notificationOutboxWriter = new();
 
     private static readonly DateOnly Date = new(2026, 9, 7);
     private static readonly Guid TenantId = Guid.NewGuid();
     private static readonly Guid UserId = Guid.NewGuid();
 
-    private CreateBookingCommandHandler CreateSut() => new(
-        // The lock is a pass-through here (no real DB/transaction in a handler test) - concurrency
-        // itself is proven separately against real SQL Server in BookSpace.Infrastructure.Tests.
-        new PassThroughResourceBookingLock(),
-        _resourceRepository.Object,
-        _availabilityRuleRepository.Object,
-        _blackoutPeriodRepository.Object,
-        _bookingAvailabilityRepository.Object,
-        _bookingRepository.Object,
-        _resourceApproverRepository.Object,
-        _approvalRequestRepository.Object,
-        _tenantRepository.Object,
-        _currentUserContext.Object);
+    private CreateBookingCommandHandler CreateSut()
+    {
+        _notificationOutboxWriter
+            .Setup(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new EnqueueNotificationResult(EnqueueOutcome.Created, Guid.NewGuid()));
+        return new CreateBookingCommandHandler(
+            // The lock is a pass-through here (no real DB/transaction in a handler test) - concurrency
+            // itself is proven separately against real SQL Server in BookSpace.Infrastructure.Tests.
+            new PassThroughResourceBookingLock(),
+            _resourceRepository.Object,
+            _availabilityRuleRepository.Object,
+            _blackoutPeriodRepository.Object,
+            _bookingAvailabilityRepository.Object,
+            _bookingRepository.Object,
+            _resourceApproverRepository.Object,
+            _approvalRequestRepository.Object,
+            _tenantRepository.Object,
+            _currentUserContext.Object,
+            _notificationOutboxWriter.Object);
+    }
 
     private static DateTimeOffset At(int hour, int minute = 0) => new(Date.Year, Date.Month, Date.Day, hour, minute, 0, TimeSpan.Zero);
 
@@ -81,7 +90,51 @@ public sealed class CreateBookingCommandHandlerTests
         _bookingRepository.Verify(r => r.AddAsync(
             It.Is<Booking>(b => b.TenantId == TenantId && b.UserId == UserId && b.ResourceId == resource.Id && b.Status == BookingStatus.Confirmed),
             It.IsAny<CancellationToken>()), Times.Once);
-        _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+        // A booking created directly as Confirmed (no approval required) enqueues exactly one confirmation
+        // notification, to the booking's own owner. EnqueueAsync's own SaveChangesAsync is the only commit
+        // point - no separate bookingRepository.SaveChangesAsync call on this branch.
+        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(
+            It.Is<NotificationOutboxRequest>(req =>
+                req.TenantId == TenantId && req.NotificationType == BookingNotificationTypes.Confirmation &&
+                req.RecipientUserId == UserId && req.IdempotencyKey == $"booking:{result.Id}:confirmation"),
+            It.IsAny<CancellationToken>()), Times.Once);
+        _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Handle_WhenTheNotificationEnqueueFails_DoesNotPersistTheBookingEitherSinceNoSeparateSaveExists()
+    {
+        // Proves atomicity the only way a mock-based handler test can: for a Confirmed booking, the
+        // handler has no fallback SaveChangesAsync call that could persist it independently of the
+        // enqueue - if EnqueueAsync throws, nothing in this handler commits anything.
+        var resource = CreateResource();
+        SetupResource(resource, OpenAllDay(resource));
+        var sut = CreateSut();
+        _notificationOutboxWriter
+            .Setup(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Simulated unexpected database failure."));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            sut.Handle(new CreateBookingCommandRequest(resource.Id, At(10), At(11), Quantity: 1), CancellationToken.None));
+
+        _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Handle_WhenTheNotificationWasAlreadyEnqueuedByAnEarlierAttempt_StillCreatesTheBookingSuccessfully()
+    {
+        // EnqueueOutcome.AlreadyExists is explicitly not an error (see INotificationOutboxWriter) - a
+        // retried create request must not surface it as one.
+        var resource = CreateResource();
+        SetupResource(resource, OpenAllDay(resource));
+        _notificationOutboxWriter
+            .Setup(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new EnqueueNotificationResult(EnqueueOutcome.AlreadyExists, null));
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new CreateBookingCommandRequest(resource.Id, At(10), At(11), Quantity: 1), CancellationToken.None);
+
+        Assert.Equal(BookingStatus.Confirmed, result.Status);
     }
 
     [Fact]
@@ -309,6 +362,9 @@ public sealed class CreateBookingCommandHandlerTests
             It.Is<ApprovalRequest>(a => a.BookingId == result.Id && a.Status == ApprovalStatus.Pending && a.ApproverId == null),
             It.IsAny<CancellationToken>()), Times.Once);
         _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+        // A booking that still needs approval is NOT Confirmed by this call - no confirmation notification
+        // until a later ApproveBookingCommandHandler call actually confirms it.
+        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     // The anomalous-state guard for RequiresApproval - if the current tenant can't be resolved (it always
@@ -382,10 +438,13 @@ public sealed class CreateBookingCommandHandlerTests
             .Setup(l => l.RunExclusiveAsync(
                 It.IsAny<Guid>(), It.IsAny<Func<CancellationToken, Task<CreateBookingResponse>>>(), It.IsAny<CancellationToken>()))
             .Returns<Guid, Func<CancellationToken, Task<CreateBookingResponse>>, CancellationToken>((_, operation, ct) => operation(ct));
+        _notificationOutboxWriter
+            .Setup(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new EnqueueNotificationResult(EnqueueOutcome.Created, Guid.NewGuid()));
         var sut = new CreateBookingCommandHandler(
             lockMock.Object, _resourceRepository.Object, _availabilityRuleRepository.Object, _blackoutPeriodRepository.Object,
             _bookingAvailabilityRepository.Object, _bookingRepository.Object, _resourceApproverRepository.Object,
-            _approvalRequestRepository.Object, _tenantRepository.Object, _currentUserContext.Object);
+            _approvalRequestRepository.Object, _tenantRepository.Object, _currentUserContext.Object, _notificationOutboxWriter.Object);
 
         await sut.Handle(new CreateBookingCommandRequest(resource.Id, At(9), At(10)), CancellationToken.None);
 

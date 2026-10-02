@@ -1,5 +1,6 @@
 using BookSpace.Application.Common;
 using BookSpace.Application.Mediator;
+using BookSpace.Application.Notifications;
 using BookSpace.Application.Resources;
 using BookSpace.Application.Security;
 using BookSpace.Domain.Entities;
@@ -46,7 +47,8 @@ public sealed class CreateBookingCommandHandler(
     IResourceApproverRepository resourceApproverRepository,
     IApprovalRequestRepository approvalRequestRepository,
     ITenantRepository tenantRepository,
-    ICurrentUserContext currentUserContext)
+    ICurrentUserContext currentUserContext,
+    INotificationOutboxWriter notificationOutboxWriter)
     : IRequestHandler<CreateBookingCommandRequest, CreateBookingResponse>
 {
     public Task<CreateBookingResponse> Handle(CreateBookingCommandRequest request, CancellationToken cancellationToken) =>
@@ -113,7 +115,21 @@ public sealed class CreateBookingCommandHandler(
             await bookingRepository.AddAsync(booking, cancellationToken);
         }
 
-        await bookingRepository.SaveChangesAsync(cancellationToken);
+        // Confirmation is only ever enqueued for a booking that is ACTUALLY Confirmed by this call - never
+        // for the Pending branch above. EnqueueAsync calls SaveChangesAsync itself, so this is the single
+        // commit point for both the new Booking row and the new NotificationOutboxItem row together (see
+        // docs/background-jobs.md, "How this will share a transaction with a future business write") -
+        // there is no separate bookingRepository.SaveChangesAsync call on this branch, so a failure here
+        // leaves neither row persisted. The Pending branch has no notification to enqueue, so it still
+        // needs its own explicit save.
+        if (booking.Status == BookingStatus.Confirmed)
+        {
+            await notificationOutboxWriter.EnqueueAsync(BookingNotificationFactory.Confirmation(booking), cancellationToken);
+        }
+        else
+        {
+            await bookingRepository.SaveChangesAsync(cancellationToken);
+        }
 
         return new CreateBookingResponse(booking.Id, booking.ResourceId, booking.StartUtc, booking.EndUtc, booking.Quantity, booking.Status, resource.TimeZoneId);
     }

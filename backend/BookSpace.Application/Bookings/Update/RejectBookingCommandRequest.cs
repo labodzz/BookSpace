@@ -1,5 +1,6 @@
 using BookSpace.Application.Common;
 using BookSpace.Application.Mediator;
+using BookSpace.Application.Notifications;
 using BookSpace.Application.Resources;
 using BookSpace.Application.Security;
 using BookSpace.Domain.Enums;
@@ -37,7 +38,8 @@ public sealed class RejectBookingCommandHandler(
     IBookingRepository bookingRepository,
     IApprovalRequestRepository approvalRequestRepository,
     IResourceApproverRepository resourceApproverRepository,
-    ICurrentUserContext currentUserContext)
+    ICurrentUserContext currentUserContext,
+    INotificationOutboxWriter notificationOutboxWriter)
     : IRequestHandler<RejectBookingCommandRequest, RejectBookingResponse>
 {
     public async Task<RejectBookingResponse> Handle(RejectBookingCommandRequest request, CancellationToken cancellationToken)
@@ -75,7 +77,11 @@ public sealed class RejectBookingCommandHandler(
         approvalRequest.DecisionNote = request.DecisionNote;
         approvalRequest.DecidedAtUtc = DateTimeOffset.UtcNow;
 
-        await bookingRepository.SaveChangesAsync(cancellationToken);
+        // EnqueueAsync calls SaveChangesAsync itself, committing the Booking/ApprovalRequest mutation and
+        // the new NotificationOutboxItem row together - see CreateBookingCommandHandler for the same
+        // pattern. No separate bookingRepository.SaveChangesAsync call: a failure here leaves neither
+        // persisted.
+        await notificationOutboxWriter.EnqueueAsync(BookingNotificationFactory.Rejection(booking), cancellationToken);
 
         return new RejectBookingResponse(booking.Id, booking.ResourceId, booking.StartUtc, booking.EndUtc, booking.Quantity, booking.Status);
     }

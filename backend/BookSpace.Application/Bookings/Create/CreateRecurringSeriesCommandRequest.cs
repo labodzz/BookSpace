@@ -1,5 +1,6 @@
 using BookSpace.Application.Common;
 using BookSpace.Application.Mediator;
+using BookSpace.Application.Notifications;
 using BookSpace.Application.Resources;
 using BookSpace.Application.Security;
 using BookSpace.Domain.Entities;
@@ -114,7 +115,8 @@ public sealed class CreateRecurringSeriesCommandHandler(
     IResourceApproverRepository resourceApproverRepository,
     IApprovalRequestRepository approvalRequestRepository,
     ITenantRepository tenantRepository,
-    ICurrentUserContext currentUserContext)
+    ICurrentUserContext currentUserContext,
+    INotificationOutboxWriter notificationOutboxWriter)
     : IRequestHandler<CreateRecurringSeriesCommandRequest, CreateRecurringSeriesResponse>
 {
     public Task<CreateRecurringSeriesResponse> Handle(CreateRecurringSeriesCommandRequest request, CancellationToken cancellationToken) =>
@@ -237,7 +239,27 @@ public sealed class CreateRecurringSeriesCommandHandler(
             await approvalRequestRepository.AddAsync(approvalRequest, cancellationToken);
         }
 
-        await recurringSeriesRepository.SaveChangesAsync(cancellationToken);
+        // One confirmation per occurrence that is ACTUALLY Confirmed by this call - never for a Pending
+        // (approval-required) occurrence. EnqueueAsync calls SaveChangesAsync itself: the FIRST call below
+        // commits the series, every staged Booking/ApprovalRequest, and that first outbox row together in
+        // one transaction; each subsequent call (one per additional confirmed occurrence) then commits its
+        // own outbox row on its own, since the series/booking rows are already durably saved by then - see
+        // docs/background-jobs.md ("Booking lifecycle notifications - recurring series") for why a crash
+        // between two of these calls is an accepted, narrow gap (already-saved bookings whose own
+        // notification didn't get enqueued yet), not a half-saved booking. A series with no confirmed
+        // occurrence at all (every occurrence required approval) still needs its own explicit save.
+        var confirmedOccurrences = bookings.Where(candidate => candidate.Status == BookingStatus.Confirmed).ToList();
+        if (confirmedOccurrences.Count == 0)
+        {
+            await recurringSeriesRepository.SaveChangesAsync(cancellationToken);
+        }
+        else
+        {
+            foreach (var confirmedOccurrence in confirmedOccurrences)
+            {
+                await notificationOutboxWriter.EnqueueAsync(BookingNotificationFactory.Confirmation(confirmedOccurrence), cancellationToken);
+            }
+        }
 
         return new CreateRecurringSeriesResponse(
             series.Id,

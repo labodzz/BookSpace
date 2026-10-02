@@ -1,5 +1,6 @@
 using BookSpace.Application.Bookings;
 using BookSpace.Application.Common;
+using BookSpace.Application.Notifications;
 using BookSpace.Application.Resources;
 using BookSpace.Application.Security;
 using BookSpace.Domain.Entities;
@@ -15,13 +16,21 @@ public sealed class RejectBookingCommandHandlerTests
     private readonly Mock<IApprovalRequestRepository> _approvalRequestRepository = new();
     private readonly Mock<IResourceApproverRepository> _resourceApproverRepository = new();
     private readonly Mock<ICurrentUserContext> _currentUserContext = new();
+    private readonly Mock<INotificationOutboxWriter> _notificationOutboxWriter = new();
 
     private static readonly Guid TenantId = Guid.NewGuid();
     private static readonly Guid ApproverUserId = Guid.NewGuid();
     private static readonly Guid ResourceId = Guid.NewGuid();
 
-    private RejectBookingCommandHandler CreateSut() =>
-        new(new PassThroughResourceBookingLock(), _bookingRepository.Object, _approvalRequestRepository.Object, _resourceApproverRepository.Object, _currentUserContext.Object);
+    private RejectBookingCommandHandler CreateSut()
+    {
+        _notificationOutboxWriter
+            .Setup(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new EnqueueNotificationResult(EnqueueOutcome.Created, Guid.NewGuid()));
+        return new RejectBookingCommandHandler(
+            new PassThroughResourceBookingLock(), _bookingRepository.Object, _approvalRequestRepository.Object,
+            _resourceApproverRepository.Object, _currentUserContext.Object, _notificationOutboxWriter.Object);
+    }
 
     private static Booking CreatePendingBooking() => new()
     {
@@ -62,7 +71,29 @@ public sealed class RejectBookingCommandHandlerTests
         Assert.Equal(ApprovalStatus.Rejected, approvalRequest.Status);
         Assert.Equal(ApproverUserId, approvalRequest.ApproverId);
         Assert.Equal("No longer needed", approvalRequest.DecisionNote);
-        _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+        // Rejection goes to the booking OWNER, not the approver who made the decision (ApproverUserId !=
+        // booking.UserId here). EnqueueAsync's own SaveChangesAsync is the sole commit point.
+        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(
+            It.Is<NotificationOutboxRequest>(req =>
+                req.TenantId == TenantId && req.NotificationType == BookingNotificationTypes.Rejection &&
+                req.RecipientUserId == booking.UserId && req.IdempotencyKey == $"booking:{booking.Id}:rejection"),
+            It.IsAny<CancellationToken>()), Times.Once);
+        _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Handle_WhenTheNotificationEnqueueFails_DoesNotPersistTheRejectionEitherSinceNoSeparateSaveExists()
+    {
+        var booking = CreatePendingBooking();
+        SetupApprover(booking);
+        var sut = CreateSut();
+        _notificationOutboxWriter
+            .Setup(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Simulated unexpected database failure."));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => sut.Handle(new RejectBookingCommandRequest(booking.Id, null), CancellationToken.None));
+
+        _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -110,6 +141,7 @@ public sealed class RejectBookingCommandHandlerTests
             sut.Handle(new RejectBookingCommandRequest(Guid.NewGuid(), null), CancellationToken.None));
 
         Assert.Equal(ErrorCodes.BookingNotFound, exception.ErrorCode);
+        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -127,6 +159,7 @@ public sealed class RejectBookingCommandHandlerTests
 
         Assert.Equal(ErrorCodes.BookingApprovalForbidden, exception.ErrorCode);
         _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -142,6 +175,7 @@ public sealed class RejectBookingCommandHandlerTests
 
         Assert.Equal(ErrorCodes.BookingApprovalNotAllowed, exception.ErrorCode);
         _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     // Approve's equivalent guard has a 3-status [Theory] (Confirmed/Rejected/Cancelled); Reject only ever
@@ -161,5 +195,6 @@ public sealed class RejectBookingCommandHandlerTests
 
         Assert.Equal(ErrorCodes.BookingApprovalNotAllowed, exception.ErrorCode);
         _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 }

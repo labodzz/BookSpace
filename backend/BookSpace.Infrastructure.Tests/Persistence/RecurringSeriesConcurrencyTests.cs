@@ -1,5 +1,6 @@
 using BookSpace.Application.Bookings;
 using BookSpace.Application.Common;
+using BookSpace.Application.Notifications;
 using BookSpace.Application.Resources;
 using BookSpace.Application.Security;
 using BookSpace.Domain.Entities;
@@ -190,7 +191,8 @@ public sealed class RecurringSeriesConcurrencyTests : IAsyncLifetime
         new ResourceApproverRepository(dbContext),
         new ApprovalRequestRepository(dbContext),
         new TenantRepository(dbContext),
-        new FixedCurrentUserContext(_tenantId, userId));
+        new FixedCurrentUserContext(_tenantId, userId),
+        new NotificationOutboxWriter(dbContext, NullLogger<NotificationOutboxWriter>.Instance));
 
     // Each simulated request gets its own BookSpaceDbContext, exactly like two real concurrent HTTP
     // requests would - see BookingConcurrencyTests.CreateHandler for the same convention.
@@ -207,7 +209,8 @@ public sealed class RecurringSeriesConcurrencyTests : IAsyncLifetime
             new ResourceApproverRepository(dbContext),
             new ApprovalRequestRepository(dbContext),
             new TenantRepository(dbContext),
-            new FixedCurrentUserContext(_tenantId, userId));
+            new FixedCurrentUserContext(_tenantId, userId),
+            new NotificationOutboxWriter(dbContext, NullLogger<NotificationOutboxWriter>.Instance));
     }
 
     private BookSpaceDbContext CreateDbContext(Guid tenantId, Guid? userId = null)

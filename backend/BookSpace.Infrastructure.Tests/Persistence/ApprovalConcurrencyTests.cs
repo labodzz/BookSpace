@@ -1,5 +1,6 @@
 using BookSpace.Application.Bookings;
 using BookSpace.Application.Common;
+using BookSpace.Application.Notifications;
 using BookSpace.Application.Resources;
 using BookSpace.Application.Security;
 using BookSpace.Domain.Entities;
@@ -240,7 +241,8 @@ public sealed class ApprovalConcurrencyTests : IAsyncLifetime
         new BookingRepository(dbContext),
         new ApprovalRequestRepository(dbContext),
         new ResourceApproverRepository(dbContext),
-        new FixedCurrentUserContext(_tenantId, userId));
+        new FixedCurrentUserContext(_tenantId, userId),
+        new NotificationOutboxWriter(dbContext, NullLogger<NotificationOutboxWriter>.Instance));
 
     private async Task<Guid> SeedResourceAsync(int capacity, bool requiresApproval)
     {
@@ -306,7 +308,8 @@ public sealed class ApprovalConcurrencyTests : IAsyncLifetime
         new BookingAvailabilityRepository(dbContext),
         new ApprovalRequestRepository(dbContext),
         new ResourceApproverRepository(dbContext),
-        new FixedCurrentUserContext(_tenantId, userId));
+        new FixedCurrentUserContext(_tenantId, userId),
+        new NotificationOutboxWriter(dbContext, NullLogger<NotificationOutboxWriter>.Instance));
 
     private CreateBookingCommandHandler CreateCreateHandler(BookSpaceDbContext dbContext, Guid userId) => new(
         new ResourceBookingLock(dbContext, NullLogger<ResourceBookingLock>.Instance),
@@ -318,7 +321,8 @@ public sealed class ApprovalConcurrencyTests : IAsyncLifetime
         new ResourceApproverRepository(dbContext),
         new ApprovalRequestRepository(dbContext),
         new TenantRepository(dbContext),
-        new FixedCurrentUserContext(_tenantId, userId));
+        new FixedCurrentUserContext(_tenantId, userId),
+        new NotificationOutboxWriter(dbContext, NullLogger<NotificationOutboxWriter>.Instance));
 
     private BookSpaceDbContext CreateDbContext(Guid tenantId, Guid? userId = null)
     {

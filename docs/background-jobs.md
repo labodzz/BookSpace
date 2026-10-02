@@ -452,13 +452,14 @@ unbounded forever as the table accumulates history.
 
 ### What this task does not implement
 
-An email provider, actually sending any email, the reminder/confirmation/cancellation/rejection event
-integrations that would call `EnqueueAsync` (the `IdempotencyKey` examples above describe future intent
-only - no booking handler constructs one yet), a batch/retry processor that reads `Pending` rows, any
+An email provider, actually sending any email, a batch/retry processor that reads `Pending` rows, any
 retry/backoff execution, a distributed claim mechanism for an individual outbox row (the WP-8 lease lock
 only ever protected one *job cycle* at a time, never an individual row within it), the no-show job, the
 stale-approval job, an ICS feed, or any frontend change. All of that is future WP-8 work built on top of
-the `NotificationOutboxItem` table and `INotificationOutboxWriter` this task adds.
+the `NotificationOutboxItem` table and `INotificationOutboxWriter` this task adds. (A later branch - see
+"Booking lifecycle notifications" below - did wire `CreateBookingCommandHandler`, `CreateRecurringSeriesCommandHandler`,
+`ApproveBookingCommandHandler`, `RejectBookingCommandHandler`, and `CancelBookingCommandHandler` to actually
+call `EnqueueAsync`; a reminder event integration still does not exist anywhere.)
 
 ## Due-batch query
 
@@ -859,14 +860,97 @@ actual delivery semantics (most realistically: at-least-once, with a rare duplic
 accepted, documented trade-off) rather than silently assuming a guarantee neither the database nor the
 provider actually provides.
 
+## Booking lifecycle notifications
+
+A later WP-8 branch than per-item processing above. Its goal: when a booking actually transitions to
+`Confirmed`, `Rejected`, or `Cancelled`, enqueue the matching notification in the **same** persistence
+operation as the state change - no separate step, no window where one is saved and the other is not. This
+branch still only enqueues; it does not send anything (no `INotificationSender` implementation exists, and
+the outbox processor still is not wired into the worker cycle - see "What this task does not implement"
+under "Notification outbox" above).
+
+### Event -> handler -> type -> recipient -> idempotency key
+
+| Event | Handler | `NotificationType` | Recipient | `IdempotencyKey` |
+|---|---|---|---|---|
+| Booking created directly `Confirmed` (no approval required) | `CreateBookingCommandHandler` | `Booking.Confirmation` | Booking owner | `booking:{bookingId}:confirmation` |
+| Recurring occurrence created directly `Confirmed` | `CreateRecurringSeriesCommandHandler` | `Booking.Confirmation` | Booking owner | `booking:{bookingId}:confirmation` |
+| Approver confirms a `Pending` booking | `ApproveBookingCommandHandler` | `Booking.Confirmation` | Booking owner | `booking:{bookingId}:confirmation` |
+| `ApproveRemainingSeries` cascades to a sibling occurrence | `ApproveBookingCommandHandler` | `Booking.Confirmation` | That occurrence's owner | `booking:{occurrenceId}:confirmation` |
+| Approver rejects a `Pending` booking | `RejectBookingCommandHandler` | `Booking.Rejection` | Booking owner | `booking:{bookingId}:rejection` |
+| Booking owner, or a TenantAdmin/SysAdmin acting on their behalf, cancels a booking | `CancelBookingCommandHandler` | `Booking.Cancellation` | Booking owner (never the admin who acted) | `booking:{bookingId}:cancellation` |
+| `CancelRemainingSeries` cascades to a sibling occurrence | `CancelBookingCommandHandler` | `Booking.Cancellation` | That occurrence's owner | `booking:{occurrenceId}:cancellation` |
+
+A booking that is created `Pending` (`RequiresApproval`) never enqueues a confirmation at creation time -
+only the later `Approve` decision does, and only if it actually succeeds. No notification is ever enqueued
+for a failed/no-op command (validation failure, a conflict, or cancelling an already-`Cancelled` booking) -
+every enqueue call sits strictly after every validation/eligibility check in its handler.
+
+`BookingNotificationFactory` (`BookSpace.Application/Notifications/BookingNotificationFactory.cs`)
+centralizes the three `NotificationType` codes and the `booking:{bookingId}:{type}` key format so every
+handler above builds them identically - never a hand-rolled string per call site. The payload
+(`BookingNotificationPayload`: `BookingId`, `ResourceId`, `StartUtc`, `EndUtc`, `Quantity`) is deliberately
+minimal - exactly what a future sender/template needs, never the recipient's email (the outbox row's own
+`RecipientUserId` is how a future sender resolves that), a token, or any other secret.
+
+### Transaction boundary per flow
+
+Every handler above follows the same shape the "How this will share a transaction with a future business
+write" section (under "Notification outbox") already anticipated: the booking/`ApprovalRequest` mutation is
+only *staged* (`AddAsync`, or an in-memory property change on an already-tracked entity) - never followed by
+the handler's own `SaveChangesAsync`. `EnqueueAsync` is called last, and its own internal
+`SaveChangesAsync` is the single commit point, persisting the state change and the new outbox row together.
+If it throws, nothing commits - proven per handler by a test that makes `EnqueueAsync` throw and asserts
+the repository's own `SaveChangesAsync` was never called (there is no other commit path that could have
+persisted the mutation anyway).
+
+`CreateBookingCommandHandler` and `RejectBookingCommandHandler` always touch exactly one booking, so this is
+unconditionally atomic. Three flows can touch **more than one** booking in a single call -
+`CreateRecurringSeriesCommandHandler` (several occurrences created `Confirmed` at once),
+`ApproveBookingCommandHandler` with `ApproveRemainingSeries`, and `CancelBookingCommandHandler` with
+`CancelRemainingSeries`. In all three, every affected booking is mutated *before* the first `EnqueueAsync`
+call, so that first call's `SaveChangesAsync` commits every mutation in the batch together, plus its own
+outbox row; each further call (one per additional occurrence) then commits only its own outbox row, since
+the booking rows are already durably saved by then. **Accepted, narrow gap**: if the process crashes
+between two of these later calls, the already-cancelled/approved/confirmed occurrences whose own call
+hadn't run yet are left correctly in their new status but without a notification ever enqueued for them -
+nothing today retries or backfills that. Closing it fully would mean wrapping the whole cascade in one
+explicit database transaction, which none of these flows currently open (cancellation in particular has no
+`IResourceBookingLock` at all - see `docs/bookings-and-concurrency.md`) and which this task deliberately did
+not add, to avoid a bigger transaction-management refactor than the task warranted. The *first* occurrence
+in each cascade (always the primary, request-targeted booking) is never affected by this gap.
+
+### Recurring cancellation: one outbox item per occurrence, not one per series
+
+`CancelRemainingSeries` can cancel several independent `Booking` rows in one call - see
+`docs/recurring-bookings-and-approvals.md` for why each occurrence is its own fully independent row to
+begin with. This branch enqueues one `Booking.Cancellation` item **per actually-cancelled occurrence**, not
+one combined item for the whole series: every occurrence already has its own owner, own `IdempotencyKey`,
+and (per `docs/recurring-bookings-and-approvals.md`) its own independent lifecycle - a single series-wide
+notification would need to pick an arbitrary identity to key off and could not degrade cleanly if a future
+sender ever needed to reference "which specific booking is this about." The same one-item-per-occurrence
+choice applies symmetrically to `ApproveRemainingSeries`'s cascaded confirmations.
+
+### Tenant and recipient safety
+
+No new query path was added - every handler above already loaded the booking/occurrence through the
+ordinary tenant-filtered repository methods that existed before this branch (`FindByIdAsync`,
+`FindResourceIdAsync`, `GetBySeriesIdAsync`), so a cross-tenant id was already unreachable (`NotFoundException`)
+before an enqueue could ever be attempted - this branch does not call `IgnoreQueryFilters()` anywhere.
+`BookingNotificationFactory` always takes `TenantId`/`RecipientUserId` from the loaded `Booking` entity
+itself, never from `ICurrentUserContext` - so the recipient is always the booking's own owner, never the
+approver or TenantAdmin/SysAdmin who performed the approve/reject/cancel action, even when that caller
+belongs to the same tenant as the booking.
+
 ## What the earlier WP-8 branches did not implement
 
-Reminder/confirmation/cancellation/rejection event integrations that would actually call
-`INotificationOutboxWriter.EnqueueAsync` (no booking handler constructs a real `IdempotencyKey` yet), a
-real `INotificationSender` implementation, no-show processing, stale-approval handling, an ICS feed, or
-any new booking business logic. All of that remains future WP-8 work. In particular: the lease lock is
-infrastructure for *scheduling*, not for *correctness of business side effects* (see "What this guarantees,
-and what it does not" above); the notification outbox is infrastructure for *durable, deduplicated intent*,
-not for *guaranteed email delivery*; and per-item processing adds *persisted retry/backoff/dead-letter
-bookkeeping*, still not *exactly-once delivery* of the external side effect itself (see "Exactly-once
-limitation, still" above).
+A real `INotificationSender` implementation, the actual transactional email integration, no-show
+processing, stale-approval handling, an ICS feed, wiring the outbox processor into the worker's cycle, or
+any new booking business logic beyond enqueuing a notification at the point a lifecycle transition is
+already decided. All of that remains future WP-8 work. In particular: the lease lock is infrastructure for
+*scheduling*, not for *correctness of business side effects* (see "What this guarantees, and what it does
+not" above); the notification outbox is infrastructure for *durable, deduplicated intent*, not for
+*guaranteed email delivery*; per-item processing adds *persisted retry/backoff/dead-letter bookkeeping*,
+still not *exactly-once delivery* of the external side effect itself (see "Exactly-once limitation, still"
+above); and this branch makes the booking/notification *commit* atomic, without yet closing the narrow
+multi-occurrence-cascade gap described above.

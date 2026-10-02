@@ -1,5 +1,6 @@
 using BookSpace.Application.Common;
 using BookSpace.Application.Mediator;
+using BookSpace.Application.Notifications;
 using BookSpace.Application.Resources;
 using BookSpace.Application.Security;
 using BookSpace.Domain.Entities;
@@ -53,7 +54,8 @@ public sealed class ApproveBookingCommandHandler(
     IBookingAvailabilityRepository bookingAvailabilityRepository,
     IApprovalRequestRepository approvalRequestRepository,
     IResourceApproverRepository resourceApproverRepository,
-    ICurrentUserContext currentUserContext)
+    ICurrentUserContext currentUserContext,
+    INotificationOutboxWriter notificationOutboxWriter)
     : IRequestHandler<ApproveBookingCommandRequest, ApproveBookingResponse>
 {
     public async Task<ApproveBookingResponse> Handle(ApproveBookingCommandRequest request, CancellationToken cancellationToken)
@@ -98,6 +100,9 @@ public sealed class ApproveBookingCommandHandler(
 
         ApproveOccurrence(booking, approvalRequest, request.DecisionNote);
 
+        // Every booking actually confirmed by this call (the primary, plus any cascaded sibling) gets
+        // exactly one confirmation notification - tracked here as the SOURCE of what to enqueue below.
+        var approvedBookings = new List<Booking> { booking };
         var cascadedApprovedIds = new List<Guid>();
         var cascadedConflicts = new List<ApprovalSeriesConflictResponse>();
 
@@ -136,12 +141,23 @@ public sealed class ApproveBookingCommandHandler(
                     }
 
                     ApproveOccurrence(occurrence, siblingApprovalRequest, request.DecisionNote);
+                    approvedBookings.Add(occurrence);
                     cascadedApprovedIds.Add(occurrence.Id);
                 }
             }
         }
 
-        await bookingRepository.SaveChangesAsync(cancellationToken);
+        // Approving always confirms at least the primary booking, so approvedBookings is never empty here -
+        // unlike CreateBookingCommandHandler there is no "nothing to enqueue" branch. EnqueueAsync calls
+        // SaveChangesAsync itself: the first call commits the booking/ApprovalRequest mutations for the
+        // primary AND every cascaded sibling (all staged above) together with that first outbox row; each
+        // further call (one per additional cascaded confirmation) commits only its own outbox row, since
+        // the booking rows are already saved by then - the same accepted, narrow gap documented in
+        // CreateRecurringSeriesCommandHandler for a multi-occurrence commit.
+        foreach (var approvedBooking in approvedBookings)
+        {
+            await notificationOutboxWriter.EnqueueAsync(BookingNotificationFactory.Confirmation(approvedBooking), cancellationToken);
+        }
 
         return new ApproveBookingResponse(
             booking.Id, booking.ResourceId, booking.StartUtc, booking.EndUtc, booking.Quantity, booking.Status,
