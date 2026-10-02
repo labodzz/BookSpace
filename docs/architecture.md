@@ -32,6 +32,44 @@ Every command/query lives as one file named after itself, containing its record 
 (files grouped by CRUD verb, `Request`-suffixed types, one independent response record per request,
 no shared per-entity response DTO).
 
+## Every controller route lives under `/api`
+
+Every `[ApiController]` route (`AuthController`, `BookingsController`, `ResourcesController`,
+`ResourceTypesController`, `UsersController`) is mounted under an explicit, literal `[Route("api/...")]`
+- `/api/auth`, `/api/bookings`, `/api/resources`, `/api/resource-types`, `/api/users` - never
+`[Route("api/[controller]")]`, so the public URL never depends on a future rename of the C# controller
+class. This is deliberate, not cosmetic: in production the backend serves the built Angular app's
+static files from the **same origin** as the API (`app.UseStaticFiles()` + `app.MapFallbackToFile(...)`
+in `Program.cs`), and the Angular app's own client-side routes use the same short names (`/bookings`,
+`/resources`, ...). Without a distinct prefix, a full browser navigation/reload on a route like
+`/bookings` - which carries no `Authorization` header, since only the Angular app's own HTTP
+interceptor attaches one - would be routed by ASP.NET Core straight to `BookingsController`'s
+`[Authorize]`-gated action (an exact route match always wins over the `MapFallbackToFile` catch-all,
+regardless of registration order), returning a bare 401 **before the Angular app itself ever loads** -
+the user is kicked straight to an error page instead of seeing the SPA shell load and handle auth
+itself. `/api/*` can never collide with an Angular client route of the same short name, so a reload
+always correctly falls through to `index.html` instead.
+
+The SPA fallback itself is constrained the other way too: `MapFallbackToFile`'s route pattern
+(`{*path:regex(^(?!api(/|$)).*$)}`) explicitly excludes anything under `/api` - a request like
+`/api/does-not-exist`, which matches no real controller action, must come back as a genuine 404, never
+silently as `index.html`. Without that exclusion, `MapFallbackToFile`'s catch-all (lowest match
+priority, but still a match for anything nothing else claims) would swallow a mistyped or unsupported
+API call and make it look like a successful page load instead of the error it actually is.
+
+`/health` and `/health/db` are deliberately **not** under `/api` - they're operational/orchestrator
+endpoints (container healthchecks, load balancers), not part of the application's own data API, and
+conventionally live unprefixed.
+
+The frontend's `environment.apiUrl` (`environment.ts` / `environment.development.ts`) is `/api` (same
+origin) or `http://host:port/api` (separate dev server) accordingly - every `HttpClient` call already
+builds its URL as `` `${environment.apiUrl}/...` ``, so this lives in exactly one place per build
+configuration. `auth.interceptor.ts`'s `isApiRequest`/`resolveApiOrigin` classify a request as
+belonging to "our API" (and therefore eligible for the bearer token) by parsed origin and base path,
+not a raw string prefix - it explicitly supports `apiUrl` being empty (same origin, no restriction), a
+bare path like `/api` (same origin, restricted to that path), or a full absolute URL (a distinct origin,
+with or without its own base path).
+
 ## Authentication flow
 
 See [authentication.md](authentication.md) for the full token/rotation/reuse model. In one line: login
@@ -127,6 +165,6 @@ enforcement, booking idempotency keys. `TenantStatus.Suspended` is likewise mode
 unenforced - reserved for a future SysAdmin tenant-suspension feature, not a gap in current scope.
 
 **Not yet implemented at all** - do not assume any of this exists: notification/reminder delivery, any
-scheduled/background job infrastructure. `POST /auth/login` is rate-limited (10 attempts/minute per
+scheduled/background job infrastructure. `POST /api/auth/login` is rate-limited (10 attempts/minute per
 client IP, ASP.NET Core's built-in rate limiter); no other endpoint is - the rest of the API is already
 behind bearer-token auth, a much stronger gate than a request-rate ceiling.

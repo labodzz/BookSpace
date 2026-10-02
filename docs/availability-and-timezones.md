@@ -9,7 +9,7 @@ guarantee" section first.
 `Resource.TimeZoneId` belongs to the **resource** (its physical/operational location), never to the
 signed-in administrator, their browser, or a fixed UTC offset. The Create/Edit Resource form's time zone
 field is a searchable combobox (`TimezoneSelectComponent`, shared by both), not free text - it only lets
-an administrator pick from `GET /resources/supported-timezones`, the backend's own canonical, currently-
+an administrator pick from `GET /api/resources/supported-timezones`, the backend's own canonical, currently-
 resolvable IANA identifier list (the same one `Create/UpdateResourceCommandRequest`'s
 `TimeZoneValidation.BeAValidTimeZoneId` validator already enforces, so a selection can never be rejected
 as "unsupported"). A fixed offset like `UTC+1` is never accepted or stored - daylight-saving rules can

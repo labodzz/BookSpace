@@ -23,7 +23,7 @@ public sealed class UsersEndpointsTests : IClassFixture<CustomWebApplicationFact
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.GetAsync("/users");
+        var response = await client.GetAsync("/api/users");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<PagedResponse<UserSummaryResponse>>(JsonOptions);
@@ -39,7 +39,7 @@ public sealed class UsersEndpointsTests : IClassFixture<CustomWebApplicationFact
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
 
-        var response = await client.GetAsync("/users");
+        var response = await client.GetAsync("/api/users");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
@@ -49,7 +49,7 @@ public sealed class UsersEndpointsTests : IClassFixture<CustomWebApplicationFact
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
 
-        var response = await client.GetAsync("/users");
+        var response = await client.GetAsync("/api/users");
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -59,7 +59,7 @@ public sealed class UsersEndpointsTests : IClassFixture<CustomWebApplicationFact
     {
         using var client = _factory.CreateClient();
 
-        var response = await client.GetAsync("/users");
+        var response = await client.GetAsync("/api/users");
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
@@ -69,7 +69,7 @@ public sealed class UsersEndpointsTests : IClassFixture<CustomWebApplicationFact
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.GetAsync("/users");
+        var response = await client.GetAsync("/api/users");
 
         var body = await response.Content.ReadFromJsonAsync<PagedResponse<UserSummaryResponse>>(JsonOptions);
         var approver = body!.Items.Single(user => user.Email == TestDataSeeder.AcmeApproverEmail);
@@ -84,7 +84,7 @@ public sealed class UsersEndpointsTests : IClassFixture<CustomWebApplicationFact
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.GetAsync("/users?search=Approver");
+        var response = await client.GetAsync("/api/users?search=Approver");
 
         var body = await response.Content.ReadFromJsonAsync<PagedResponse<UserSummaryResponse>>(JsonOptions);
         Assert.Contains(body!.Items, user => user.Email == TestDataSeeder.AcmeApproverEmail);
@@ -97,7 +97,7 @@ public sealed class UsersEndpointsTests : IClassFixture<CustomWebApplicationFact
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.GetAsync("/users?role=Approver");
+        var response = await client.GetAsync("/api/users?role=Approver");
 
         var body = await response.Content.ReadFromJsonAsync<PagedResponse<UserSummaryResponse>>(JsonOptions);
         Assert.Contains(body!.Items, user => user.Email == TestDataSeeder.AcmeApproverEmail);
@@ -109,7 +109,7 @@ public sealed class UsersEndpointsTests : IClassFixture<CustomWebApplicationFact
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.GetAsync("/users?status=Active");
+        var response = await client.GetAsync("/api/users?status=Active");
 
         var body = await response.Content.ReadFromJsonAsync<PagedResponse<UserSummaryResponse>>(JsonOptions);
         Assert.Contains(body!.Items, user => user.Email == TestDataSeeder.AcmeMemberEmail);
@@ -121,7 +121,7 @@ public sealed class UsersEndpointsTests : IClassFixture<CustomWebApplicationFact
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.GetAsync($"/users?ids={TestDataSeeder.AcmeMemberUserId}&ids={TestDataSeeder.AcmeApproverUserId}");
+        var response = await client.GetAsync($"/api/users?ids={TestDataSeeder.AcmeMemberUserId}&ids={TestDataSeeder.AcmeApproverUserId}");
 
         var body = await response.Content.ReadFromJsonAsync<PagedResponse<UserSummaryResponse>>(JsonOptions);
         Assert.Equal(2, body!.Items.Count);
@@ -132,7 +132,7 @@ public sealed class UsersEndpointsTests : IClassFixture<CustomWebApplicationFact
     private async Task<HttpClient> AuthenticatedClientAsync(string email)
     {
         var client = _factory.CreateClient();
-        var loginResponse = await client.PostAsJsonAsync("/auth/login", new { email, password = TestDataSeeder.Password });
+        var loginResponse = await client.PostAsJsonAsync("/api/auth/login", new { email, password = TestDataSeeder.Password });
         loginResponse.EnsureSuccessStatusCode();
         var loginBody = await loginResponse.Content.ReadFromJsonAsync<LoginResponse>(JsonOptions);
         client.DefaultRequestHeaders.Authorization = new("Bearer", loginBody!.AccessToken);

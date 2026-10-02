@@ -23,7 +23,7 @@ public sealed class AuthEndpointsTests : IClassFixture<CustomWebApplicationFacto
     {
         using var client = _factory.CreateClient();
 
-        var response = await client.PostAsJsonAsync("/auth/login", new
+        var response = await client.PostAsJsonAsync("/api/auth/login", new
         {
             email = TestDataSeeder.AcmeAdminEmail,
             password = TestDataSeeder.Password,
@@ -40,7 +40,7 @@ public sealed class AuthEndpointsTests : IClassFixture<CustomWebApplicationFacto
     {
         using var client = _factory.CreateClient();
 
-        var response = await client.PostAsJsonAsync("/auth/login", new
+        var response = await client.PostAsJsonAsync("/api/auth/login", new
         {
             email = "",
             password = TestDataSeeder.Password,
@@ -58,7 +58,7 @@ public sealed class AuthEndpointsTests : IClassFixture<CustomWebApplicationFacto
     {
         using var client = _factory.CreateClient();
 
-        var response = await client.PostAsJsonAsync("/auth/refresh", new { refreshToken = "" });
+        var response = await client.PostAsJsonAsync("/api/auth/refresh", new { refreshToken = "" });
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var problem = await response.Content.ReadFromJsonAsync<ValidationProblemPayload>(JsonOptions);
@@ -71,7 +71,7 @@ public sealed class AuthEndpointsTests : IClassFixture<CustomWebApplicationFacto
     {
         using var client = _factory.CreateClient();
 
-        var response = await client.PostAsJsonAsync("/auth/login", new
+        var response = await client.PostAsJsonAsync("/api/auth/login", new
         {
             email = TestDataSeeder.AcmeAdminEmail,
             password = "definitely-wrong",
@@ -85,7 +85,7 @@ public sealed class AuthEndpointsTests : IClassFixture<CustomWebApplicationFacto
     {
         using var client = _factory.CreateClient();
 
-        var response = await client.PostAsJsonAsync("/auth/login", new
+        var response = await client.PostAsJsonAsync("/api/auth/login", new
         {
             email = "nobody@bookspace.test",
             password = TestDataSeeder.Password,
@@ -105,9 +105,9 @@ public sealed class AuthEndpointsTests : IClassFixture<CustomWebApplicationFacto
         using var client = _factory.CreateClient();
 
         var wrongPasswordResponse = await client.PostAsJsonAsync(
-            "/auth/login", new { email = TestDataSeeder.AcmeAdminEmail, password = "definitely-wrong" });
+            "/api/auth/login", new { email = TestDataSeeder.AcmeAdminEmail, password = "definitely-wrong" });
         var unknownEmailResponse = await client.PostAsJsonAsync(
-            "/auth/login", new { email = "nobody@bookspace.test", password = TestDataSeeder.Password });
+            "/api/auth/login", new { email = "nobody@bookspace.test", password = TestDataSeeder.Password });
 
         var wrongPasswordProblem = await wrongPasswordResponse.Content.ReadFromJsonAsync<ProblemPayload>(JsonOptions);
         var unknownEmailProblem = await unknownEmailResponse.Content.ReadFromJsonAsync<ProblemPayload>(JsonOptions);
@@ -128,7 +128,7 @@ public sealed class AuthEndpointsTests : IClassFixture<CustomWebApplicationFacto
         using var client = _factory.CreateClient();
         var loginBody = await LoginAsync(client, TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.PostAsJsonAsync("/auth/refresh", new { refreshToken = loginBody.RefreshToken });
+        var response = await client.PostAsJsonAsync("/api/auth/refresh", new { refreshToken = loginBody.RefreshToken });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var refreshed = await response.Content.ReadFromJsonAsync<AuthResponse>(JsonOptions);
@@ -146,10 +146,10 @@ public sealed class AuthEndpointsTests : IClassFixture<CustomWebApplicationFacto
         var loginBody = await LoginAsync(client, TestDataSeeder.GlobexMemberEmail);
 
         // Rotate once so the original token becomes "already replaced".
-        await client.PostAsJsonAsync("/auth/refresh", new { refreshToken = loginBody.RefreshToken });
+        await client.PostAsJsonAsync("/api/auth/refresh", new { refreshToken = loginBody.RefreshToken });
 
         // Replay the original (now-rotated) token.
-        var replayResponse = await client.PostAsJsonAsync("/auth/refresh", new { refreshToken = loginBody.RefreshToken });
+        var replayResponse = await client.PostAsJsonAsync("/api/auth/refresh", new { refreshToken = loginBody.RefreshToken });
 
         Assert.Equal(HttpStatusCode.Unauthorized, replayResponse.StatusCode);
         var payload = await replayResponse.Content.ReadAsStringAsync();
@@ -161,7 +161,7 @@ public sealed class AuthEndpointsTests : IClassFixture<CustomWebApplicationFacto
     {
         using var client = _factory.CreateClient();
 
-        var response = await client.GetAsync("/users/me");
+        var response = await client.GetAsync("/api/users/me");
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
@@ -173,7 +173,7 @@ public sealed class AuthEndpointsTests : IClassFixture<CustomWebApplicationFacto
         var loginBody = await LoginAsync(client, TestDataSeeder.AcmeAdminEmail);
         client.DefaultRequestHeaders.Authorization = new("Bearer", loginBody.AccessToken);
 
-        var response = await client.GetAsync("/users/me");
+        var response = await client.GetAsync("/api/users/me");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var payload = await response.Content.ReadAsStringAsync();
@@ -188,7 +188,7 @@ public sealed class AuthEndpointsTests : IClassFixture<CustomWebApplicationFacto
         var loginBody = await LoginAsync(client, TestDataSeeder.GlobexMemberEmail);
         client.DefaultRequestHeaders.Authorization = new("Bearer", loginBody.AccessToken);
 
-        var response = await client.GetAsync("/users");
+        var response = await client.GetAsync("/api/users");
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -200,7 +200,7 @@ public sealed class AuthEndpointsTests : IClassFixture<CustomWebApplicationFacto
         var loginBody = await LoginAsync(client, TestDataSeeder.AcmeAdminEmail);
         client.DefaultRequestHeaders.Authorization = new("Bearer", loginBody.AccessToken);
 
-        var response = await client.GetAsync("/users");
+        var response = await client.GetAsync("/api/users");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var payload = await response.Content.ReadAsStringAsync();
@@ -214,10 +214,10 @@ public sealed class AuthEndpointsTests : IClassFixture<CustomWebApplicationFacto
         using var client = _factory.CreateClient();
         var loginBody = await LoginAsync(client, TestDataSeeder.GlobexMemberEmail);
 
-        var logoutResponse = await client.PostAsJsonAsync("/auth/logout", new { refreshToken = loginBody.RefreshToken });
+        var logoutResponse = await client.PostAsJsonAsync("/api/auth/logout", new { refreshToken = loginBody.RefreshToken });
         Assert.Equal(HttpStatusCode.NoContent, logoutResponse.StatusCode);
 
-        var refreshAfterLogout = await client.PostAsJsonAsync("/auth/refresh", new { refreshToken = loginBody.RefreshToken });
+        var refreshAfterLogout = await client.PostAsJsonAsync("/api/auth/refresh", new { refreshToken = loginBody.RefreshToken });
         Assert.Equal(HttpStatusCode.Unauthorized, refreshAfterLogout.StatusCode);
     }
 
@@ -233,13 +233,13 @@ public sealed class AuthEndpointsTests : IClassFixture<CustomWebApplicationFacto
         using var client = _factory.CreateClient();
         var loginBody = await LoginAsync(client, TestDataSeeder.GlobexMemberEmail);
 
-        var refreshResponse = await client.PostAsJsonAsync("/auth/refresh", new { refreshToken = loginBody.RefreshToken });
+        var refreshResponse = await client.PostAsJsonAsync("/api/auth/refresh", new { refreshToken = loginBody.RefreshToken });
         var rotated = await refreshResponse.Content.ReadFromJsonAsync<AuthResponse>(JsonOptions);
 
-        var logoutResponse = await client.PostAsJsonAsync("/auth/logout", new { refreshToken = loginBody.RefreshToken });
+        var logoutResponse = await client.PostAsJsonAsync("/api/auth/logout", new { refreshToken = loginBody.RefreshToken });
         Assert.Equal(HttpStatusCode.NoContent, logoutResponse.StatusCode);
 
-        var refreshAfterLogout = await client.PostAsJsonAsync("/auth/refresh", new { refreshToken = rotated!.RefreshToken });
+        var refreshAfterLogout = await client.PostAsJsonAsync("/api/auth/refresh", new { refreshToken = rotated!.RefreshToken });
         Assert.Equal(HttpStatusCode.Unauthorized, refreshAfterLogout.StatusCode);
     }
 
@@ -248,7 +248,7 @@ public sealed class AuthEndpointsTests : IClassFixture<CustomWebApplicationFacto
     {
         using var client = _factory.CreateClient();
 
-        var response = await client.PostAsJsonAsync("/auth/logout", new { refreshToken = "not-a-real-token" });
+        var response = await client.PostAsJsonAsync("/api/auth/logout", new { refreshToken = "not-a-real-token" });
 
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
     }
@@ -258,7 +258,7 @@ public sealed class AuthEndpointsTests : IClassFixture<CustomWebApplicationFacto
     {
         using var client = _factory.CreateClient();
 
-        var response = await client.PostAsJsonAsync("/auth/logout", new { refreshToken = "" });
+        var response = await client.PostAsJsonAsync("/api/auth/logout", new { refreshToken = "" });
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var problem = await response.Content.ReadFromJsonAsync<ValidationProblemPayload>(JsonOptions);
@@ -268,7 +268,7 @@ public sealed class AuthEndpointsTests : IClassFixture<CustomWebApplicationFacto
 
     private static async Task<AuthResponse> LoginAsync(HttpClient client, string email)
     {
-        var response = await client.PostAsJsonAsync("/auth/login", new { email, password = TestDataSeeder.Password });
+        var response = await client.PostAsJsonAsync("/api/auth/login", new { email, password = TestDataSeeder.Password });
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<AuthResponse>(JsonOptions))!;
     }

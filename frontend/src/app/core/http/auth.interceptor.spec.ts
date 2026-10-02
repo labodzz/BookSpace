@@ -71,6 +71,36 @@ describe('isApiRequest', () => {
   it('still classifies a genuinely relative URL correctly even when the document origin is unavailable', () => {
     expect(isApiRequest('/bookings', '', null)).toBe(true);
   });
+
+  // apiUrl: '/api' is the same-origin-with-prefix production shape (see environment.ts) - a relative
+  // request path must fall under that base path, not merely be any same-origin request.
+  it('matches a relative URL under a bare-path apiUrl', () => {
+    expect(isApiRequest('/api/bookings', '/api')).toBe(true);
+  });
+
+  it('does not match a relative URL outside a bare-path apiUrl', () => {
+    expect(isApiRequest('/bookings', '/api')).toBe(false);
+  });
+
+  // Same reasoning as the absolute-URL lookalike-prefix case above: '/apiextra' merely shares a string
+  // prefix with '/api', it is not a "/"-bounded descendant of it.
+  it('does not match a relative URL that only looks like a prefix match against a bare-path apiUrl', () => {
+    expect(isApiRequest('/apiextra/bookings', '/api')).toBe(false);
+  });
+
+  it('matches an absolute same-origin URL under a bare-path apiUrl', () => {
+    expect(isApiRequest(`${location.origin}/api/bookings`, '/api')).toBe(true);
+  });
+
+  it('does not match a relative URL under a bare-path apiUrl when the document origin is unavailable, even though it still matches by path', () => {
+    // The relative branch never needs documentOrigin at all - a relative URL always resolves against
+    // whatever origin is actually serving the page, so matching by base path alone is still correct.
+    expect(isApiRequest('/api/bookings', '/api', null)).toBe(true);
+  });
+
+  it('fails closed on an absolute URL against a bare-path apiUrl when the document origin is unavailable', () => {
+    expect(isApiRequest('http://localhost:5185/api/bookings', '/api', null)).toBe(false);
+  });
 });
 
 // Runs against whatever environment `ng test` actually builds with (environment.development.ts, a

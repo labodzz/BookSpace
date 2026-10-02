@@ -1,6 +1,6 @@
 # Authentication and Refresh Token Security
 
-## Invitation acceptance (`POST /auth/accept-invitation`)
+## Invitation acceptance (`POST /api/auth/accept-invitation`)
 
 A fourth pre-tenant-context flow alongside login/refresh/logout, added by the user-administration batch
 (full lifecycle writeup in [user-administration.md](user-administration.md) §4) but documented here for
@@ -22,7 +22,7 @@ its security-model overlap with the rest of this file:
 - Acceptance sets the password hash and flips `User.Status` to `Active` in the same `SaveChangesAsync`
   call that marks the invitation accepted - one atomic write, not two.
 - Deliberately issues **no** access/refresh token - the newly-activated user logs in separately afterward
-  via the ordinary `POST /auth/login`. Accepting an invitation is proof you set a password, not proof of
+  via the ordinary `POST /api/auth/login`. Accepting an invitation is proof you set a password, not proof of
   an authenticated session.
 
 ## Token model
@@ -33,7 +33,7 @@ its security-model overlap with the rest of this file:
 - **Refresh token**: a long-lived (`RefreshTokenDays`, currently 14), high-entropy random value. Only
   its SHA-256 hash is stored (`RefreshToken.TokenHash`); the raw value is returned to the client once,
   at issuance, and never persisted. Used solely to obtain a new access+refresh token pair via
-  `POST /auth/refresh` - there is no other use for it.
+  `POST /api/auth/refresh` - there is no other use for it.
 
 ## Token family and rotation
 
@@ -99,7 +99,7 @@ half-built child token - rolls back atomically. No orphan token is ever left beh
 
 ## Logout
 
-`POST /auth/logout` (`LogoutCommandRequest` -> `AuthenticationService.LogoutAsync`) takes the caller's
+`POST /api/auth/logout` (`LogoutCommandRequest` -> `AuthenticationService.LogoutAsync`) takes the caller's
 raw refresh token, hashes it, looks it up, and - if found, active or already rotated - calls the same
 `RevokeFamilyAsync` reuse detection already uses, revoking every still-active token descended from that
 one login. A voluntary logout and a detected theft both end the same way: every token in that lineage
@@ -191,9 +191,9 @@ password produces - login never reveals account status to an outside prober. See
 [user-administration.md](user-administration.md) §1 for the full `UserStatus` lifecycle this check
 enforces.
 
-## Bounded `/auth/refresh` call
+## Bounded `/api/auth/refresh` call
 
-`AuthService.refreshAccessToken()` (frontend) wraps the actual `POST /auth/refresh` HTTP call in
+`AuthService.refreshAccessToken()` (frontend) wraps the actual `POST /api/auth/refresh` HTTP call in
 `timeout(REFRESH_TIMEOUT_MS)` (15 seconds). This matters specifically because that call runs inside
 `navigator.locks.request('bookspace-auth-refresh', ...)` and is shared app-wide through a single
 `refreshInFlight$` observable (see "Cross-tab refresh coordination" below) - a request that never settles

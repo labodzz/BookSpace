@@ -25,7 +25,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
         var startDate = SeriesStartDate(30); // far from any seeded fixture window on AcmeResourceId
 
-        var response = await client.PostAsJsonAsync("/bookings/series", new
+        var response = await client.PostAsJsonAsync("/api/bookings/series", new
         {
             resourceId = TestDataSeeder.AcmeResourceId, startDate, startTime = "09:00:00", endTime = "10:00:00",
             frequency = RecurrenceFrequency.Daily, interval = 1, endDate = (DateOnly?)null, occurrenceCount = 3, quantity = 1,
@@ -48,7 +48,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
         var blackoutDate = DateOnly.FromDateTime(TestDataSeeder.AcmeBlackoutStartUtc.UtcDateTime);
         var startDate = blackoutDate.AddDays(-1);
 
-        var response = await client.PostAsJsonAsync("/bookings/series", new
+        var response = await client.PostAsJsonAsync("/api/bookings/series", new
         {
             resourceId = TestDataSeeder.AcmeResourceId, startDate, startTime = "10:00:00", endTime = "11:00:00",
             frequency = RecurrenceFrequency.Daily, interval = 1, endDate = (DateOnly?)null, occurrenceCount = 2, quantity = 1,
@@ -68,7 +68,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
 
-        var response = await client.PostAsJsonAsync("/bookings/series", new
+        var response = await client.PostAsJsonAsync("/api/bookings/series", new
         {
             resourceId = TestDataSeeder.GlobexResourceId, startDate = SeriesStartDate(30), startTime = "09:00:00", endTime = "10:00:00",
             frequency = RecurrenceFrequency.Daily, interval = 1, endDate = (DateOnly?)null, occurrenceCount = 2, quantity = 1,
@@ -81,14 +81,14 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     public async Task GetRecurringSeries_AsOwner_ReturnsTheSeriesWithAllItsOccurrences()
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
-        var createResponse = await client.PostAsJsonAsync("/bookings/series", new
+        var createResponse = await client.PostAsJsonAsync("/api/bookings/series", new
         {
             resourceId = TestDataSeeder.AcmeResourceId, startDate = SeriesStartDate(40), startTime = "09:00:00", endTime = "10:00:00",
             frequency = RecurrenceFrequency.Weekly, interval = 1, endDate = (DateOnly?)null, occurrenceCount = 2, quantity = 1,
         });
         var created = await createResponse.Content.ReadFromJsonAsync<CreateSeriesResponse>(JsonOptions);
 
-        var response = await client.GetAsync($"/bookings/series/{created!.SeriesId}");
+        var response = await client.GetAsync($"/api/bookings/series/{created!.SeriesId}");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<GetSeriesResponse>(JsonOptions);
@@ -99,7 +99,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     public async Task GetRecurringSeries_AsAnotherUser_ReturnsNotFound()
     {
         using var ownerClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
-        var createResponse = await ownerClient.PostAsJsonAsync("/bookings/series", new
+        var createResponse = await ownerClient.PostAsJsonAsync("/api/bookings/series", new
         {
             resourceId = TestDataSeeder.AcmeResourceId, startDate = SeriesStartDate(45), startTime = "09:00:00", endTime = "10:00:00",
             frequency = RecurrenceFrequency.Daily, interval = 1, endDate = (DateOnly?)null, occurrenceCount = 2, quantity = 1,
@@ -107,7 +107,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
         var created = await createResponse.Content.ReadFromJsonAsync<CreateSeriesResponse>(JsonOptions);
 
         using var otherClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
-        var response = await otherClient.GetAsync($"/bookings/series/{created!.SeriesId}");
+        var response = await otherClient.GetAsync($"/api/bookings/series/{created!.SeriesId}");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
@@ -116,7 +116,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     public async Task CancelBooking_WithCancelRemainingSeriesTrue_CancelsThisAndLaterOccurrencesOnly()
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
-        var createResponse = await client.PostAsJsonAsync("/bookings/series", new
+        var createResponse = await client.PostAsJsonAsync("/api/bookings/series", new
         {
             resourceId = TestDataSeeder.AcmeResourceId, startDate = SeriesStartDate(50), startTime = "09:00:00", endTime = "10:00:00",
             frequency = RecurrenceFrequency.Daily, interval = 1, endDate = (DateOnly?)null, occurrenceCount = 3, quantity = 1,
@@ -124,7 +124,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
         var created = await createResponse.Content.ReadFromJsonAsync<CreateSeriesResponse>(JsonOptions);
         var occurrences = created!.CreatedOccurrences.OrderBy(occurrence => occurrence.StartUtc).ToList();
 
-        var response = await client.DeleteAsync($"/bookings/{occurrences[0].Id}?cancelRemainingSeries=true");
+        var response = await client.DeleteAsync($"/api/bookings/{occurrences[0].Id}?cancelRemainingSeries=true");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<CancelResponse>(JsonOptions);
@@ -140,7 +140,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     public async Task CancelBooking_FromTheMiddleOccurrenceWithCancelRemainingSeriesTrue_CancelsOnlyItselfAndTheLastOccurrence()
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
-        var createResponse = await client.PostAsJsonAsync("/bookings/series", new
+        var createResponse = await client.PostAsJsonAsync("/api/bookings/series", new
         {
             resourceId = TestDataSeeder.AcmeResourceId, startDate = SeriesStartDate(53), startTime = "09:00:00", endTime = "10:00:00",
             frequency = RecurrenceFrequency.Daily, interval = 1, endDate = (DateOnly?)null, occurrenceCount = 3, quantity = 1,
@@ -148,7 +148,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
         var created = await createResponse.Content.ReadFromJsonAsync<CreateSeriesResponse>(JsonOptions);
         var occurrences = created!.CreatedOccurrences.OrderBy(occurrence => occurrence.StartUtc).ToList();
 
-        var response = await client.DeleteAsync($"/bookings/{occurrences[1].Id}?cancelRemainingSeries=true");
+        var response = await client.DeleteAsync($"/api/bookings/{occurrences[1].Id}?cancelRemainingSeries=true");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<CancelResponse>(JsonOptions);
@@ -156,7 +156,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
         var cascaded = Assert.Single(body.CascadedOccurrenceIds);
         Assert.Equal(occurrences[2].Id, cascaded);
 
-        var firstOccurrenceResponse = await client.GetAsync($"/bookings/series/{created.SeriesId}");
+        var firstOccurrenceResponse = await client.GetAsync($"/api/bookings/series/{created.SeriesId}");
         var series = await firstOccurrenceResponse.Content.ReadFromJsonAsync<GetSeriesResponse>(JsonOptions);
         var firstOccurrenceStatus = series!.Occurrences.Single(occurrence => occurrence.Id == occurrences[0].Id).Status;
         Assert.Equal(BookingStatus.Confirmed, firstOccurrenceStatus); // the earlier occurrence is never touched
@@ -166,7 +166,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     public async Task CancelBooking_FromTheLastOccurrenceWithCancelRemainingSeriesTrue_CascadesNothing()
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
-        var createResponse = await client.PostAsJsonAsync("/bookings/series", new
+        var createResponse = await client.PostAsJsonAsync("/api/bookings/series", new
         {
             resourceId = TestDataSeeder.AcmeResourceId, startDate = SeriesStartDate(56), startTime = "09:00:00", endTime = "10:00:00",
             frequency = RecurrenceFrequency.Daily, interval = 1, endDate = (DateOnly?)null, occurrenceCount = 3, quantity = 1,
@@ -174,7 +174,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
         var created = await createResponse.Content.ReadFromJsonAsync<CreateSeriesResponse>(JsonOptions);
         var occurrences = created!.CreatedOccurrences.OrderBy(occurrence => occurrence.StartUtc).ToList();
 
-        var response = await client.DeleteAsync($"/bookings/{occurrences[2].Id}?cancelRemainingSeries=true");
+        var response = await client.DeleteAsync($"/api/bookings/{occurrences[2].Id}?cancelRemainingSeries=true");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<CancelResponse>(JsonOptions);
@@ -188,7 +188,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     public async Task CancelBooking_WithCancelRemainingSeriesTrue_CascadesAPendingOccurrenceRequiringApproval()
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
-        var createResponse = await client.PostAsJsonAsync("/bookings/series", new
+        var createResponse = await client.PostAsJsonAsync("/api/bookings/series", new
         {
             resourceId = TestDataSeeder.AcmeApprovalRequiredResourceId, startDate = SeriesStartDate(59), startTime = "09:00:00", endTime = "10:00:00",
             frequency = RecurrenceFrequency.Daily, interval = 1, endDate = (DateOnly?)null, occurrenceCount = 2, quantity = 1,
@@ -197,7 +197,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
         var occurrences = created!.CreatedOccurrences.OrderBy(occurrence => occurrence.StartUtc).ToList();
         Assert.All(occurrences, occurrence => Assert.Equal(BookingStatus.Pending, occurrence.Status));
 
-        var response = await client.DeleteAsync($"/bookings/{occurrences[0].Id}?cancelRemainingSeries=true");
+        var response = await client.DeleteAsync($"/api/bookings/{occurrences[0].Id}?cancelRemainingSeries=true");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<CancelResponse>(JsonOptions);
@@ -211,7 +211,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
         var start = TestDataSeeder.AvailabilityAnchorUtc.AddHours(2).AddDays(60);
 
-        var response = await client.PostAsJsonAsync("/bookings", new
+        var response = await client.PostAsJsonAsync("/api/bookings", new
         {
             resourceId = TestDataSeeder.AcmeApprovalRequiredResourceId, startUtc = start, endUtc = start.AddHours(1), quantity = 1,
         });
@@ -226,14 +226,14 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     {
         using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
         var start = TestDataSeeder.AvailabilityAnchorUtc.AddHours(2).AddDays(61);
-        var createResponse = await memberClient.PostAsJsonAsync("/bookings", new
+        var createResponse = await memberClient.PostAsJsonAsync("/api/bookings", new
         {
             resourceId = TestDataSeeder.AcmeApprovalRequiredResourceId, startUtc = start, endUtc = start.AddHours(1), quantity = 1,
         });
         var created = await createResponse.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
 
         using var approverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
-        var response = await approverClient.GetAsync("/bookings/pending-approval");
+        var response = await approverClient.GetAsync("/api/bookings/pending-approval");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<List<PendingApprovalItem>>(JsonOptions);
@@ -248,14 +248,14 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     {
         using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
         var start = TestDataSeeder.AvailabilityAnchorUtc.AddHours(2).AddDays(95);
-        var createResponse = await memberClient.PostAsJsonAsync("/bookings", new
+        var createResponse = await memberClient.PostAsJsonAsync("/api/bookings", new
         {
             resourceId = TestDataSeeder.AcmeApprovalRequiredResourceId, startUtc = start, endUtc = start.AddHours(1), quantity = 1,
         });
         var created = await createResponse.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
 
         using var approverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
-        var response = await approverClient.GetAsync("/bookings/pending-approval");
+        var response = await approverClient.GetAsync("/api/bookings/pending-approval");
 
         var body = await response.Content.ReadFromJsonAsync<List<PendingApprovalItem>>(JsonOptions);
         Assert.Null(body!.Single(item => item.BookingId == created!.Id).SeriesId);
@@ -268,14 +268,14 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     {
         using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
         var start = TestDataSeeder.AvailabilityAnchorUtc.AddHours(2).AddDays(71);
-        var createResponse = await memberClient.PostAsJsonAsync("/bookings", new
+        var createResponse = await memberClient.PostAsJsonAsync("/api/bookings", new
         {
             resourceId = TestDataSeeder.AcmeApprovalRequiredResourceId, startUtc = start, endUtc = start.AddHours(1), quantity = 1,
         });
         var created = await createResponse.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
 
         using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
-        var response = await sysAdminClient.GetAsync("/bookings/pending-approval");
+        var response = await sysAdminClient.GetAsync("/api/bookings/pending-approval");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<List<PendingApprovalItem>>(JsonOptions);
@@ -291,14 +291,14 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     {
         using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
         var start = TestDataSeeder.AvailabilityAnchorUtc.AddHours(2).AddDays(74);
-        var createResponse = await memberClient.PostAsJsonAsync("/bookings", new
+        var createResponse = await memberClient.PostAsJsonAsync("/api/bookings", new
         {
             resourceId = TestDataSeeder.AcmeApprovalRequiredResourceId, startUtc = start, endUtc = start.AddHours(1), quantity = 1,
         });
         var created = await createResponse.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
 
         using var adminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
-        var response = await adminClient.GetAsync("/bookings/pending-approval");
+        var response = await adminClient.GetAsync("/api/bookings/pending-approval");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<List<PendingApprovalItem>>(JsonOptions);
@@ -310,14 +310,14 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     {
         using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
         var start = TestDataSeeder.AvailabilityAnchorUtc.AddHours(2).AddDays(75);
-        var createResponse = await memberClient.PostAsJsonAsync("/bookings", new
+        var createResponse = await memberClient.PostAsJsonAsync("/api/bookings", new
         {
             resourceId = TestDataSeeder.AcmeApprovalRequiredResourceId, startUtc = start, endUtc = start.AddHours(1), quantity = 1,
         });
         var created = await createResponse.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
 
         using var adminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
-        var response = await adminClient.PostAsJsonAsync($"/bookings/{created!.Id}/approve", new { decisionNote = (string?)null });
+        var response = await adminClient.PostAsJsonAsync($"/api/bookings/{created!.Id}/approve", new { decisionNote = (string?)null });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
@@ -329,14 +329,14 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     {
         using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
         var start = TestDataSeeder.AvailabilityAnchorUtc.AddHours(2).AddDays(76);
-        var createResponse = await memberClient.PostAsJsonAsync("/bookings", new
+        var createResponse = await memberClient.PostAsJsonAsync("/api/bookings", new
         {
             resourceId = TestDataSeeder.AcmeApprovalRequiredResourceId, startUtc = start, endUtc = start.AddHours(1), quantity = 1,
         });
         var created = await createResponse.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
 
         using var adminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
-        var response = await adminClient.PostAsJsonAsync($"/bookings/{created!.Id}/reject", new { decisionNote = (string?)null });
+        var response = await adminClient.PostAsJsonAsync($"/api/bookings/{created!.Id}/reject", new { decisionNote = (string?)null });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
@@ -348,14 +348,14 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     {
         using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
         var start = TestDataSeeder.AvailabilityAnchorUtc.AddHours(2).AddDays(72);
-        var createResponse = await memberClient.PostAsJsonAsync("/bookings", new
+        var createResponse = await memberClient.PostAsJsonAsync("/api/bookings", new
         {
             resourceId = TestDataSeeder.AcmeApprovalRequiredResourceId, startUtc = start, endUtc = start.AddHours(1), quantity = 1,
         });
         var created = await createResponse.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
 
         using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
-        var response = await sysAdminClient.PostAsJsonAsync($"/bookings/{created!.Id}/approve", new { decisionNote = (string?)null });
+        var response = await sysAdminClient.PostAsJsonAsync($"/api/bookings/{created!.Id}/approve", new { decisionNote = (string?)null });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
@@ -367,14 +367,14 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     {
         using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
         var start = TestDataSeeder.AvailabilityAnchorUtc.AddHours(2).AddDays(73);
-        var createResponse = await memberClient.PostAsJsonAsync("/bookings", new
+        var createResponse = await memberClient.PostAsJsonAsync("/api/bookings", new
         {
             resourceId = TestDataSeeder.AcmeApprovalRequiredResourceId, startUtc = start, endUtc = start.AddHours(1), quantity = 1,
         });
         var created = await createResponse.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
 
         using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
-        var response = await sysAdminClient.PostAsJsonAsync($"/bookings/{created!.Id}/reject", new { decisionNote = (string?)null });
+        var response = await sysAdminClient.PostAsJsonAsync($"/api/bookings/{created!.Id}/reject", new { decisionNote = (string?)null });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
@@ -386,7 +386,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
 
-        var response = await client.GetAsync("/bookings/pending-approval");
+        var response = await client.GetAsync("/api/bookings/pending-approval");
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -396,14 +396,14 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     {
         using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
         var start = TestDataSeeder.AvailabilityAnchorUtc.AddHours(2).AddDays(62);
-        var createResponse = await memberClient.PostAsJsonAsync("/bookings", new
+        var createResponse = await memberClient.PostAsJsonAsync("/api/bookings", new
         {
             resourceId = TestDataSeeder.AcmeApprovalRequiredResourceId, startUtc = start, endUtc = start.AddHours(1), quantity = 1,
         });
         var created = await createResponse.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
 
         using var approverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
-        var response = await approverClient.PostAsJsonAsync($"/bookings/{created!.Id}/approve", new { decisionNote = "Approved" });
+        var response = await approverClient.PostAsJsonAsync($"/api/bookings/{created!.Id}/approve", new { decisionNote = "Approved" });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
@@ -416,7 +416,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     public async Task ApproveBooking_WithApproveRemainingSeriesTrue_ApprovesEveryOtherPendingOccurrenceInTheSeries()
     {
         using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
-        var createResponse = await memberClient.PostAsJsonAsync("/bookings/series", new
+        var createResponse = await memberClient.PostAsJsonAsync("/api/bookings/series", new
         {
             resourceId = TestDataSeeder.AcmeApprovalRequiredResourceId, startDate = SeriesStartDate(80), startTime = "09:00:00", endTime = "10:00:00",
             frequency = RecurrenceFrequency.Daily, interval = 1, endDate = (DateOnly?)null, occurrenceCount = 3, quantity = 1,
@@ -427,7 +427,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
 
         using var approverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
         var response = await approverClient.PostAsJsonAsync(
-            $"/bookings/{occurrences[0].Id}/approve", new { decisionNote = "Approved for the whole series", approveRemainingSeries = true });
+            $"/api/bookings/{occurrences[0].Id}/approve", new { decisionNote = "Approved for the whole series", approveRemainingSeries = true });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<ApproveResponse>(JsonOptions);
@@ -437,7 +437,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
         Assert.Contains(occurrences[1].Id, body.CascadedApprovedOccurrenceIds);
         Assert.Contains(occurrences[2].Id, body.CascadedApprovedOccurrenceIds);
 
-        var seriesResponse = await memberClient.GetAsync($"/bookings/series/{created.SeriesId}");
+        var seriesResponse = await memberClient.GetAsync($"/api/bookings/series/{created.SeriesId}");
         var seriesBody = await seriesResponse.Content.ReadFromJsonAsync<GetSeriesResponse>(JsonOptions);
         Assert.All(seriesBody!.Occurrences, occurrence => Assert.Equal(BookingStatus.Confirmed, occurrence.Status));
     }
@@ -448,7 +448,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     public async Task ApproveBooking_WithApproveRemainingSeriesOmitted_OnlyApprovesTheTargetedOccurrence()
     {
         using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
-        var createResponse = await memberClient.PostAsJsonAsync("/bookings/series", new
+        var createResponse = await memberClient.PostAsJsonAsync("/api/bookings/series", new
         {
             resourceId = TestDataSeeder.AcmeApprovalRequiredResourceId, startDate = SeriesStartDate(90), startTime = "09:00:00", endTime = "10:00:00",
             frequency = RecurrenceFrequency.Daily, interval = 1, endDate = (DateOnly?)null, occurrenceCount = 2, quantity = 1,
@@ -457,11 +457,11 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
         var occurrences = created!.CreatedOccurrences.OrderBy(occurrence => occurrence.StartUtc).ToList();
 
         using var approverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
-        var response = await approverClient.PostAsJsonAsync($"/bookings/{occurrences[0].Id}/approve", new { decisionNote = (string?)null });
+        var response = await approverClient.PostAsJsonAsync($"/api/bookings/{occurrences[0].Id}/approve", new { decisionNote = (string?)null });
         var body = await response.Content.ReadFromJsonAsync<ApproveResponse>(JsonOptions);
         Assert.Empty(body!.CascadedApprovedOccurrenceIds);
 
-        var seriesResponse = await memberClient.GetAsync($"/bookings/series/{created.SeriesId}");
+        var seriesResponse = await memberClient.GetAsync($"/api/bookings/series/{created.SeriesId}");
         var seriesBody = await seriesResponse.Content.ReadFromJsonAsync<GetSeriesResponse>(JsonOptions);
         Assert.Equal(BookingStatus.Confirmed, seriesBody!.Occurrences.Single(o => o.Id == occurrences[0].Id).Status);
         Assert.Equal(BookingStatus.Pending, seriesBody.Occurrences.Single(o => o.Id == occurrences[1].Id).Status);
@@ -472,14 +472,14 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     {
         using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
         var start = TestDataSeeder.AvailabilityAnchorUtc.AddHours(2).AddDays(63);
-        var createResponse = await memberClient.PostAsJsonAsync("/bookings", new
+        var createResponse = await memberClient.PostAsJsonAsync("/api/bookings", new
         {
             resourceId = TestDataSeeder.AcmeApprovalRequiredResourceId, startUtc = start, endUtc = start.AddHours(1), quantity = 1,
         });
         var created = await createResponse.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
 
         using var approverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
-        var response = await approverClient.PostAsJsonAsync($"/bookings/{created!.Id}/reject", new { decisionNote = "No longer needed" });
+        var response = await approverClient.PostAsJsonAsync($"/api/bookings/{created!.Id}/reject", new { decisionNote = "No longer needed" });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
@@ -491,14 +491,14 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     {
         using var globexClient = await AuthenticatedClientAsync(TestDataSeeder.GlobexMemberEmail);
         var start = TestDataSeeder.AvailabilityAnchorUtc.AddHours(2).AddDays(64);
-        var createResponse = await globexClient.PostAsJsonAsync("/bookings", new
+        var createResponse = await globexClient.PostAsJsonAsync("/api/bookings", new
         {
             resourceId = TestDataSeeder.GlobexResourceId, startUtc = start, endUtc = start.AddHours(1), quantity = 1,
         });
         var created = await createResponse.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
 
         using var acmeApproverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
-        var response = await acmeApproverClient.PostAsJsonAsync($"/bookings/{created!.Id}/approve", new { decisionNote = (string?)null });
+        var response = await acmeApproverClient.PostAsJsonAsync($"/api/bookings/{created!.Id}/approve", new { decisionNote = (string?)null });
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
@@ -508,13 +508,13 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     {
         using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
         var start = TestDataSeeder.AvailabilityAnchorUtc.AddHours(2).AddDays(66);
-        var createResponse = await memberClient.PostAsJsonAsync("/bookings", new
+        var createResponse = await memberClient.PostAsJsonAsync("/api/bookings", new
         {
             resourceId = TestDataSeeder.AcmeApprovalRequiredResourceId, startUtc = start, endUtc = start.AddHours(1), quantity = 1,
         });
         var created = await createResponse.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
 
-        var response = await memberClient.PostAsJsonAsync($"/bookings/{created!.Id}/approve", new { decisionNote = (string?)null });
+        var response = await memberClient.PostAsJsonAsync($"/api/bookings/{created!.Id}/approve", new { decisionNote = (string?)null });
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -524,13 +524,13 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     {
         using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
         var start = TestDataSeeder.AvailabilityAnchorUtc.AddHours(2).AddDays(67);
-        var createResponse = await memberClient.PostAsJsonAsync("/bookings", new
+        var createResponse = await memberClient.PostAsJsonAsync("/api/bookings", new
         {
             resourceId = TestDataSeeder.AcmeApprovalRequiredResourceId, startUtc = start, endUtc = start.AddHours(1), quantity = 1,
         });
         var created = await createResponse.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
 
-        var response = await memberClient.PostAsJsonAsync($"/bookings/{created!.Id}/reject", new { decisionNote = (string?)null });
+        var response = await memberClient.PostAsJsonAsync($"/api/bookings/{created!.Id}/reject", new { decisionNote = (string?)null });
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -542,14 +542,14 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     {
         using var globexClient = await AuthenticatedClientAsync(TestDataSeeder.GlobexMemberEmail);
         var start = TestDataSeeder.AvailabilityAnchorUtc.AddHours(2).AddDays(68);
-        var createResponse = await globexClient.PostAsJsonAsync("/bookings", new
+        var createResponse = await globexClient.PostAsJsonAsync("/api/bookings", new
         {
             resourceId = TestDataSeeder.GlobexResourceId, startUtc = start, endUtc = start.AddHours(1), quantity = 1,
         });
         var created = await createResponse.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
 
         using var acmeApproverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
-        var response = await acmeApproverClient.PostAsJsonAsync($"/bookings/{created!.Id}/reject", new { decisionNote = (string?)null });
+        var response = await acmeApproverClient.PostAsJsonAsync($"/api/bookings/{created!.Id}/reject", new { decisionNote = (string?)null });
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
@@ -563,14 +563,14 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     {
         using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
         var start = TestDataSeeder.AvailabilityAnchorUtc.AddHours(2).AddDays(69);
-        var createResponse = await memberClient.PostAsJsonAsync("/bookings", new
+        var createResponse = await memberClient.PostAsJsonAsync("/api/bookings", new
         {
             resourceId = TestDataSeeder.AcmeApprovalRequiredResourceId, startUtc = start, endUtc = start.AddHours(1), quantity = 1,
         });
         var created = await createResponse.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
 
         using var unassignedApproverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeUnassignedApproverEmail);
-        var response = await unassignedApproverClient.PostAsJsonAsync($"/bookings/{created!.Id}/approve", new { decisionNote = (string?)null });
+        var response = await unassignedApproverClient.PostAsJsonAsync($"/api/bookings/{created!.Id}/approve", new { decisionNote = (string?)null });
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         Assert.Equal("Booking.ApprovalForbidden", await ReadErrorCodeAsync(response));
@@ -588,7 +588,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
 
         using var adminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resourceName = $"Live Grant Room {Guid.NewGuid()}";
-        var createResourceResponse = await adminClient.PostAsJsonAsync("/resources", new
+        var createResourceResponse = await adminClient.PostAsJsonAsync("/api/resources", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId,
             name = resourceName,
@@ -599,12 +599,12 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
         var resource = await createResourceResponse.Content.ReadFromJsonAsync<ResourceIdResponse>(JsonOptions);
         foreach (var dayOfWeek in Enum.GetValues<DayOfWeek>())
         {
-            await adminClient.PostAsJsonAsync($"/resources/{resource!.Id}/availability-rules",
+            await adminClient.PostAsJsonAsync($"/api/resources/{resource!.Id}/availability-rules",
                 new { dayOfWeek, startTime = "00:00:00", endTime = "23:59:59" });
         }
         // A brand-new resource starts Inactive (no rule existed yet at creation time) - activate it now
         // that rules are in place, matching the real admin flow (Manage availability -> Activate).
-        var activateResponse = await adminClient.PutAsJsonAsync($"/resources/{resource!.Id}", new
+        var activateResponse = await adminClient.PutAsJsonAsync($"/api/resources/{resource!.Id}", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId, name = resourceName, capacity = 2,
             requiresApproval = true, timeZoneId = "UTC", status = ResourceStatus.Active,
@@ -616,16 +616,16 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
         // What this test proves is unaffected by that ordering: approverClient's token (obtained above,
         // before this call) still predates the assignment.
         var assignResponse = await adminClient.PostAsJsonAsync(
-            $"/resources/{resource!.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
+            $"/api/resources/{resource!.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
         Assert.Equal(HttpStatusCode.Created, assignResponse.StatusCode);
 
         using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
         var start = TestDataSeeder.AvailabilityAnchorUtc.AddHours(2).AddDays(90);
         var createBookingResponse = await memberClient.PostAsJsonAsync(
-            "/bookings", new { resourceId = resource.Id, startUtc = start, endUtc = start.AddHours(1), quantity = 1 });
+            "/api/bookings", new { resourceId = resource.Id, startUtc = start, endUtc = start.AddHours(1), quantity = 1 });
         var booking = await createBookingResponse.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
 
-        var approveResponse = await approverClient.PostAsJsonAsync($"/bookings/{booking!.Id}/approve", new { decisionNote = (string?)null });
+        var approveResponse = await approverClient.PostAsJsonAsync($"/api/bookings/{booking!.Id}/approve", new { decisionNote = (string?)null });
 
         Assert.Equal(HttpStatusCode.OK, approveResponse.StatusCode);
         var approved = await approveResponse.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
@@ -640,7 +640,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     {
         using var adminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resourceName = $"Live Revoke Room {Guid.NewGuid()}";
-        var createResourceResponse = await adminClient.PostAsJsonAsync("/resources", new
+        var createResourceResponse = await adminClient.PostAsJsonAsync("/api/resources", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId,
             name = resourceName,
@@ -651,33 +651,33 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
         var resource = await createResourceResponse.Content.ReadFromJsonAsync<ResourceIdResponse>(JsonOptions);
         foreach (var dayOfWeek in Enum.GetValues<DayOfWeek>())
         {
-            await adminClient.PostAsJsonAsync($"/resources/{resource!.Id}/availability-rules",
+            await adminClient.PostAsJsonAsync($"/api/resources/{resource!.Id}/availability-rules",
                 new { dayOfWeek, startTime = "00:00:00", endTime = "23:59:59" });
         }
         // A brand-new resource starts Inactive (no rule existed yet at creation time) - activate it now
         // that rules are in place, matching the real admin flow (Manage availability -> Activate).
-        var activateResponse = await adminClient.PutAsJsonAsync($"/resources/{resource!.Id}", new
+        var activateResponse = await adminClient.PutAsJsonAsync($"/api/resources/{resource!.Id}", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId, name = resourceName, capacity = 2,
             requiresApproval = true, timeZoneId = "UTC", status = ResourceStatus.Active,
         });
         Assert.Equal(HttpStatusCode.OK, activateResponse.StatusCode);
         // Two approvers, so removing one does not hit the RemoveResourceApprover.LastRemaining guard.
-        await adminClient.PostAsJsonAsync($"/resources/{resource!.Id}/approvers", new { userId = TestDataSeeder.AcmeApproverUserId });
-        await adminClient.PostAsJsonAsync($"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
+        await adminClient.PostAsJsonAsync($"/api/resources/{resource!.Id}/approvers", new { userId = TestDataSeeder.AcmeApproverUserId });
+        await adminClient.PostAsJsonAsync($"/api/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
 
         using var approverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeUnassignedApproverEmail);
 
         using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
         var start = TestDataSeeder.AvailabilityAnchorUtc.AddHours(2).AddDays(91);
         var createBookingResponse = await memberClient.PostAsJsonAsync(
-            "/bookings", new { resourceId = resource.Id, startUtc = start, endUtc = start.AddHours(1), quantity = 1 });
+            "/api/bookings", new { resourceId = resource.Id, startUtc = start, endUtc = start.AddHours(1), quantity = 1 });
         var booking = await createBookingResponse.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
 
-        var removeResponse = await adminClient.DeleteAsync($"/resources/{resource.Id}/approvers/{TestDataSeeder.AcmeUnassignedApproverUserId}");
+        var removeResponse = await adminClient.DeleteAsync($"/api/resources/{resource.Id}/approvers/{TestDataSeeder.AcmeUnassignedApproverUserId}");
         Assert.Equal(HttpStatusCode.NoContent, removeResponse.StatusCode);
 
-        var approveResponse = await approverClient.PostAsJsonAsync($"/bookings/{booking!.Id}/approve", new { decisionNote = (string?)null });
+        var approveResponse = await approverClient.PostAsJsonAsync($"/api/bookings/{booking!.Id}/approve", new { decisionNote = (string?)null });
 
         Assert.Equal(HttpStatusCode.Conflict, approveResponse.StatusCode);
         Assert.Equal("Booking.ApprovalForbidden", await ReadErrorCodeAsync(approveResponse));
@@ -689,7 +689,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     {
         using var adminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resourceName = $"No Approver Room {Guid.NewGuid()}";
-        var createResourceResponse = await adminClient.PostAsJsonAsync("/resources", new
+        var createResourceResponse = await adminClient.PostAsJsonAsync("/api/resources", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId,
             name = resourceName,
@@ -700,12 +700,12 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
         var resource = await createResourceResponse.Content.ReadFromJsonAsync<ResourceIdResponse>(JsonOptions);
         foreach (var dayOfWeek in Enum.GetValues<DayOfWeek>())
         {
-            await adminClient.PostAsJsonAsync($"/resources/{resource!.Id}/availability-rules",
+            await adminClient.PostAsJsonAsync($"/api/resources/{resource!.Id}/availability-rules",
                 new { dayOfWeek, startTime = "00:00:00", endTime = "23:59:59" });
         }
         // A brand-new resource starts Inactive (no rule existed yet at creation time) - activate it now
         // that rules are in place, matching the real admin flow (Manage availability -> Activate).
-        var activateResponse = await adminClient.PutAsJsonAsync($"/resources/{resource!.Id}", new
+        var activateResponse = await adminClient.PutAsJsonAsync($"/api/resources/{resource!.Id}", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId, name = resourceName, capacity = 2,
             requiresApproval = true, timeZoneId = "UTC", status = ResourceStatus.Active,
@@ -713,7 +713,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
         Assert.Equal(HttpStatusCode.OK, activateResponse.StatusCode);
         var start = TestDataSeeder.AvailabilityAnchorUtc.AddHours(2).AddDays(70);
 
-        var response = await adminClient.PostAsJsonAsync("/bookings", new { resourceId = resource!.Id, startUtc = start, endUtc = start.AddHours(1), quantity = 1 });
+        var response = await adminClient.PostAsJsonAsync("/api/bookings", new { resourceId = resource!.Id, startUtc = start, endUtc = start.AddHours(1), quantity = 1 });
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         Assert.Equal("Booking.NoApproverConfigured", await ReadErrorCodeAsync(response));
@@ -724,15 +724,15 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     {
         using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
         var start = TestDataSeeder.AvailabilityAnchorUtc.AddHours(2).AddDays(65);
-        var createResponse = await memberClient.PostAsJsonAsync("/bookings", new
+        var createResponse = await memberClient.PostAsJsonAsync("/api/bookings", new
         {
             resourceId = TestDataSeeder.AcmeApprovalRequiredResourceId, startUtc = start, endUtc = start.AddHours(1), quantity = 1,
         });
         var created = await createResponse.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
         using var approverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
-        await approverClient.PostAsJsonAsync($"/bookings/{created!.Id}/approve", new { decisionNote = (string?)null });
+        await approverClient.PostAsJsonAsync($"/api/bookings/{created!.Id}/approve", new { decisionNote = (string?)null });
 
-        var response = await approverClient.PostAsJsonAsync($"/bookings/{created.Id}/approve", new { decisionNote = (string?)null });
+        var response = await approverClient.PostAsJsonAsync($"/api/bookings/{created.Id}/approve", new { decisionNote = (string?)null });
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
     }
@@ -746,7 +746,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     private async Task<HttpClient> AuthenticatedClientAsync(string email)
     {
         var client = _factory.CreateClient();
-        var loginResponse = await client.PostAsJsonAsync("/auth/login", new { email, password = TestDataSeeder.Password });
+        var loginResponse = await client.PostAsJsonAsync("/api/auth/login", new { email, password = TestDataSeeder.Password });
         loginResponse.EnsureSuccessStatusCode();
         var loginBody = await loginResponse.Content.ReadFromJsonAsync<LoginResponse>(JsonOptions);
         client.DefaultRequestHeaders.Authorization = new("Bearer", loginBody!.AccessToken);

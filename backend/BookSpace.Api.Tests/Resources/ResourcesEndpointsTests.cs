@@ -21,7 +21,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.PostAsJsonAsync("/resources", new
+        var response = await client.PostAsJsonAsync("/api/resources", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId,
             name = $"New Resource {Guid.NewGuid()}",
@@ -52,7 +52,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         var resourceName = $"Activation Flow Room {Guid.NewGuid()}";
         var resource = await CreateResourceAsync(client, resourceName);
 
-        var activateWithNoRules = await client.PutAsJsonAsync($"/resources/{resource.Id}", new
+        var activateWithNoRules = await client.PutAsJsonAsync($"/api/resources/{resource.Id}", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId, name = resourceName, capacity = 4,
             requiresApproval = false, timeZoneId = "UTC", status = ResourceStatus.Active,
@@ -60,11 +60,11 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         Assert.Equal(HttpStatusCode.Conflict, activateWithNoRules.StatusCode);
         Assert.Equal("Resource.AvailabilityRuleRequired", await ReadErrorCodeAsync(activateWithNoRules));
 
-        var addRuleResponse = await client.PostAsJsonAsync($"/resources/{resource.Id}/availability-rules",
+        var addRuleResponse = await client.PostAsJsonAsync($"/api/resources/{resource.Id}/availability-rules",
             new { dayOfWeek = DayOfWeek.Monday, startTime = "09:00:00", endTime = "17:00:00" });
         Assert.Equal(HttpStatusCode.Created, addRuleResponse.StatusCode);
 
-        var activateWithRule = await client.PutAsJsonAsync($"/resources/{resource.Id}", new
+        var activateWithRule = await client.PutAsJsonAsync($"/api/resources/{resource.Id}", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId, name = resourceName, capacity = 4,
             requiresApproval = false, timeZoneId = "UTC", status = ResourceStatus.Active,
@@ -83,16 +83,16 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resourceName = $"Last Rule Room {Guid.NewGuid()}";
         var resource = await CreateResourceAsync(client, resourceName);
-        var ruleResponse = await client.PostAsJsonAsync($"/resources/{resource.Id}/availability-rules",
+        var ruleResponse = await client.PostAsJsonAsync($"/api/resources/{resource.Id}/availability-rules",
             new { dayOfWeek = DayOfWeek.Monday, startTime = "09:00:00", endTime = "17:00:00" });
         var rule = await ruleResponse.Content.ReadFromJsonAsync<AvailabilityRuleResponse>(JsonOptions);
-        await client.PutAsJsonAsync($"/resources/{resource.Id}", new
+        await client.PutAsJsonAsync($"/api/resources/{resource.Id}", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId, name = resourceName, capacity = 4,
             requiresApproval = false, timeZoneId = "UTC", status = ResourceStatus.Active,
         });
 
-        var deleteResponse = await client.DeleteAsync($"/resources/{resource.Id}/availability-rules/{rule!.Id}");
+        var deleteResponse = await client.DeleteAsync($"/api/resources/{resource.Id}/availability-rules/{rule!.Id}");
 
         Assert.Equal(HttpStatusCode.Conflict, deleteResponse.StatusCode);
         Assert.Equal("Resource.AvailabilityRuleRequired", await ReadErrorCodeAsync(deleteResponse));
@@ -106,7 +106,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
 
-        var response = await client.PostAsJsonAsync("/resources", new
+        var response = await client.PostAsJsonAsync("/api/resources", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId,
             name = $"New Resource {Guid.NewGuid()}",
@@ -124,7 +124,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
 
-        var response = await client.PostAsJsonAsync("/resources", new
+        var response = await client.PostAsJsonAsync("/api/resources", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId,
             name = $"New Resource {Guid.NewGuid()}",
@@ -146,7 +146,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
 
-        var response = await client.PostAsJsonAsync("/resources", new
+        var response = await client.PostAsJsonAsync("/api/resources", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId,
             name = $"New Resource {Guid.NewGuid()}",
@@ -167,7 +167,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = _factory.CreateClient();
 
-        var response = await client.PostAsJsonAsync("/resources", new
+        var response = await client.PostAsJsonAsync("/api/resources", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId,
             name = $"New Resource {Guid.NewGuid()}",
@@ -186,7 +186,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
 
-        var response = await client.PutAsJsonAsync($"/resources/{TestDataSeeder.AcmeResourceId}", new
+        var response = await client.PutAsJsonAsync($"/api/resources/{TestDataSeeder.AcmeResourceId}", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId,
             name = "Renamed",
@@ -204,7 +204,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
 
-        var response = await client.DeleteAsync($"/resources/{TestDataSeeder.AcmeResourceId}");
+        var response = await client.DeleteAsync($"/api/resources/{TestDataSeeder.AcmeResourceId}");
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -215,7 +215,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
 
         var response = await client.PostAsJsonAsync(
-            $"/resources/{TestDataSeeder.AcmeResourceId}/approvers", new { userId = TestDataSeeder.AcmeMemberUserId });
+            $"/api/resources/{TestDataSeeder.AcmeResourceId}/approvers", new { userId = TestDataSeeder.AcmeMemberUserId });
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -230,7 +230,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.PutAsJsonAsync($"/resources/{TestDataSeeder.GlobexResourceId}", new
+        var response = await client.PutAsJsonAsync($"/api/resources/{TestDataSeeder.GlobexResourceId}", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId,
             name = "Should Not Apply",
@@ -248,7 +248,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.DeleteAsync($"/resources/{TestDataSeeder.GlobexResourceId}");
+        var response = await client.DeleteAsync($"/api/resources/{TestDataSeeder.GlobexResourceId}");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
@@ -258,7 +258,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.PostAsJsonAsync($"/resources/{TestDataSeeder.GlobexResourceId}/availability-rules",
+        var response = await client.PostAsJsonAsync($"/api/resources/{TestDataSeeder.GlobexResourceId}/availability-rules",
             new { dayOfWeek = DayOfWeek.Monday, startTime = "08:00:00", endTime = "10:00:00" });
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
@@ -270,7 +270,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var start = DateTimeOffset.UtcNow.AddDays(7);
 
-        var response = await client.PostAsJsonAsync($"/resources/{TestDataSeeder.GlobexResourceId}/blackout-periods",
+        var response = await client.PostAsJsonAsync($"/api/resources/{TestDataSeeder.GlobexResourceId}/blackout-periods",
             new { startUtc = start, endUtc = start.AddHours(1), reason = "Should not apply" });
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
@@ -282,7 +282,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
         var response = await client.PostAsJsonAsync(
-            $"/resources/{TestDataSeeder.GlobexResourceId}/approvers", new { userId = TestDataSeeder.AcmeMemberUserId });
+            $"/api/resources/{TestDataSeeder.GlobexResourceId}/approvers", new { userId = TestDataSeeder.AcmeMemberUserId });
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
@@ -295,7 +295,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
         var response = await client.PostAsJsonAsync(
-            $"/resources/{TestDataSeeder.AcmeResourceId}/approvers", new { userId = TestDataSeeder.GlobexMemberUserId });
+            $"/api/resources/{TestDataSeeder.AcmeResourceId}/approvers", new { userId = TestDataSeeder.GlobexMemberUserId });
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
@@ -305,7 +305,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.DeleteAsync($"/resources/{TestDataSeeder.GlobexResourceId}/approvers/{TestDataSeeder.AcmeMemberUserId}");
+        var response = await client.DeleteAsync($"/api/resources/{TestDataSeeder.GlobexResourceId}/approvers/{TestDataSeeder.AcmeMemberUserId}");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
@@ -318,10 +318,10 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"ApproverRemoveHost {Guid.NewGuid()}");
         var assignResponse = await client.PostAsJsonAsync(
-            $"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
+            $"/api/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
         Assert.Equal(HttpStatusCode.Created, assignResponse.StatusCode);
 
-        var response = await client.DeleteAsync($"/resources/{resource.Id}/approvers/{TestDataSeeder.AcmeUnassignedApproverUserId}");
+        var response = await client.DeleteAsync($"/api/resources/{resource.Id}/approvers/{TestDataSeeder.AcmeUnassignedApproverUserId}");
 
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
     }
@@ -339,7 +339,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         var resource = await CreateResourceAsync(client, $"SysAdminUpdate {Guid.NewGuid()}");
         using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
 
-        var response = await sysAdminClient.PutAsJsonAsync($"/resources/{resource.Id}", new
+        var response = await sysAdminClient.PutAsJsonAsync($"/api/resources/{resource.Id}", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId,
             name = "Renamed By SysAdmin",
@@ -361,7 +361,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         var resource = await CreateResourceAsync(client, $"SysAdminDelete {Guid.NewGuid()}");
         using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
 
-        var response = await sysAdminClient.DeleteAsync($"/resources/{resource.Id}");
+        var response = await sysAdminClient.DeleteAsync($"/api/resources/{resource.Id}");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
@@ -373,7 +373,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         var resource = await CreateResourceAsync(client, $"SysAdminRule {Guid.NewGuid()}");
         using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
 
-        var response = await sysAdminClient.PostAsJsonAsync($"/resources/{resource.Id}/availability-rules",
+        var response = await sysAdminClient.PostAsJsonAsync($"/api/resources/{resource.Id}/availability-rules",
             new { dayOfWeek = DayOfWeek.Friday, startTime = "08:00:00", endTime = "10:00:00" });
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
@@ -384,12 +384,12 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"SysAdminRuleDelete {Guid.NewGuid()}");
-        var createResponse = await client.PostAsJsonAsync($"/resources/{resource.Id}/availability-rules",
+        var createResponse = await client.PostAsJsonAsync($"/api/resources/{resource.Id}/availability-rules",
             new { dayOfWeek = DayOfWeek.Saturday, startTime = "08:00:00", endTime = "10:00:00" });
         var rule = await createResponse.Content.ReadFromJsonAsync<AvailabilityRuleResponse>(JsonOptions);
         using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
 
-        var response = await sysAdminClient.DeleteAsync($"/resources/{resource.Id}/availability-rules/{rule!.Id}");
+        var response = await sysAdminClient.DeleteAsync($"/api/resources/{resource.Id}/availability-rules/{rule!.Id}");
 
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
     }
@@ -402,7 +402,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
         var start = DateTimeOffset.UtcNow.AddDays(8);
 
-        var response = await sysAdminClient.PostAsJsonAsync($"/resources/{resource.Id}/blackout-periods",
+        var response = await sysAdminClient.PostAsJsonAsync($"/api/resources/{resource.Id}/blackout-periods",
             new { startUtc = start, endUtc = start.AddHours(1), reason = "SysAdmin maintenance" });
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
@@ -414,12 +414,12 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"SysAdminBlackoutUpdate {Guid.NewGuid()}");
         var start = DateTimeOffset.UtcNow.AddDays(9);
-        var createResponse = await client.PostAsJsonAsync($"/resources/{resource.Id}/blackout-periods",
+        var createResponse = await client.PostAsJsonAsync($"/api/resources/{resource.Id}/blackout-periods",
             new { startUtc = start, endUtc = start.AddHours(1), reason = "Original" });
         var period = await createResponse.Content.ReadFromJsonAsync<BlackoutPeriodResponse>(JsonOptions);
         using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
 
-        var response = await sysAdminClient.PutAsJsonAsync($"/resources/{resource.Id}/blackout-periods/{period!.Id}",
+        var response = await sysAdminClient.PutAsJsonAsync($"/api/resources/{resource.Id}/blackout-periods/{period!.Id}",
             new { startUtc = start, endUtc = start.AddHours(2), reason = "Changed by SysAdmin" });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -431,12 +431,12 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"SysAdminBlackoutDelete {Guid.NewGuid()}");
         var start = DateTimeOffset.UtcNow.AddDays(10);
-        var createResponse = await client.PostAsJsonAsync($"/resources/{resource.Id}/blackout-periods",
+        var createResponse = await client.PostAsJsonAsync($"/api/resources/{resource.Id}/blackout-periods",
             new { startUtc = start, endUtc = start.AddHours(1), reason = "To delete" });
         var period = await createResponse.Content.ReadFromJsonAsync<BlackoutPeriodResponse>(JsonOptions);
         using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
 
-        var response = await sysAdminClient.DeleteAsync($"/resources/{resource.Id}/blackout-periods/{period!.Id}");
+        var response = await sysAdminClient.DeleteAsync($"/api/resources/{resource.Id}/blackout-periods/{period!.Id}");
 
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
     }
@@ -449,7 +449,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
 
         var response = await sysAdminClient.PostAsJsonAsync(
-            $"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
+            $"/api/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     }
@@ -459,10 +459,10 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"SysAdminApproverRemove {Guid.NewGuid()}");
-        await client.PostAsJsonAsync($"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
+        await client.PostAsJsonAsync($"/api/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
         using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
 
-        var response = await sysAdminClient.DeleteAsync($"/resources/{resource.Id}/approvers/{TestDataSeeder.AcmeUnassignedApproverUserId}");
+        var response = await sysAdminClient.DeleteAsync($"/api/resources/{resource.Id}/approvers/{TestDataSeeder.AcmeUnassignedApproverUserId}");
 
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
     }
@@ -476,7 +476,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
 
-        var response = await client.PostAsJsonAsync($"/resources/{TestDataSeeder.AcmeResourceId}/availability-rules",
+        var response = await client.PostAsJsonAsync($"/api/resources/{TestDataSeeder.AcmeResourceId}/availability-rules",
             new { dayOfWeek = DayOfWeek.Sunday, startTime = "08:00:00", endTime = "10:00:00" });
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
@@ -487,12 +487,12 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"MemberDeniedRuleDelete {Guid.NewGuid()}");
-        var createResponse = await client.PostAsJsonAsync($"/resources/{resource.Id}/availability-rules",
+        var createResponse = await client.PostAsJsonAsync($"/api/resources/{resource.Id}/availability-rules",
             new { dayOfWeek = DayOfWeek.Sunday, startTime = "08:00:00", endTime = "10:00:00" });
         var rule = await createResponse.Content.ReadFromJsonAsync<AvailabilityRuleResponse>(JsonOptions);
         using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
 
-        var response = await memberClient.DeleteAsync($"/resources/{resource.Id}/availability-rules/{rule!.Id}");
+        var response = await memberClient.DeleteAsync($"/api/resources/{resource.Id}/availability-rules/{rule!.Id}");
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -503,7 +503,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
         var start = DateTimeOffset.UtcNow.AddDays(11);
 
-        var response = await client.PostAsJsonAsync($"/resources/{TestDataSeeder.AcmeResourceId}/blackout-periods",
+        var response = await client.PostAsJsonAsync($"/api/resources/{TestDataSeeder.AcmeResourceId}/blackout-periods",
             new { startUtc = start, endUtc = start.AddHours(1), reason = "Should be forbidden" });
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
@@ -515,12 +515,12 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"MemberDeniedBlackoutUpdate {Guid.NewGuid()}");
         var start = DateTimeOffset.UtcNow.AddDays(12);
-        var createResponse = await client.PostAsJsonAsync($"/resources/{resource.Id}/blackout-periods",
+        var createResponse = await client.PostAsJsonAsync($"/api/resources/{resource.Id}/blackout-periods",
             new { startUtc = start, endUtc = start.AddHours(1), reason = "Original" });
         var period = await createResponse.Content.ReadFromJsonAsync<BlackoutPeriodResponse>(JsonOptions);
         using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
 
-        var response = await memberClient.PutAsJsonAsync($"/resources/{resource.Id}/blackout-periods/{period!.Id}",
+        var response = await memberClient.PutAsJsonAsync($"/api/resources/{resource.Id}/blackout-periods/{period!.Id}",
             new { startUtc = start, endUtc = start.AddHours(2), reason = "Should be forbidden" });
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
@@ -532,12 +532,12 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"MemberDeniedBlackoutDelete {Guid.NewGuid()}");
         var start = DateTimeOffset.UtcNow.AddDays(13);
-        var createResponse = await client.PostAsJsonAsync($"/resources/{resource.Id}/blackout-periods",
+        var createResponse = await client.PostAsJsonAsync($"/api/resources/{resource.Id}/blackout-periods",
             new { startUtc = start, endUtc = start.AddHours(1), reason = "To delete" });
         var period = await createResponse.Content.ReadFromJsonAsync<BlackoutPeriodResponse>(JsonOptions);
         using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
 
-        var response = await memberClient.DeleteAsync($"/resources/{resource.Id}/blackout-periods/{period!.Id}");
+        var response = await memberClient.DeleteAsync($"/api/resources/{resource.Id}/blackout-periods/{period!.Id}");
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -551,7 +551,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
 
-        var response = await client.PostAsJsonAsync("/resources", new
+        var response = await client.PostAsJsonAsync("/api/resources", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId,
             name = $"Approver Denied {Guid.NewGuid()}",
@@ -568,7 +568,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
 
-        var response = await client.PutAsJsonAsync($"/resources/{TestDataSeeder.AcmeResourceId}", new
+        var response = await client.PutAsJsonAsync($"/api/resources/{TestDataSeeder.AcmeResourceId}", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId,
             name = "Should Be Forbidden",
@@ -586,7 +586,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
 
-        var response = await client.DeleteAsync($"/resources/{TestDataSeeder.AcmeResourceId}");
+        var response = await client.DeleteAsync($"/api/resources/{TestDataSeeder.AcmeResourceId}");
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -596,7 +596,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
 
-        var response = await client.PostAsJsonAsync($"/resources/{TestDataSeeder.AcmeResourceId}/availability-rules",
+        var response = await client.PostAsJsonAsync($"/api/resources/{TestDataSeeder.AcmeResourceId}/availability-rules",
             new { dayOfWeek = DayOfWeek.Monday, startTime = "08:00:00", endTime = "10:00:00" });
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
@@ -607,12 +607,12 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"ApproverDeniedRuleDelete {Guid.NewGuid()}");
-        var createResponse = await client.PostAsJsonAsync($"/resources/{resource.Id}/availability-rules",
+        var createResponse = await client.PostAsJsonAsync($"/api/resources/{resource.Id}/availability-rules",
             new { dayOfWeek = DayOfWeek.Monday, startTime = "08:00:00", endTime = "10:00:00" });
         var rule = await createResponse.Content.ReadFromJsonAsync<AvailabilityRuleResponse>(JsonOptions);
         using var approverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
 
-        var response = await approverClient.DeleteAsync($"/resources/{resource.Id}/availability-rules/{rule!.Id}");
+        var response = await approverClient.DeleteAsync($"/api/resources/{resource.Id}/availability-rules/{rule!.Id}");
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -623,7 +623,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
         var start = DateTimeOffset.UtcNow.AddDays(16);
 
-        var response = await client.PostAsJsonAsync($"/resources/{TestDataSeeder.AcmeResourceId}/blackout-periods",
+        var response = await client.PostAsJsonAsync($"/api/resources/{TestDataSeeder.AcmeResourceId}/blackout-periods",
             new { startUtc = start, endUtc = start.AddHours(1), reason = "Should be forbidden" });
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
@@ -635,12 +635,12 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"ApproverDeniedBlackoutUpdate {Guid.NewGuid()}");
         var start = DateTimeOffset.UtcNow.AddDays(17);
-        var createResponse = await client.PostAsJsonAsync($"/resources/{resource.Id}/blackout-periods",
+        var createResponse = await client.PostAsJsonAsync($"/api/resources/{resource.Id}/blackout-periods",
             new { startUtc = start, endUtc = start.AddHours(1), reason = "Original" });
         var period = await createResponse.Content.ReadFromJsonAsync<BlackoutPeriodResponse>(JsonOptions);
         using var approverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
 
-        var response = await approverClient.PutAsJsonAsync($"/resources/{resource.Id}/blackout-periods/{period!.Id}",
+        var response = await approverClient.PutAsJsonAsync($"/api/resources/{resource.Id}/blackout-periods/{period!.Id}",
             new { startUtc = start, endUtc = start.AddHours(2), reason = "Should be forbidden" });
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
@@ -652,12 +652,12 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"ApproverDeniedBlackoutDelete {Guid.NewGuid()}");
         var start = DateTimeOffset.UtcNow.AddDays(18);
-        var createResponse = await client.PostAsJsonAsync($"/resources/{resource.Id}/blackout-periods",
+        var createResponse = await client.PostAsJsonAsync($"/api/resources/{resource.Id}/blackout-periods",
             new { startUtc = start, endUtc = start.AddHours(1), reason = "To delete" });
         var period = await createResponse.Content.ReadFromJsonAsync<BlackoutPeriodResponse>(JsonOptions);
         using var approverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
 
-        var response = await approverClient.DeleteAsync($"/resources/{resource.Id}/blackout-periods/{period!.Id}");
+        var response = await approverClient.DeleteAsync($"/api/resources/{resource.Id}/blackout-periods/{period!.Id}");
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -668,7 +668,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
 
         var response = await client.PostAsJsonAsync(
-            $"/resources/{TestDataSeeder.AcmeResourceId}/approvers", new { userId = TestDataSeeder.AcmeMemberUserId });
+            $"/api/resources/{TestDataSeeder.AcmeResourceId}/approvers", new { userId = TestDataSeeder.AcmeMemberUserId });
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -678,10 +678,10 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"ApproverDeniedApproverRemove {Guid.NewGuid()}");
-        await client.PostAsJsonAsync($"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
+        await client.PostAsJsonAsync($"/api/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
         using var approverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
 
-        var response = await approverClient.DeleteAsync($"/resources/{resource.Id}/approvers/{TestDataSeeder.AcmeUnassignedApproverUserId}");
+        var response = await approverClient.DeleteAsync($"/api/resources/{resource.Id}/approvers/{TestDataSeeder.AcmeUnassignedApproverUserId}");
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -691,10 +691,10 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"MemberDeniedApproverRemove {Guid.NewGuid()}");
-        await client.PostAsJsonAsync($"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
+        await client.PostAsJsonAsync($"/api/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
         using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
 
-        var response = await memberClient.DeleteAsync($"/resources/{resource.Id}/approvers/{TestDataSeeder.AcmeUnassignedApproverUserId}");
+        var response = await memberClient.DeleteAsync($"/api/resources/{resource.Id}/approvers/{TestDataSeeder.AcmeUnassignedApproverUserId}");
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -711,9 +711,9 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
             requiresApproval = false,
             timeZoneId = "UTC",
         };
-        await client.PostAsJsonAsync("/resources", request);
+        await client.PostAsJsonAsync("/api/resources", request);
 
-        var response = await client.PostAsJsonAsync("/resources", request);
+        var response = await client.PostAsJsonAsync("/api/resources", request);
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
     }
@@ -723,7 +723,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.PostAsJsonAsync("/resources", new
+        var response = await client.PostAsJsonAsync("/api/resources", new
         {
             resourceTypeId = Guid.NewGuid(),
             name = $"Orphan Resource {Guid.NewGuid()}",
@@ -740,7 +740,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.PostAsJsonAsync("/resources", new
+        var response = await client.PostAsJsonAsync("/api/resources", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId,
             name = "",
@@ -759,7 +759,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.GetAsync("/resources?pageSize=100");
+        var response = await client.GetAsync("/api/resources?pageSize=100");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var payload = await response.Content.ReadAsStringAsync();
@@ -775,7 +775,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
 
-        var response = await client.GetAsync("/resources");
+        var response = await client.GetAsync("/api/resources");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
@@ -787,7 +787,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
 
-        var response = await client.GetAsync("/resources/supported-timezones");
+        var response = await client.GetAsync("/api/resources/supported-timezones");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var zones = await response.Content.ReadFromJsonAsync<string[]>(JsonOptions);
@@ -802,7 +802,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = _factory.CreateClient();
 
-        var response = await client.GetAsync("/resources/supported-timezones");
+        var response = await client.GetAsync("/api/resources/supported-timezones");
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
@@ -813,12 +813,12 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var created = await CreateResourceAsync(client, $"Archivable {Guid.NewGuid()}");
 
-        var deleteResponse = await client.DeleteAsync($"/resources/{created.Id}");
+        var deleteResponse = await client.DeleteAsync($"/api/resources/{created.Id}");
         Assert.Equal(HttpStatusCode.OK, deleteResponse.StatusCode);
         var deleted = await deleteResponse.Content.ReadFromJsonAsync<ResourceResponse>(JsonOptions);
         Assert.Equal(ResourceStatus.Archived, deleted!.Status);
 
-        var getResponse = await client.GetAsync($"/resources/{created.Id}");
+        var getResponse = await client.GetAsync($"/api/resources/{created.Id}");
         Assert.Equal(HttpStatusCode.OK, getResponse.StatusCode);
         var fetched = await getResponse.Content.ReadFromJsonAsync<ResourceResponse>(JsonOptions);
         Assert.Equal(ResourceStatus.Archived, fetched!.Status);
@@ -829,7 +829,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"RuleHost {Guid.NewGuid()}");
-        var createRuleResponse = await client.PostAsJsonAsync($"/resources/{resource.Id}/availability-rules", new
+        var createRuleResponse = await client.PostAsJsonAsync($"/api/resources/{resource.Id}/availability-rules", new
         {
             dayOfWeek = DayOfWeek.Monday,
             startTime = "08:00:00",
@@ -837,7 +837,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         });
         var rule = await createRuleResponse.Content.ReadFromJsonAsync<AvailabilityRuleResponse>(JsonOptions);
 
-        var response = await client.DeleteAsync($"/resources/{resource.Id}/availability-rules/{rule!.Id}");
+        var response = await client.DeleteAsync($"/api/resources/{resource.Id}/availability-rules/{rule!.Id}");
 
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
     }
@@ -848,11 +848,11 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"BlackoutDeleteHappy {Guid.NewGuid()}");
         var start = DateTimeOffset.UtcNow.AddDays(14);
-        var createResponse = await client.PostAsJsonAsync($"/resources/{resource.Id}/blackout-periods",
+        var createResponse = await client.PostAsJsonAsync($"/api/resources/{resource.Id}/blackout-periods",
             new { startUtc = start, endUtc = start.AddHours(1), reason = "To delete" });
         var period = await createResponse.Content.ReadFromJsonAsync<BlackoutPeriodResponse>(JsonOptions);
 
-        var response = await client.DeleteAsync($"/resources/{resource.Id}/blackout-periods/{period!.Id}");
+        var response = await client.DeleteAsync($"/api/resources/{resource.Id}/blackout-periods/{period!.Id}");
 
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
     }
@@ -865,9 +865,9 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"ArchivedRuleTarget {Guid.NewGuid()}");
-        await client.DeleteAsync($"/resources/{resource.Id}");
+        await client.DeleteAsync($"/api/resources/{resource.Id}");
 
-        var response = await client.PostAsJsonAsync($"/resources/{resource.Id}/availability-rules",
+        var response = await client.PostAsJsonAsync($"/api/resources/{resource.Id}/availability-rules",
             new { dayOfWeek = DayOfWeek.Monday, startTime = "08:00:00", endTime = "10:00:00" });
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
@@ -878,10 +878,10 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"ArchivedBlackoutTarget {Guid.NewGuid()}");
-        await client.DeleteAsync($"/resources/{resource.Id}");
+        await client.DeleteAsync($"/api/resources/{resource.Id}");
         var start = DateTimeOffset.UtcNow.AddDays(15);
 
-        var response = await client.PostAsJsonAsync($"/resources/{resource.Id}/blackout-periods",
+        var response = await client.PostAsJsonAsync($"/api/resources/{resource.Id}/blackout-periods",
             new { startUtc = start, endUtc = start.AddHours(1), reason = "Should be rejected" });
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
@@ -893,10 +893,10 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"ApproverHost {Guid.NewGuid()}");
         var assignRequest = new { userId = TestDataSeeder.AcmeUnassignedApproverUserId };
-        var firstResponse = await client.PostAsJsonAsync($"/resources/{resource.Id}/approvers", assignRequest);
+        var firstResponse = await client.PostAsJsonAsync($"/api/resources/{resource.Id}/approvers", assignRequest);
         Assert.Equal(HttpStatusCode.Created, firstResponse.StatusCode);
 
-        var response = await client.PostAsJsonAsync($"/resources/{resource.Id}/approvers", assignRequest);
+        var response = await client.PostAsJsonAsync($"/api/resources/{resource.Id}/approvers", assignRequest);
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         Assert.Equal("ResourceApprover.Conflict", await ReadErrorCodeAsync(response));
@@ -911,7 +911,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"RoleRequiredHost {Guid.NewGuid()}");
 
-        var response = await client.PostAsJsonAsync($"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeMemberUserId });
+        var response = await client.PostAsJsonAsync($"/api/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeMemberUserId });
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         Assert.Equal("ResourceApprover.RoleRequired", await ReadErrorCodeAsync(response));
@@ -924,7 +924,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         var resource = await CreateResourceAsync(client, $"RoleAllowedHost {Guid.NewGuid()}");
 
         var response = await client.PostAsJsonAsync(
-            $"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
+            $"/api/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     }
@@ -933,7 +933,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     public async Task RemoveResourceApprover_TheLastOneOnAResourceThatRequiresApproval_ReturnsConflict()
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
-        var response = await client.PostAsJsonAsync("/resources", new
+        var response = await client.PostAsJsonAsync("/api/resources", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId,
             name = $"LastApproverHost {Guid.NewGuid()}",
@@ -943,10 +943,10 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         });
         var resource = (await response.Content.ReadFromJsonAsync<ResourceResponse>(JsonOptions))!;
         var assignResponse = await client.PostAsJsonAsync(
-            $"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
+            $"/api/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
         Assert.Equal(HttpStatusCode.Created, assignResponse.StatusCode);
 
-        var removeResponse = await client.DeleteAsync($"/resources/{resource.Id}/approvers/{TestDataSeeder.AcmeUnassignedApproverUserId}");
+        var removeResponse = await client.DeleteAsync($"/api/resources/{resource.Id}/approvers/{TestDataSeeder.AcmeUnassignedApproverUserId}");
 
         Assert.Equal(HttpStatusCode.Conflict, removeResponse.StatusCode);
         Assert.Equal("ResourceApprover.LastRemaining", await ReadErrorCodeAsync(removeResponse));
@@ -956,7 +956,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     public async Task RemoveResourceApprover_OneOfSeveralOnAResourceThatRequiresApproval_ReturnsNoContent()
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
-        var createResponse = await client.PostAsJsonAsync("/resources", new
+        var createResponse = await client.PostAsJsonAsync("/api/resources", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId,
             name = $"MultiApproverHost {Guid.NewGuid()}",
@@ -965,10 +965,10 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
             timeZoneId = "UTC",
         });
         var resource = (await createResponse.Content.ReadFromJsonAsync<ResourceResponse>(JsonOptions))!;
-        await client.PostAsJsonAsync($"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
-        await client.PostAsJsonAsync($"/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeApproverUserId });
+        await client.PostAsJsonAsync($"/api/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
+        await client.PostAsJsonAsync($"/api/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeApproverUserId });
 
-        var removeResponse = await client.DeleteAsync($"/resources/{resource.Id}/approvers/{TestDataSeeder.AcmeUnassignedApproverUserId}");
+        var removeResponse = await client.DeleteAsync($"/api/resources/{resource.Id}/approvers/{TestDataSeeder.AcmeUnassignedApproverUserId}");
 
         Assert.Equal(HttpStatusCode.NoContent, removeResponse.StatusCode);
     }
@@ -978,7 +978,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
 
-        var response = await client.GetAsync($"/resources/{TestDataSeeder.AcmeResourceId}/approvers");
+        var response = await client.GetAsync($"/api/resources/{TestDataSeeder.AcmeResourceId}/approvers");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
@@ -990,7 +990,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         var date = DateOnly.FromDateTime(TestDataSeeder.AvailabilityAnchorUtc.UtcDateTime);
 
         var response = await client.GetAsync(
-            $"/resources/{TestDataSeeder.AcmeResourceId}/availability?from={date:yyyy-MM-dd}&to={date:yyyy-MM-dd}");
+            $"/api/resources/{TestDataSeeder.AcmeResourceId}/availability?from={date:yyyy-MM-dd}&to={date:yyyy-MM-dd}");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<AvailabilityResponse>(JsonOptions);
@@ -1029,7 +1029,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         var date = DateOnly.FromDateTime(TestDataSeeder.AvailabilityAnchorUtc.UtcDateTime);
 
         var response = await client.GetAsync(
-            $"/resources/{TestDataSeeder.AcmeResourceId}/availability?from={date:yyyy-MM-dd}&to={date:yyyy-MM-dd}");
+            $"/api/resources/{TestDataSeeder.AcmeResourceId}/availability?from={date:yyyy-MM-dd}&to={date:yyyy-MM-dd}");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<AvailabilityResponse>(JsonOptions);
@@ -1061,7 +1061,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         var date = DateOnly.FromDateTime(TestDataSeeder.AvailabilityAnchorUtc.UtcDateTime);
 
         var response = await client.GetAsync(
-            $"/resources/{TestDataSeeder.AcmeResourceId}/availability?from={date:yyyy-MM-dd}&to={date:yyyy-MM-dd}");
+            $"/api/resources/{TestDataSeeder.AcmeResourceId}/availability?from={date:yyyy-MM-dd}&to={date:yyyy-MM-dd}");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
@@ -1072,7 +1072,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var date = DateOnly.FromDateTime(TestDataSeeder.AvailabilityAnchorUtc.UtcDateTime);
 
-        var response = await client.GetAsync($"/resources/{Guid.NewGuid()}/availability?from={date:yyyy-MM-dd}&to={date:yyyy-MM-dd}");
+        var response = await client.GetAsync($"/api/resources/{Guid.NewGuid()}/availability?from={date:yyyy-MM-dd}&to={date:yyyy-MM-dd}");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
@@ -1085,7 +1085,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         var earlier = date.AddDays(-1);
 
         var response = await client.GetAsync(
-            $"/resources/{TestDataSeeder.AcmeResourceId}/availability?from={date:yyyy-MM-dd}&to={earlier:yyyy-MM-dd}");
+            $"/api/resources/{TestDataSeeder.AcmeResourceId}/availability?from={date:yyyy-MM-dd}&to={earlier:yyyy-MM-dd}");
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
@@ -1100,7 +1100,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.GetAsync($"/resources/{TestDataSeeder.GlobexResourceId}");
+        var response = await client.GetAsync($"/api/resources/{TestDataSeeder.GlobexResourceId}");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
@@ -1110,7 +1110,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.GetAsync($"/resources/{TestDataSeeder.GlobexResourceId}/availability-rules");
+        var response = await client.GetAsync($"/api/resources/{TestDataSeeder.GlobexResourceId}/availability-rules");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
@@ -1120,7 +1120,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.GetAsync($"/resources/{TestDataSeeder.GlobexResourceId}/blackout-periods");
+        var response = await client.GetAsync($"/api/resources/{TestDataSeeder.GlobexResourceId}/blackout-periods");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Equal("Resource.NotFound", await ReadErrorCodeAsync(response));
@@ -1131,7 +1131,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.GetAsync($"/resources/{TestDataSeeder.GlobexResourceId}/approvers");
+        var response = await client.GetAsync($"/api/resources/{TestDataSeeder.GlobexResourceId}/approvers");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Equal("Resource.NotFound", await ReadErrorCodeAsync(response));
@@ -1144,7 +1144,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         var date = DateOnly.FromDateTime(TestDataSeeder.AvailabilityAnchorUtc.UtcDateTime);
 
         var response = await client.GetAsync(
-            $"/resources/{TestDataSeeder.GlobexResourceId}/availability?from={date:yyyy-MM-dd}&to={date:yyyy-MM-dd}");
+            $"/api/resources/{TestDataSeeder.GlobexResourceId}/availability?from={date:yyyy-MM-dd}&to={date:yyyy-MM-dd}");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Equal("Resource.NotFound", await ReadErrorCodeAsync(response));
@@ -1159,10 +1159,10 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var name = $"Archived Reuse {Guid.NewGuid()}";
         var created = await CreateResourceAsync(client, name);
-        var archiveResponse = await client.DeleteAsync($"/resources/{created.Id}");
+        var archiveResponse = await client.DeleteAsync($"/api/resources/{created.Id}");
         Assert.Equal(HttpStatusCode.OK, archiveResponse.StatusCode);
 
-        var response = await client.PostAsJsonAsync("/resources", new
+        var response = await client.PostAsJsonAsync("/api/resources", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId,
             name,
@@ -1184,12 +1184,12 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"ArchivedBlackoutUpdate {Guid.NewGuid()}");
         var start = DateTimeOffset.UtcNow.AddDays(11);
-        var createResponse = await client.PostAsJsonAsync($"/resources/{resource.Id}/blackout-periods",
+        var createResponse = await client.PostAsJsonAsync($"/api/resources/{resource.Id}/blackout-periods",
             new { startUtc = start, endUtc = start.AddHours(1), reason = "Original" });
         var period = await createResponse.Content.ReadFromJsonAsync<BlackoutPeriodResponse>(JsonOptions);
-        await client.DeleteAsync($"/resources/{resource.Id}");
+        await client.DeleteAsync($"/api/resources/{resource.Id}");
 
-        var response = await client.PutAsJsonAsync($"/resources/{resource.Id}/blackout-periods/{period!.Id}",
+        var response = await client.PutAsJsonAsync($"/api/resources/{resource.Id}/blackout-periods/{period!.Id}",
             new { startUtc = start, endUtc = start.AddHours(2), reason = "Attempted change" });
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
@@ -1203,7 +1203,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.PostAsJsonAsync("/resources", new
+        var response = await client.PostAsJsonAsync("/api/resources", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId,
             name = "Globex Only Room", // the exact name TestDataSeeder gives Globex's resource
@@ -1223,7 +1223,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         var name = $"Still Active {Guid.NewGuid()}";
         await CreateResourceAsync(client, name);
 
-        var response = await client.PostAsJsonAsync("/resources", new
+        var response = await client.PostAsJsonAsync("/api/resources", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId,
             name,
@@ -1241,9 +1241,9 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"RuleDup {Guid.NewGuid()}");
         var rule = new { dayOfWeek = DayOfWeek.Tuesday, startTime = "09:00:00", endTime = "11:00:00" };
-        await client.PostAsJsonAsync($"/resources/{resource.Id}/availability-rules", rule);
+        await client.PostAsJsonAsync($"/api/resources/{resource.Id}/availability-rules", rule);
 
-        var response = await client.PostAsJsonAsync($"/resources/{resource.Id}/availability-rules", rule);
+        var response = await client.PostAsJsonAsync($"/api/resources/{resource.Id}/availability-rules", rule);
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
     }
@@ -1257,9 +1257,9 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"RuleOverlap {Guid.NewGuid()}");
 
-        var first = await client.PostAsJsonAsync($"/resources/{resource.Id}/availability-rules",
+        var first = await client.PostAsJsonAsync($"/api/resources/{resource.Id}/availability-rules",
             new { dayOfWeek = DayOfWeek.Wednesday, startTime = "08:00:00", endTime = "14:00:00" });
-        var second = await client.PostAsJsonAsync($"/resources/{resource.Id}/availability-rules",
+        var second = await client.PostAsJsonAsync($"/api/resources/{resource.Id}/availability-rules",
             new { dayOfWeek = DayOfWeek.Wednesday, startTime = "12:00:00", endTime = "18:00:00" });
 
         Assert.Equal(HttpStatusCode.Created, first.StatusCode);
@@ -1275,9 +1275,9 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         var resource = await CreateResourceAsync(client, $"BlackoutOverlap {Guid.NewGuid()}");
         var start = DateTimeOffset.UtcNow.AddDays(10);
 
-        var first = await client.PostAsJsonAsync($"/resources/{resource.Id}/blackout-periods",
+        var first = await client.PostAsJsonAsync($"/api/resources/{resource.Id}/blackout-periods",
             new { startUtc = start, endUtc = start.AddHours(4), reason = "First" });
-        var second = await client.PostAsJsonAsync($"/resources/{resource.Id}/blackout-periods",
+        var second = await client.PostAsJsonAsync($"/api/resources/{resource.Id}/blackout-periods",
             new { startUtc = start.AddHours(2), endUtc = start.AddHours(6), reason = "Second" });
 
         Assert.Equal(HttpStatusCode.Created, first.StatusCode);
@@ -1290,11 +1290,11 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resourceA = await CreateResourceAsync(client, $"RuleOwnerA {Guid.NewGuid()}");
         var resourceB = await CreateResourceAsync(client, $"RuleOwnerB {Guid.NewGuid()}");
-        var createResponse = await client.PostAsJsonAsync($"/resources/{resourceA.Id}/availability-rules",
+        var createResponse = await client.PostAsJsonAsync($"/api/resources/{resourceA.Id}/availability-rules",
             new { dayOfWeek = DayOfWeek.Thursday, startTime = "08:00:00", endTime = "09:00:00" });
         var rule = await createResponse.Content.ReadFromJsonAsync<AvailabilityRuleResponse>(JsonOptions);
 
-        var response = await client.DeleteAsync($"/resources/{resourceB.Id}/availability-rules/{rule!.Id}");
+        var response = await client.DeleteAsync($"/api/resources/{resourceB.Id}/availability-rules/{rule!.Id}");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
@@ -1306,11 +1306,11 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         var resourceA = await CreateResourceAsync(client, $"BlackoutOwnerA {Guid.NewGuid()}");
         var resourceB = await CreateResourceAsync(client, $"BlackoutOwnerB {Guid.NewGuid()}");
         var start = DateTimeOffset.UtcNow.AddDays(5);
-        var createResponse = await client.PostAsJsonAsync($"/resources/{resourceA.Id}/blackout-periods",
+        var createResponse = await client.PostAsJsonAsync($"/api/resources/{resourceA.Id}/blackout-periods",
             new { startUtc = start, endUtc = start.AddHours(1), reason = "Owner-check" });
         var period = await createResponse.Content.ReadFromJsonAsync<BlackoutPeriodResponse>(JsonOptions);
 
-        var response = await client.PutAsJsonAsync($"/resources/{resourceB.Id}/blackout-periods/{period!.Id}",
+        var response = await client.PutAsJsonAsync($"/api/resources/{resourceB.Id}/blackout-periods/{period!.Id}",
             new { startUtc = start, endUtc = start.AddHours(2), reason = "Changed" });
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
@@ -1324,11 +1324,11 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         var resourceA = await CreateResourceAsync(client, $"BlackoutDelOwnerA {Guid.NewGuid()}");
         var resourceB = await CreateResourceAsync(client, $"BlackoutDelOwnerB {Guid.NewGuid()}");
         var start = DateTimeOffset.UtcNow.AddDays(6);
-        var createResponse = await client.PostAsJsonAsync($"/resources/{resourceA.Id}/blackout-periods",
+        var createResponse = await client.PostAsJsonAsync($"/api/resources/{resourceA.Id}/blackout-periods",
             new { startUtc = start, endUtc = start.AddHours(1), reason = "Owner-check" });
         var period = await createResponse.Content.ReadFromJsonAsync<BlackoutPeriodResponse>(JsonOptions);
 
-        var response = await client.DeleteAsync($"/resources/{resourceB.Id}/blackout-periods/{period!.Id}");
+        var response = await client.DeleteAsync($"/api/resources/{resourceB.Id}/blackout-periods/{period!.Id}");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Equal("BlackoutPeriod.NotFound", await ReadErrorCodeAsync(response));
@@ -1342,7 +1342,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
 
     private async Task<ResourceResponse> CreateResourceAsync(HttpClient client, string name)
     {
-        var response = await client.PostAsJsonAsync("/resources", new
+        var response = await client.PostAsJsonAsync("/api/resources", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId,
             name,
@@ -1357,7 +1357,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     private async Task<HttpClient> AuthenticatedClientAsync(string email)
     {
         var client = _factory.CreateClient();
-        var loginResponse = await client.PostAsJsonAsync("/auth/login", new { email, password = TestDataSeeder.Password });
+        var loginResponse = await client.PostAsJsonAsync("/api/auth/login", new { email, password = TestDataSeeder.Password });
         loginResponse.EnsureSuccessStatusCode();
         var loginBody = await loginResponse.Content.ReadFromJsonAsync<LoginResponse>(JsonOptions);
         client.DefaultRequestHeaders.Authorization = new("Bearer", loginBody!.AccessToken);

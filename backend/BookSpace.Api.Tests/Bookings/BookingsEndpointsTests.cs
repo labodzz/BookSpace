@@ -29,7 +29,7 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
         var start = AnchorPlusHours(1);
 
-        var response = await client.PostAsJsonAsync("/bookings", new
+        var response = await client.PostAsJsonAsync("/api/bookings", new
         {
             resourceId = TestDataSeeder.AcmeResourceId, startUtc = start, endUtc = start.AddHours(1), quantity = 1,
         });
@@ -45,7 +45,7 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
 
-        var response = await client.PostAsJsonAsync("/bookings", new
+        var response = await client.PostAsJsonAsync("/api/bookings", new
         {
             resourceId = TestDataSeeder.AcmeResourceId,
             startUtc = TestDataSeeder.AcmeBlackoutStartUtc,
@@ -64,7 +64,7 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
 
         // Capacity 8, the seeded Confirmed booking already uses 3 in this exact window - requesting 6
         // more would push it to 9.
-        var response = await client.PostAsJsonAsync("/bookings", new
+        var response = await client.PostAsJsonAsync("/api/bookings", new
         {
             resourceId = TestDataSeeder.AcmeResourceId,
             startUtc = TestDataSeeder.AcmeBookingStartUtc,
@@ -81,7 +81,7 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
     {
         using var adminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(adminClient, $"Under Maintenance {Guid.NewGuid()}");
-        await adminClient.PutAsJsonAsync($"/resources/{resource.Id}", new
+        await adminClient.PutAsJsonAsync($"/api/resources/{resource.Id}", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId, name = resource.Name, description = (string?)null,
             capacity = resource.Capacity, requiresApproval = false, timeZoneId = "UTC", status = ResourceStatus.Maintenance,
@@ -89,7 +89,7 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
         using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
         var start = AnchorPlusHours(1);
 
-        var response = await memberClient.PostAsJsonAsync("/bookings", new
+        var response = await memberClient.PostAsJsonAsync("/api/bookings", new
         {
             resourceId = resource.Id, startUtc = start, endUtc = start.AddHours(1), quantity = 1,
         });
@@ -104,7 +104,7 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
         var start = AnchorPlusHours(1);
 
-        var response = await client.PostAsJsonAsync("/bookings", new
+        var response = await client.PostAsJsonAsync("/api/bookings", new
         {
             resourceId = TestDataSeeder.AcmeResourceId, startUtc = start, endUtc = start, quantity = 1,
         });
@@ -120,7 +120,7 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
         var start = AnchorPlusHours(1);
 
-        var response = await client.PostAsJsonAsync("/bookings", new
+        var response = await client.PostAsJsonAsync("/api/bookings", new
         {
             resourceId = TestDataSeeder.GlobexResourceId, startUtc = start, endUtc = start.AddHours(1), quantity = 1,
         });
@@ -134,7 +134,7 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
         using var client = _factory.CreateClient();
         var start = AnchorPlusHours(1);
 
-        var response = await client.PostAsJsonAsync("/bookings", new
+        var response = await client.PostAsJsonAsync("/api/bookings", new
         {
             resourceId = TestDataSeeder.AcmeResourceId, startUtc = start, endUtc = start.AddHours(1), quantity = 1,
         });
@@ -149,17 +149,17 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
         using var adminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var memberStart = AnchorPlusHours(2);
         var adminStart = AnchorPlusHours(3);
-        var memberCreate = await memberClient.PostAsJsonAsync("/bookings", new
+        var memberCreate = await memberClient.PostAsJsonAsync("/api/bookings", new
         {
             resourceId = TestDataSeeder.AcmeResourceId, startUtc = memberStart, endUtc = memberStart.AddHours(1), quantity = 1,
         });
         var memberBooking = await memberCreate.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
-        await adminClient.PostAsJsonAsync("/bookings", new
+        await adminClient.PostAsJsonAsync("/api/bookings", new
         {
             resourceId = TestDataSeeder.AcmeResourceId, startUtc = adminStart, endUtc = adminStart.AddHours(1), quantity = 1,
         });
 
-        var response = await memberClient.GetAsync("/bookings?pageSize=100");
+        var response = await memberClient.GetAsync("/api/bookings?pageSize=100");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var page = await response.Content.ReadFromJsonAsync<PagedResult<BookingResponse>>(JsonOptions);
@@ -181,7 +181,7 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
         var toUtc = AnchorPlusHours(52);
 
         var response = await client.GetAsync(
-            $"/bookings?pageSize=100&fromUtc={Uri.EscapeDataString(fromUtc.ToString("O"))}&toUtc={Uri.EscapeDataString(toUtc.ToString("O"))}");
+            $"/api/bookings?pageSize=100&fromUtc={Uri.EscapeDataString(fromUtc.ToString("O"))}&toUtc={Uri.EscapeDataString(toUtc.ToString("O"))}");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var page = await response.Content.ReadFromJsonAsync<PagedResult<BookingResponse>>(JsonOptions);
@@ -201,7 +201,7 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
         var older = await CreateBookingAsync(client, TestDataSeeder.AcmeResourceId, olderRequestLaterStart, olderRequestLaterStart.AddHours(1));
         var newer = await CreateBookingAsync(client, TestDataSeeder.AcmeResourceId, newerRequestEarlierStart, newerRequestEarlierStart.AddHours(1));
 
-        var response = await client.GetAsync("/bookings?pageSize=100");
+        var response = await client.GetAsync("/api/bookings?pageSize=100");
 
         var page = await response.Content.ReadFromJsonAsync<PagedResult<BookingResponse>>(JsonOptions);
         var ids = page!.Items.Select(item => item.Id).ToList();
@@ -218,9 +218,9 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
         var second = await CreateBookingAsync(client, TestDataSeeder.AcmeResourceId, AnchorPlusHours(132), AnchorPlusHours(133));
         var third = await CreateBookingAsync(client, TestDataSeeder.AcmeResourceId, AnchorPlusHours(134), AnchorPlusHours(135));
 
-        var page1 = await (await client.GetAsync("/bookings?page=1&pageSize=1")).Content.ReadFromJsonAsync<PagedResult<BookingResponse>>(JsonOptions);
-        var page2 = await (await client.GetAsync("/bookings?page=2&pageSize=1")).Content.ReadFromJsonAsync<PagedResult<BookingResponse>>(JsonOptions);
-        var page3 = await (await client.GetAsync("/bookings?page=3&pageSize=1")).Content.ReadFromJsonAsync<PagedResult<BookingResponse>>(JsonOptions);
+        var page1 = await (await client.GetAsync("/api/bookings?page=1&pageSize=1")).Content.ReadFromJsonAsync<PagedResult<BookingResponse>>(JsonOptions);
+        var page2 = await (await client.GetAsync("/api/bookings?page=2&pageSize=1")).Content.ReadFromJsonAsync<PagedResult<BookingResponse>>(JsonOptions);
+        var page3 = await (await client.GetAsync("/api/bookings?page=3&pageSize=1")).Content.ReadFromJsonAsync<PagedResult<BookingResponse>>(JsonOptions);
 
         Assert.Equal(third.Id, Assert.Single(page1!.Items).Id);
         Assert.Equal(second.Id, Assert.Single(page2!.Items).Id);
@@ -253,7 +253,7 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
         var expectedFirst = bookingA.Id.CompareTo(bookingB.Id) > 0 ? bookingA.Id : bookingB.Id;
         var expectedSecond = expectedFirst == bookingA.Id ? bookingB.Id : bookingA.Id;
 
-        var response = await client.GetAsync("/bookings?pageSize=100");
+        var response = await client.GetAsync("/api/bookings?pageSize=100");
 
         var page = await response.Content.ReadFromJsonAsync<PagedResult<BookingResponse>>(JsonOptions);
         var ids = page!.Items.Select(item => item.Id).ToList();
@@ -270,9 +270,9 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
         var older = await CreateBookingAsync(client, TestDataSeeder.AcmeResourceId, AnchorPlusHours(150), AnchorPlusHours(151));
         var newer = await CreateBookingAsync(client, TestDataSeeder.AcmeResourceId, AnchorPlusHours(152), AnchorPlusHours(153));
-        await client.DeleteAsync($"/bookings/{older.Id}");
+        await client.DeleteAsync($"/api/bookings/{older.Id}");
 
-        var response = await client.GetAsync("/bookings?pageSize=100");
+        var response = await client.GetAsync("/api/bookings?pageSize=100");
 
         var page = await response.Content.ReadFromJsonAsync<PagedResult<BookingResponse>>(JsonOptions);
         var ids = page!.Items.Select(item => item.Id).ToList();
@@ -286,7 +286,7 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
         var start = AnchorPlusHours(4);
         var created = await CreateBookingAsync(client, TestDataSeeder.AcmeResourceId, start, start.AddHours(1));
 
-        var response = await client.DeleteAsync($"/bookings/{created.Id}");
+        var response = await client.DeleteAsync($"/api/bookings/{created.Id}");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
@@ -299,9 +299,9 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
         var start = AnchorPlusHours(5);
         var created = await CreateBookingAsync(client, TestDataSeeder.AcmeResourceId, start, start.AddHours(1));
-        await client.DeleteAsync($"/bookings/{created.Id}");
+        await client.DeleteAsync($"/api/bookings/{created.Id}");
 
-        var response = await client.DeleteAsync($"/bookings/{created.Id}");
+        var response = await client.DeleteAsync($"/api/bookings/{created.Id}");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
@@ -318,7 +318,7 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
         var start = AnchorPlusHours(6);
         var created = await CreateBookingAsync(memberClient, TestDataSeeder.AcmeResourceId, start, start.AddHours(1));
 
-        var response = await approverClient.DeleteAsync($"/bookings/{created.Id}");
+        var response = await approverClient.DeleteAsync($"/api/bookings/{created.Id}");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
@@ -334,7 +334,7 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
         var start = AnchorPlusHours(7);
         var created = await CreateBookingAsync(memberClient, TestDataSeeder.AcmeResourceId, start, start.AddHours(1));
 
-        var response = await adminClient.DeleteAsync($"/bookings/{created.Id}?reason=Freeing%20the%20resource");
+        var response = await adminClient.DeleteAsync($"/api/bookings/{created.Id}?reason=Freeing%20the%20resource");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
@@ -351,7 +351,7 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
         var start = AnchorPlusHours(7);
         var created = await CreateBookingAsync(memberClient, TestDataSeeder.AcmeResourceId, start, start.AddHours(1));
 
-        var response = await globexClient.DeleteAsync($"/bookings/{created.Id}");
+        var response = await globexClient.DeleteAsync($"/api/bookings/{created.Id}");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
@@ -364,27 +364,27 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
         var created = await CreateBookingAsync(client, TestDataSeeder.AcmeResourceId, start, start.AddHours(1), quantity: 8);
         var date = DateOnly.FromDateTime(start.UtcDateTime);
 
-        var beforeCancel = await client.GetAsync($"/resources/{TestDataSeeder.AcmeResourceId}/availability?from={date:yyyy-MM-dd}&to={date:yyyy-MM-dd}");
+        var beforeCancel = await client.GetAsync($"/api/resources/{TestDataSeeder.AcmeResourceId}/availability?from={date:yyyy-MM-dd}&to={date:yyyy-MM-dd}");
         var beforeBody = await beforeCancel.Content.ReadFromJsonAsync<AvailabilityResponse>(JsonOptions);
         Assert.DoesNotContain(beforeBody!.BookableSlots, slot => slot.StartUtc < start.AddHours(1) && slot.EndUtc > start);
 
-        await client.DeleteAsync($"/bookings/{created.Id}");
+        await client.DeleteAsync($"/api/bookings/{created.Id}");
 
-        var afterCancel = await client.GetAsync($"/resources/{TestDataSeeder.AcmeResourceId}/availability?from={date:yyyy-MM-dd}&to={date:yyyy-MM-dd}");
+        var afterCancel = await client.GetAsync($"/api/resources/{TestDataSeeder.AcmeResourceId}/availability?from={date:yyyy-MM-dd}&to={date:yyyy-MM-dd}");
         var afterBody = await afterCancel.Content.ReadFromJsonAsync<AvailabilityResponse>(JsonOptions);
         Assert.Contains(afterBody!.BookableSlots, slot => slot.StartUtc <= start && slot.EndUtc >= start.AddHours(1) && slot.AvailableCapacity == 8);
     }
 
     private async Task<BookingResponse> CreateBookingAsync(HttpClient client, Guid resourceId, DateTimeOffset start, DateTimeOffset end, int quantity = 1)
     {
-        var response = await client.PostAsJsonAsync("/bookings", new { resourceId, startUtc = start, endUtc = end, quantity });
+        var response = await client.PostAsJsonAsync("/api/bookings", new { resourceId, startUtc = start, endUtc = end, quantity });
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions))!;
     }
 
     private async Task<ResourceResponse> CreateResourceAsync(HttpClient client, string name)
     {
-        var response = await client.PostAsJsonAsync("/resources", new
+        var response = await client.PostAsJsonAsync("/api/resources", new
         {
             resourceTypeId = TestDataSeeder.ResourceTypeId, name, capacity = 4, requiresApproval = false, timeZoneId = "UTC",
         });
@@ -401,7 +401,7 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
     private async Task<HttpClient> AuthenticatedClientAsync(string email)
     {
         var client = _factory.CreateClient();
-        var loginResponse = await client.PostAsJsonAsync("/auth/login", new { email, password = TestDataSeeder.Password });
+        var loginResponse = await client.PostAsJsonAsync("/api/auth/login", new { email, password = TestDataSeeder.Password });
         loginResponse.EnsureSuccessStatusCode();
         var loginBody = await loginResponse.Content.ReadFromJsonAsync<LoginResponse>(JsonOptions);
         client.DefaultRequestHeaders.Authorization = new("Bearer", loginBody!.AccessToken);

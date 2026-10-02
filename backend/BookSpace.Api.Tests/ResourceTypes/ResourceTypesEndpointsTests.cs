@@ -21,7 +21,7 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var name = $"Parking Spot {Guid.NewGuid()}";
 
-        var response = await client.PostAsJsonAsync("/resource-types", new { name });
+        var response = await client.PostAsJsonAsync("/api/resource-types", new { name });
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<ResourceTypeResponse>(JsonOptions);
@@ -33,7 +33,7 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
 
-        var response = await client.PostAsJsonAsync("/resource-types", new { name = $"Parking Spot {Guid.NewGuid()}" });
+        var response = await client.PostAsJsonAsync("/api/resource-types", new { name = $"Parking Spot {Guid.NewGuid()}" });
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     }
@@ -43,7 +43,7 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
 
-        var response = await client.PostAsJsonAsync("/resource-types", new { name = $"Parking Spot {Guid.NewGuid()}" });
+        var response = await client.PostAsJsonAsync("/api/resource-types", new { name = $"Parking Spot {Guid.NewGuid()}" });
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -53,7 +53,7 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
 
-        var response = await client.PostAsJsonAsync("/resource-types", new { name = $"Approver Denied {Guid.NewGuid()}" });
+        var response = await client.PostAsJsonAsync("/api/resource-types", new { name = $"Approver Denied {Guid.NewGuid()}" });
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -65,7 +65,7 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
         var name = $"Parking Spot {Guid.NewGuid()}";
         await CreateResourceTypeAsync(client, name);
 
-        var response = await client.PostAsJsonAsync("/resource-types", new { name });
+        var response = await client.PostAsJsonAsync("/api/resource-types", new { name });
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
     }
@@ -81,7 +81,7 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
         await CreateResourceTypeAsync(globexClient, name);
 
         using var acmeClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
-        var response = await acmeClient.PostAsJsonAsync("/resource-types", new { name });
+        var response = await acmeClient.PostAsJsonAsync("/api/resource-types", new { name });
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     }
@@ -91,7 +91,7 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.PostAsJsonAsync("/resource-types", new { name = "" });
+        var response = await client.PostAsJsonAsync("/api/resource-types", new { name = "" });
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
@@ -101,7 +101,7 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
 
-        var response = await client.GetAsync("/resource-types");
+        var response = await client.GetAsync("/api/resource-types");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
@@ -111,7 +111,7 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.GetAsync("/resource-types");
+        var response = await client.GetAsync("/api/resource-types");
 
         var body = await response.Content.ReadFromJsonAsync<List<ResourceTypeResponse>>(JsonOptions);
         Assert.Contains(body!, item => item.Id == TestDataSeeder.ResourceTypeId);
@@ -123,7 +123,7 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.GetAsync($"/resource-types/{TestDataSeeder.GlobexResourceTypeId}");
+        var response = await client.GetAsync($"/api/resource-types/{TestDataSeeder.GlobexResourceTypeId}");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
@@ -135,7 +135,7 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
         var created = await CreateResourceTypeAsync(client, $"Parking Spot {Guid.NewGuid()}");
         var newName = $"Renamed {Guid.NewGuid()}";
 
-        var response = await client.PutAsJsonAsync($"/resource-types/{created.Id}", new { name = newName });
+        var response = await client.PutAsJsonAsync($"/api/resource-types/{created.Id}", new { name = newName });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<ResourceTypeResponse>(JsonOptions);
@@ -147,7 +147,7 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
 
-        var response = await client.PutAsJsonAsync($"/resource-types/{TestDataSeeder.ResourceTypeId}", new { name = "Whatever" });
+        var response = await client.PutAsJsonAsync($"/api/resource-types/{TestDataSeeder.ResourceTypeId}", new { name = "Whatever" });
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -157,7 +157,7 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.PutAsJsonAsync($"/resource-types/{TestDataSeeder.GlobexResourceTypeId}", new { name = "Should Not Apply" });
+        var response = await client.PutAsJsonAsync($"/api/resource-types/{TestDataSeeder.GlobexResourceTypeId}", new { name = "Should Not Apply" });
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
@@ -169,7 +169,7 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
         var created = await CreateResourceTypeAsync(adminClient, $"SysAdminUpdateTarget {Guid.NewGuid()}");
         using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
 
-        var response = await sysAdminClient.PutAsJsonAsync($"/resource-types/{created.Id}", new { name = $"Renamed By SysAdmin {Guid.NewGuid()}" });
+        var response = await sysAdminClient.PutAsJsonAsync($"/api/resource-types/{created.Id}", new { name = $"Renamed By SysAdmin {Guid.NewGuid()}" });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
@@ -179,7 +179,7 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
 
-        var response = await client.PutAsJsonAsync($"/resource-types/{TestDataSeeder.ResourceTypeId}", new { name = "Should Be Forbidden" });
+        var response = await client.PutAsJsonAsync($"/api/resource-types/{TestDataSeeder.ResourceTypeId}", new { name = "Should Be Forbidden" });
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -189,7 +189,7 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.PutAsJsonAsync($"/resource-types/{Guid.NewGuid()}", new { name = "Whatever" });
+        var response = await client.PutAsJsonAsync($"/api/resource-types/{Guid.NewGuid()}", new { name = "Whatever" });
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
@@ -200,7 +200,7 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var created = await CreateResourceTypeAsync(client, $"Parking Spot {Guid.NewGuid()}");
 
-        var response = await client.DeleteAsync($"/resource-types/{created.Id}");
+        var response = await client.DeleteAsync($"/api/resource-types/{created.Id}");
 
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
     }
@@ -210,7 +210,7 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.DeleteAsync($"/resource-types/{TestDataSeeder.ResourceTypeId}");
+        var response = await client.DeleteAsync($"/api/resource-types/{TestDataSeeder.ResourceTypeId}");
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
     }
@@ -220,7 +220,7 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
 
-        var response = await client.DeleteAsync($"/resource-types/{TestDataSeeder.ResourceTypeId}");
+        var response = await client.DeleteAsync($"/api/resource-types/{TestDataSeeder.ResourceTypeId}");
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -230,7 +230,7 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
 
-        var response = await client.DeleteAsync($"/resource-types/{TestDataSeeder.ResourceTypeId}");
+        var response = await client.DeleteAsync($"/api/resource-types/{TestDataSeeder.ResourceTypeId}");
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -240,7 +240,7 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.DeleteAsync($"/resource-types/{TestDataSeeder.GlobexResourceTypeId}");
+        var response = await client.DeleteAsync($"/api/resource-types/{TestDataSeeder.GlobexResourceTypeId}");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
@@ -252,14 +252,14 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
         var created = await CreateResourceTypeAsync(adminClient, $"SysAdminDeleteTarget {Guid.NewGuid()}");
         using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
 
-        var response = await sysAdminClient.DeleteAsync($"/resource-types/{created.Id}");
+        var response = await sysAdminClient.DeleteAsync($"/api/resource-types/{created.Id}");
 
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
     }
 
     private async Task<ResourceTypeResponse> CreateResourceTypeAsync(HttpClient client, string name)
     {
-        var response = await client.PostAsJsonAsync("/resource-types", new { name });
+        var response = await client.PostAsJsonAsync("/api/resource-types", new { name });
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<ResourceTypeResponse>(JsonOptions))!;
     }
@@ -267,7 +267,7 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
     private async Task<HttpClient> AuthenticatedClientAsync(string email)
     {
         var client = _factory.CreateClient();
-        var loginResponse = await client.PostAsJsonAsync("/auth/login", new { email, password = TestDataSeeder.Password });
+        var loginResponse = await client.PostAsJsonAsync("/api/auth/login", new { email, password = TestDataSeeder.Password });
         loginResponse.EnsureSuccessStatusCode();
         var loginBody = await loginResponse.Content.ReadFromJsonAsync<LoginResponse>(JsonOptions);
         client.DefaultRequestHeaders.Authorization = new("Bearer", loginBody!.AccessToken);

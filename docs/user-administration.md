@@ -1,7 +1,7 @@
 # User Lifecycle and Role Administration
 
 What Batch 4A built: a production flow for inviting, onboarding, updating, deactivating, reactivating,
-and role-managing users, on top of what existed before it - `GET /users`, `GET /users/me`, and users
+and role-managing users, on top of what existed before it - `GET /api/users`, `GET /api/users/me`, and users
 created only through `DevelopmentSeeder`/`TestDataSeeder`. Assumes
 [authentication.md](authentication.md) (token model, refresh rotation) and
 [tenant-isolation.md](tenant-isolation.md) (the global query filter) throughout.
@@ -15,7 +15,7 @@ same convention as `Tenant.Status`/`Resource.Status`) has three values:
 |---|---|---|
 | `Active` | Yes | Default for every user constructed without an explicit Status (existing seed/test call sites are unaffected); also the terminal state after accepting an invitation or being reactivated. |
 | `Invited` | No | `InviteUserCommandHandler` creates a `User` row directly in this state - the row (and its globally-unique `Email`, and any roles staged via `UserRole`) exists before a password does. |
-| `Inactive` | No | `DeactivateUserCommandHandler` (`DELETE /users/{id}`) - administratively deactivated. Never a physical delete; see §6. |
+| `Inactive` | No | `DeactivateUserCommandHandler` (`DELETE /api/users/{id}`) - administratively deactivated. Never a physical delete; see §6. |
 
 **`Active` is deliberately the enum's zero/default member, not `Invited`**, even though `Invited` reads
 as the more natural "starting" state. `User.Status` is configured with `HasDefaultValue(UserStatus.Active)`
@@ -135,7 +135,7 @@ approvers" page, the same as `ResourceApprover.LastRemaining` already does for t
 Prefers an invitation flow over an administrator choosing another user's permanent password, per the
 task's own stated preference; no equally-secure existing onboarding mechanism existed to reuse instead.
 
-### Creating an invitation - `POST /users/invitations`
+### Creating an invitation - `POST /api/users/invitations`
 
 `InviteUserCommandRequest(Email, FirstName, LastName, Roles)`, `TenantAdmin`/`SysAdmin` only.
 
@@ -176,7 +176,7 @@ task's own stated preference; no equally-secure existing onboarding mechanism ex
    already use, is the interim workflow. The raw token is never logged, never returned from any other
    endpoint (`GetUser`/`GetUsers` never expose it), and never stored anywhere - only its hash is.
 
-### Accepting an invitation - `POST /auth/accept-invitation`
+### Accepting an invitation - `POST /api/auth/accept-invitation`
 
 Public (`AuthController` is `[AllowAnonymous]` at the class level, same as `login`/`refresh`/`logout`).
 `AcceptInvitationCommandRequest(Token, Password)` → `AuthenticationService.AcceptInvitationAsync` (a fourth
@@ -208,7 +208,7 @@ pre-tenant-context flow that bypasses the tenant filter via `IgnoreQueryFilters(
    LocalDB by `AcceptInvitationConcurrencyTests` (SQLite, used elsewhere in this suite for speed, has no
    `rowversion` support and the column is a no-op there).
 6. Returns **no access or refresh token** - `204 No Content` on success, same as `Logout`. The caller logs
-   in normally afterward via `POST /auth/login`, proven end-to-end by
+   in normally afterward via `POST /api/auth/login`, proven end-to-end by
    `AcceptInvitation_WithAValidToken_ActivatesTheUserWhoCanThenLogIn`.
 
 **No separate "revoke invitation" endpoint exists.** Re-inviting the same still-pending email (§4, point 3)
@@ -220,7 +220,7 @@ just the invitation's own fields).
 
 ## 5. Role changes and JWT staleness - the accepted tradeoff
 
-Assigning or removing a role (`POST`/`DELETE /users/{id}/roles/...`) only affects the *next* access token a
+Assigning or removing a role (`POST`/`DELETE /api/users/{id}/roles/...`) only affects the *next* access token a
 session issues - at login, or at its next refresh. Roles are baked into the JWT at issuance
 (`JwtTokenGenerator.GenerateAccessToken`) and this codebase has no mechanism to invalidate an already-issued
 token early (no token-version claim, no server-side session store). This is the exact, already-documented
@@ -234,7 +234,7 @@ user mid-session and confirms their already-issued token still gets `403 Forbidd
 
 ## 6. Deactivate / Reactivate
 
-`DELETE /users/{id}` (`DeactivateUserCommandHandler`) - same DELETE-verb-means-soft-transition convention
+`DELETE /api/users/{id}` (`DeactivateUserCommandHandler`) - same DELETE-verb-means-soft-transition convention
 `DeleteResourceCommandHandler` already uses for archiving a `Resource`: never a physical row delete (`Users`
 has `RowVersion`-independent FKs from `RefreshToken`/`Invitation`/`ResourceApprover`/`Booking`/etc. that
 would make a real delete destructive to history anyway, and the task's own scope explicitly excluded
@@ -242,7 +242,7 @@ physically deleting users). Valid from either `Invited` or `Active` (cancelling 
 way is intentional - see §4). **Idempotent**, same precedent: deactivating an already-`Inactive` user just
 returns their current state, no error.
 
-`POST /users/{id}/reactivate` (`ReactivateUserCommandHandler`) is its **own explicit action**, not a side
+`POST /api/users/{id}/reactivate` (`ReactivateUserCommandHandler`) is its **own explicit action**, not a side
 effect of `UpdateUser` - the identical reasoning
 [resource-lifecycle-and-capacity.md](resource-lifecycle-and-capacity.md) already gives for why `Resource`
 reactivation, if it's ever built, must be a dedicated action rather than relaxing `UpdateResourceCommandHandler`'s
@@ -254,8 +254,8 @@ silently doing nothing or guessing which one the caller meant.
 
 ## 7. Listing and reading users
 
-`GET /users` (`GetUsersQueryRequest`) gained a fourth optional filter, `Status` (alongside the `Search`/
-`Role`/`Ids` filters `/users` already had from the ResourceApprover-management batch), and its
+`GET /api/users` (`GetUsersQueryRequest`) gained a fourth optional filter, `Status` (alongside the `Search`/
+`Role`/`Ids` filters `/api/users` already had from the ResourceApprover-management batch), and its
 `UserSummaryResponse` items now carry `Status` alongside the `Roles` field that batch already added.
 **Deliberately no implicit status filter when `Status` is omitted** - unlike `IResourceRepository.GetPagedAsync`,
 which excludes `Archived` resources by default (a public browsing list, for end users picking something to
@@ -263,7 +263,7 @@ book), a user-administration list is for admins managing the *whole* roster, inc
 they might reactivate; hiding `Inactive` users by default would make deactivated staff seem to vanish
 entirely from the admin's own view of their tenant.
 
-`GET /users/{id}` (`GetUserQueryRequest`, new) returns the same fields plus `CreatedAtUtc` and
+`GET /api/users/{id}` (`GetUserQueryRequest`, new) returns the same fields plus `CreatedAtUtc` and
 `PendingInvitationExpiresAtUtc` - the latter set only when `Status == Invited` and an active invitation
 currently exists, letting the future admin UI show "invited, expires \<date\>" without a separate
 invitations-listing endpoint. Never carries anything about the invitation's token itself - see §4's note on
@@ -271,7 +271,7 @@ where the raw token is (and is not) ever returned.
 
 ## 8. Updating basic user data
 
-`PUT /users/{id}` (`UpdateUserCommandRequest(Id, FirstName, LastName)`) - deliberately narrow. `Email` is
+`PUT /api/users/{id}` (`UpdateUserCommandRequest(Id, FirstName, LastName)`) - deliberately narrow. `Email` is
 not editable here: it is globally unique and immutable through this endpoint, since changing a user's email
 is a distinct, higher-stakes operation with its own verification concerns this batch's scope did not ask
 for. `Status` and roles are each their own dedicated action (§6, §2) for the same "own explicit lifecycle
@@ -296,10 +296,10 @@ Out of scope by explicit instruction, not oversight:
   documented in [recurring-bookings-and-approvals.md](recurring-bookings-and-approvals.md).
 - **Cross-tenant `SysAdmin` administration, or Tenant CRUD.** Neither exists; `SysAdmin` remains
   tenant-scoped (§2), matching the already-resolved "SysAdmin Scope" open question.
-- **Rate-limiting `POST /auth/accept-invitation`.** Considered and deliberately declined: the presented
+- **Rate-limiting `POST /api/auth/accept-invitation`.** Considered and deliberately declined: the presented
   token is 512 bits of cryptographically secure randomness (`RandomNumberGenerator.GetBytes(64)`) - brute-
   forcing it is not achievable at any HTTP-reachable rate, so a rate limit here would be pure
-  defense-in-depth with no real vulnerability behind it, unlike `POST /auth/login`'s rate limit, which
+  defense-in-depth with no real vulnerability behind it, unlike `POST /api/auth/login`'s rate limit, which
   defends a comparatively low-entropy, human-chosen password.
 - **The Angular administration UI.** Backend-only batch; the frontend is Batch 4B.
 
@@ -322,7 +322,7 @@ Out of scope by explicit instruction, not oversight:
   across every new endpoint, tenant isolation (404 on a cross-tenant target), the invite -> accept -> login
   round trip, reissue invalidating the previous token, a deactivated user failing login and a reactivated
   one succeeding again, `SysAdmin` rejected by the validator on both assign and remove, and the
-  already-issued-token-keeps-its-stale-claims proof (§5). `GET /users`/`GET /users/me` themselves stay in
+  already-issued-token-keeps-its-stale-claims proof (§5). `GET /api/users`/`GET /api/users/me` themselves stay in
   the pre-existing `UsersEndpointsTests.cs`, extended only with the new `Status` field/filter.
 - **`BookSpace.Infrastructure.Tests/Persistence/AcceptInvitationConcurrencyTests.cs`** (real SQL Server
   LocalDB, required - SQLite has no `rowversion` support): two genuinely concurrent acceptances of the
@@ -345,7 +345,7 @@ Existing-user management is now available in the Angular app, extending the pre-
 **Explicitly deferred, not implemented**: no invite-user form, no invitation-token display, no copyable
 invitation link, no accept-invitation page, and no invitation-reissue control exist anywhere in this UI. The
 Batch 4A invitation backend (§4) is untouched and fully reachable via its own HTTP endpoints, but nothing in
-the frontend calls `POST /users/invitations` or exposes an `InvitationToken` value - an `Invited` user's row
+the frontend calls `POST /api/users/invitations` or exposes an `InvitationToken` value - an `Invited` user's row
 shows only their status badge and, if present, `pendingInvitationExpiresAtUtc`, with a neutral note that
 "invitation delivery will be handled by the onboarding email workflow" once background jobs and email
 sending exist. No background job or email-sending infrastructure was added by this batch either, backend or

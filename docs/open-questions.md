@@ -60,7 +60,7 @@ the key was never used outside local development.
 as long as refresh keeps happening)? Should logout revoke one session, every session for the user, or
 offer both? When should a password change revoke outstanding refresh-token families?
 
-**Resolved part**: `POST /auth/logout` exists and revokes the calling device's token family (single-session
+**Resolved part**: `POST /api/auth/logout` exists and revokes the calling device's token family (single-session
 logout, not "log out everywhere"), with cross-tab races handled correctly - a client-side lock
 (`navigator.locks`) plus a `BroadcastChannel` mean tabs of the same browser coordinate refreshes and share
 logout instead of racing each other, and the automatic client reaction to a failed refresh never calls
@@ -147,7 +147,7 @@ which protects a different write path entirely.
 **Question**: Should booking creation support client-supplied idempotency keys (to safely retry a
 request that timed out without risking a duplicate booking)?
 
-**Context**: `POST /bookings` now exists (see [bookings-and-concurrency.md](bookings-and-concurrency.md))
+**Context**: `POST /api/bookings` now exists (see [bookings-and-concurrency.md](bookings-and-concurrency.md))
 but has no idempotency-key support - a client retrying a timed-out request could create a duplicate
 booking. This was deliberately not solved as a side effect of the concurrency work above: an idempotency
 key is a client-retry concern, orthogonal to the double-booking invariant, and inventing a key scheme
@@ -184,7 +184,7 @@ mechanism first; (d) add TenantAdmin override now with an audit trail (who cance
 on the booking, but no *active* notification, as a middle ground between (b) and (c).
 
 **Interim implementation (option (d))**: `TenantAdmin`/`SysAdmin` can now cancel any booking in their
-tenant via the same `DELETE /bookings/{id}` endpoint a member uses to cancel their own
+tenant via the same `DELETE /api/bookings/{id}` endpoint a member uses to cancel their own
 (`CancelBookingCommandHandler` - see
 [bookings-and-concurrency.md](bookings-and-concurrency.md#2-ownership-and-tenant-isolation)). An optional
 `reason` is stored on `Booking.CancellationReason`, and `CancelledByUserId` records the acting admin
@@ -248,7 +248,7 @@ booking (subject to an approve/reject workflow) instead of going straight to `Co
 
 **Resolution**: yes - implemented in the Recurrence/Approvals work packet. `RequiresApproval = true`
 (checked at both single-booking and recurring-series creation) now produces `Pending` bookings with their
-own `ApprovalRequest`, decided via `POST /bookings/{id}/approve` or `/reject` by a `ResourceApprover` for
+own `ApprovalRequest`, decided via `POST /api/bookings/{id}/approve` or `/reject` by a `ResourceApprover` for
 that resource or a `TenantAdmin`/`SysAdmin`, with a fresh availability/capacity re-check at decision time
 protected by the same `IResourceBookingLock` boundary booking creation uses. Full writeup:
 [recurring-bookings-and-approvals.md](recurring-bookings-and-approvals.md) §4-§5.

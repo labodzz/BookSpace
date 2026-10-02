@@ -36,7 +36,7 @@ public sealed class GlobalExceptionHandlerEndpointTests : IClassFixture<CustomWe
             });
         });
         using var client = throwingFactory.CreateClient();
-        var loginResponse = await client.PostAsJsonAsync("/auth/login", new
+        var loginResponse = await client.PostAsJsonAsync("/api/auth/login", new
         {
             email = TestDataSeeder.AcmeAdminEmail,
             password = TestDataSeeder.Password,
@@ -46,7 +46,7 @@ public sealed class GlobalExceptionHandlerEndpointTests : IClassFixture<CustomWe
         var loginBody = JsonSerializer.Deserialize<LoginResponse>(loginBodyText, JsonOptions);
         client.DefaultRequestHeaders.Authorization = new("Bearer", loginBody!.AccessToken);
 
-        var response = await client.GetAsync("/users/me");
+        var response = await client.GetAsync("/api/users/me");
 
         Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
         var payload = await response.Content.ReadAsStringAsync();

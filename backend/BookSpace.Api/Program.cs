@@ -266,11 +266,22 @@ try
 
     // Serves the Angular production build the container's Dockerfile copies into wwwroot. Static
     // files first (and default-file-mapped) so a request for a real built asset - or "/" - is answered
-    // directly; MapFallbackToFile below (registered after routing) is what turns an unmatched deep
-    // link like /resources/{id} into the Angular app instead of a 404, and always has lower priority
-    // than an actual controller route or a real static file, regardless of registration order.
+    // directly; the fallbacks below (registered after routing) are what turn an unmatched deep link
+    // like /resources/{id} into the Angular app instead of a 404.
     app.UseDefaultFiles();
     app.UseStaticFiles();
+
+    // Explicit on purpose: in the minimal hosting model, omitting this call makes routing match
+    // implicitly at the very start of the pipeline - before the static file middleware above even
+    // runs. Since every non-API path now matches one of the broad fallback routes below, that would
+    // mean every request already has a matched endpoint (HttpContext.GetEndpoint() != null) by the
+    // time UseStaticFiles() executes, and StaticFileMiddleware intentionally skips serving whenever an
+    // endpoint has already been selected - so a REAL file like main-XXXX.js or favicon.ico would never
+    // be served and every asset request would silently fall through to index.html instead (a blank
+    // page, since the browser gets HTML where it expected JS). Calling UseRouting() here, after the
+    // static file middleware, defers route matching until this exact point, so a request for a real
+    // static file is always answered by the middleware above before routing ever sees it.
+    app.UseRouting();
 
     // Correlation ID first (outermost) so every log below - including the request-logging summary
     // line and anything the exception handler logs - carries it. Request logging wraps the
@@ -314,12 +325,25 @@ try
             : Results.Json(new { status = "unreachable" }, statusCode: StatusCodes.Status503ServiceUnavailable);
     }).AllowAnonymous();
 
+    // Explicit, anonymous 404 for anything under "api/" that MapControllers above didn't claim.
+    // AddAuthorization's FallbackPolicy (above) applies RequireAuthenticatedUser() even to a request
+    // that matches NO endpoint at all (true since .NET 7) - without this, an unauthenticated call to a
+    // nonexistent API route like /api/does-not-exist would come back 401 instead of the plain 404 a
+    // caller needs to actually detect the mistake. Registered before the SPA fallback below so a
+    // request under "api/" is claimed here first, never reaching that one at all.
+    app.MapFallback("api/{**path}", () => Results.NotFound()).AllowAnonymous();
+
     // Anonymous: the app has a global authenticated-fallback policy (see AddAuthorization above), and
     // without this override an unauthenticated deep link would 401 before Angular's own router ever
     // gets a chance to redirect to /login. Registered last for readability only - MapFallbackToFile
     // endpoints always have the lowest match priority, so a real controller route or an actual static
     // file already served above is never shadowed by this regardless of declaration order.
-    app.MapFallbackToFile("index.html").AllowAnonymous();
+    //
+    // The route pattern excludes anything under "api/" on purpose: every real API endpoint is matched
+    // by MapControllers above already, and any other "api/" path is now claimed by the explicit 404
+    // fallback just above - an Angular deep link and a typo'd API call should never look the same to
+    // the caller.
+    app.MapFallbackToFile("{*path:regex(^(?!api(/|$)).*$)}", "index.html").AllowAnonymous();
 
     app.Run();
 }
