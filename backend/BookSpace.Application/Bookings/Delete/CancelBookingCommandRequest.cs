@@ -100,18 +100,14 @@ public sealed class CancelBookingCommandHandler(
                 }
             }
 
-            // EnqueueAsync calls SaveChangesAsync itself: the first call below commits the primary AND
-            // every cascaded sibling's Cancelled mutation (all staged above) together with that first
-            // outbox row, in one transaction; each further call (one per additional cascaded cancellation)
-            // then commits only its own outbox row, since the booking rows are already saved by then - the
-            // same accepted, narrow gap documented for CreateRecurringSeriesCommandHandler and
-            // ApproveBookingCommandHandler's own multi-occurrence commits. There is no separate
-            // bookingRepository.SaveChangesAsync call here: a failure on the very first EnqueueAsync call
-            // leaves no booking mutation persisted at all.
-            foreach (var cancelledBooking in cancelledBookings)
-            {
-                await notificationOutboxWriter.EnqueueAsync(BookingNotificationFactory.Cancellation(cancelledBooking), cancellationToken);
-            }
+            // EnqueueManyAsync performs exactly ONE SaveChangesAsync covering the primary AND every
+            // cascaded sibling's Cancelled mutation (all staged above) together with every cancellation
+            // outbox row - either the whole cancellation and all its notifications land, or none of it
+            // does. There is no separate bookingRepository.SaveChangesAsync call here: this cancel handler
+            // has no IResourceBookingLock wrapping it (see the class comment), so this single call is the
+            // operation's only write.
+            await notificationOutboxWriter.EnqueueManyAsync(
+                cancelledBookings.Select(BookingNotificationFactory.Cancellation).ToList(), cancellationToken);
         }
 
         return new CancelBookingResponse(booking.Id, booking.ResourceId, booking.StartUtc, booking.EndUtc, booking.Quantity, booking.Status, cascadedIds);

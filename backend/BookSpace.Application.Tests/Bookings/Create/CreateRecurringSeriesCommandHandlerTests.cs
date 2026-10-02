@@ -31,8 +31,9 @@ public sealed class CreateRecurringSeriesCommandHandlerTests
     private CreateRecurringSeriesCommandHandler CreateSut()
     {
         _notificationOutboxWriter
-            .Setup(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new EnqueueNotificationResult(EnqueueOutcome.Created, Guid.NewGuid()));
+            .Setup(w => w.EnqueueManyAsync(It.IsAny<IReadOnlyList<NotificationOutboxRequest>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<NotificationOutboxRequest> requests, CancellationToken _) =>
+                (IReadOnlyList<EnqueueNotificationResult>)requests.Select(_ => new EnqueueNotificationResult(EnqueueOutcome.Created, Guid.NewGuid())).ToList());
         return new CreateRecurringSeriesCommandHandler(
             new PassThroughResourceBookingLock(),
             _resourceRepository.Object,
@@ -101,16 +102,16 @@ public sealed class CreateRecurringSeriesCommandHandlerTests
         _recurringSeriesRepository.Verify(r => r.AddAsync(It.IsAny<RecurringSeries>(), It.IsAny<CancellationToken>()), Times.Once);
         _bookingRepository.Verify(r => r.AddAsync(It.IsAny<Booking>(), It.IsAny<CancellationToken>()), Times.Exactly(3));
         // One confirmation notification per Confirmed occurrence - never one for the whole series. A small,
-        // bounded occurrence count (3), not an uncontrolled N+1 explosion.
-        foreach (var occurrence in result.CreatedOccurrences)
-        {
-            _notificationOutboxWriter.Verify(w => w.EnqueueAsync(
-                It.Is<NotificationOutboxRequest>(req =>
-                    req.NotificationType == BookingNotificationTypes.Confirmation && req.IdempotencyKey == $"booking:{occurrence.Id}:confirmation"),
-                It.IsAny<CancellationToken>()), Times.Once);
-        }
-        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()), Times.Exactly(3));
-        // EnqueueAsync's own SaveChangesAsync is the sole commit point when there's at least one
+        // bounded occurrence count (3), not an uncontrolled N+1 explosion. All 3 requested in a SINGLE
+        // EnqueueManyAsync call - not one EnqueueAsync call per occurrence - so a single SaveChangesAsync
+        // underneath covers the series, every booking, and every confirmation together.
+        _notificationOutboxWriter.Verify(w => w.EnqueueManyAsync(
+            It.Is<IReadOnlyList<NotificationOutboxRequest>>(requests =>
+                requests.Count == 3 &&
+                result.CreatedOccurrences.All(occurrence => requests.Any(req =>
+                    req.NotificationType == BookingNotificationTypes.Confirmation && req.IdempotencyKey == $"booking:{occurrence.Id}:confirmation"))),
+            It.IsAny<CancellationToken>()), Times.Once);
+        // EnqueueManyAsync's own SaveChangesAsync is the sole commit point when there's at least one
         // confirmation to enqueue - no separate recurringSeriesRepository.SaveChangesAsync call.
         _recurringSeriesRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -325,7 +326,7 @@ public sealed class CreateRecurringSeriesCommandHandlerTests
         Assert.Equal(3, approvalRequestBookingIds.Count); // no duplicates
         // No occurrence is Confirmed by this call - no confirmation notification for any of them. The
         // series still needs its own explicit save since nothing else commits it.
-        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()), Times.Never);
+        _notificationOutboxWriter.Verify(w => w.EnqueueManyAsync(It.IsAny<IReadOnlyList<NotificationOutboxRequest>>(), It.IsAny<CancellationToken>()), Times.Never);
         _recurringSeriesRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
@@ -336,7 +337,7 @@ public sealed class CreateRecurringSeriesCommandHandlerTests
         SetupResource(resource);
         var sut = CreateSut();
         _notificationOutboxWriter
-            .Setup(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()))
+            .Setup(w => w.EnqueueManyAsync(It.IsAny<IReadOnlyList<NotificationOutboxRequest>>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("Simulated unexpected database failure."));
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => sut.Handle(CreateRequest(resource.Id, occurrenceCount: 3), CancellationToken.None));

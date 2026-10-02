@@ -41,4 +41,20 @@ public interface INotificationOutboxWriter
     // an invalid IdempotencyKey (a caller bug, not a runtime race), escapes as an exception - see the
     // implementation's own documentation for exactly which.
     Task<EnqueueNotificationResult> EnqueueAsync(NotificationOutboxRequest request, CancellationToken cancellationToken);
+
+    // For a caller that mutates several business rows in one operation (e.g. a recurring-series or
+    // cascaded approve/cancel) and must enqueue one notification per mutated row atomically WITH those
+    // mutations - a single SaveChangesAsync underneath covers every staged entity on the caller's
+    // DbContext (the business mutations the caller already Add()ed/modified, plus every outbox row here),
+    // so either all of it lands or none of it does. See docs/background-jobs.md ("Booking lifecycle
+    // notifications - recurring series") for why this replaced calling EnqueueAsync in a loop, which could
+    // only ever make the FIRST call's SaveChangesAsync cover the business mutations. Returns one result
+    // per request, in the same order, with the same Created/AlreadyExists semantics as EnqueueAsync -
+    // including under a retried call for an already-fully-enqueued batch (every key reports AlreadyExists,
+    // nothing is duplicated) and under a genuinely concurrent racing retry (the (TenantId, IdempotencyKey)
+    // unique constraint remains the sole authority, not an upfront existence check). An empty list is a
+    // no-op that still returns an empty list - it does not call SaveChangesAsync, so a caller with nothing
+    // to enqueue (and no other staged mutations of its own) performs no write at all.
+    Task<IReadOnlyList<EnqueueNotificationResult>> EnqueueManyAsync(
+        IReadOnlyList<NotificationOutboxRequest> requests, CancellationToken cancellationToken);
 }

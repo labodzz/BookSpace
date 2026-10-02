@@ -148,16 +148,12 @@ public sealed class ApproveBookingCommandHandler(
         }
 
         // Approving always confirms at least the primary booking, so approvedBookings is never empty here -
-        // unlike CreateBookingCommandHandler there is no "nothing to enqueue" branch. EnqueueAsync calls
-        // SaveChangesAsync itself: the first call commits the booking/ApprovalRequest mutations for the
-        // primary AND every cascaded sibling (all staged above) together with that first outbox row; each
-        // further call (one per additional cascaded confirmation) commits only its own outbox row, since
-        // the booking rows are already saved by then - the same accepted, narrow gap documented in
-        // CreateRecurringSeriesCommandHandler for a multi-occurrence commit.
-        foreach (var approvedBooking in approvedBookings)
-        {
-            await notificationOutboxWriter.EnqueueAsync(BookingNotificationFactory.Confirmation(approvedBooking), cancellationToken);
-        }
+        // unlike CreateBookingCommandHandler there is no "nothing to enqueue" branch. EnqueueManyAsync
+        // performs exactly ONE SaveChangesAsync covering the booking/ApprovalRequest mutations for the
+        // primary AND every cascaded sibling (all staged above) together with every confirmation outbox
+        // row - either the whole decision and all its confirmations land, or none of it does.
+        await notificationOutboxWriter.EnqueueManyAsync(
+            approvedBookings.Select(BookingNotificationFactory.Confirmation).ToList(), cancellationToken);
 
         return new ApproveBookingResponse(
             booking.Id, booking.ResourceId, booking.StartUtc, booking.EndUtc, booking.Quantity, booking.Status,
