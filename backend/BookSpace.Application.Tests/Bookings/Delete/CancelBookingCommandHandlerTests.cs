@@ -1,5 +1,6 @@
 using BookSpace.Application.Bookings;
 using BookSpace.Application.Common;
+using BookSpace.Application.Notifications;
 using BookSpace.Application.Security;
 using BookSpace.Domain.Entities;
 using BookSpace.Domain.Enums;
@@ -12,11 +13,20 @@ public sealed class CancelBookingCommandHandlerTests
 {
     private readonly Mock<IBookingRepository> _bookingRepository = new();
     private readonly Mock<ICurrentUserContext> _currentUserContext = new();
+    private readonly Mock<INotificationOutboxWriter> _notificationOutboxWriter = new();
 
     private static readonly Guid UserId = Guid.NewGuid();
     private static readonly Guid TenantId = Guid.NewGuid();
 
-    private CancelBookingCommandHandler CreateSut() => new(_bookingRepository.Object, _currentUserContext.Object);
+    private CancelBookingCommandHandler CreateSut()
+    {
+        // Mirrors the real writer's "a new row was created" outcome by default - tests that specifically
+        // care about the AlreadyExists path override this setup themselves.
+        _notificationOutboxWriter
+            .Setup(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new EnqueueNotificationResult(EnqueueOutcome.Created, Guid.NewGuid()));
+        return new CancelBookingCommandHandler(_bookingRepository.Object, _currentUserContext.Object, _notificationOutboxWriter.Object);
+    }
 
     private static Booking CreateBooking(BookingStatus status = BookingStatus.Confirmed) => new()
     {
@@ -39,7 +49,68 @@ public sealed class CancelBookingCommandHandlerTests
         Assert.Equal(BookingStatus.Cancelled, booking.Status);
         Assert.Equal(UserId, booking.CancelledByUserId);
         Assert.NotNull(booking.CancelledAtUtc);
-        _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(
+            It.Is<NotificationOutboxRequest>(req =>
+                req.TenantId == TenantId && req.NotificationType == BookingNotificationTypes.Cancellation &&
+                req.RecipientUserId == UserId && req.IdempotencyKey == $"booking:{booking.Id}:cancellation"),
+            It.IsAny<CancellationToken>()), Times.Once);
+        // No separate SaveChangesAsync call: EnqueueAsync's own commit is the only persistence point, so a
+        // failure there (see the dedicated atomicity test below) can never leave the booking mutation saved
+        // without its notification, or vice versa.
+        _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Handle_WhenTheNotificationEnqueueFails_DoesNotPersistTheCancellationEitherSinceNoSeparateSaveExists()
+    {
+        // Proves atomicity the only way a mock-based handler test can: the handler has no fallback
+        // SaveChangesAsync call that could persist the booking mutation independently of the enqueue - if
+        // EnqueueAsync throws, NOTHING in this handler commits anything.
+        var booking = CreateBooking(BookingStatus.Confirmed);
+        _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
+        _bookingRepository.Setup(r => r.FindByIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking);
+        var sut = CreateSut();
+        _notificationOutboxWriter
+            .Setup(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Simulated unexpected database failure."));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => sut.Handle(new CancelBookingCommandRequest(booking.Id), CancellationToken.None));
+
+        _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Handle_WhenTheNotificationWasAlreadyEnqueuedByAnEarlierAttempt_StillCancelsSuccessfully()
+    {
+        // EnqueueOutcome.AlreadyExists is explicitly not an error (see INotificationOutboxWriter) - a
+        // retried cancel request (the client resending after a timeout, say) must not surface it as one.
+        var booking = CreateBooking(BookingStatus.Confirmed);
+        _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
+        _bookingRepository.Setup(r => r.FindByIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking);
+        _notificationOutboxWriter
+            .Setup(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new EnqueueNotificationResult(EnqueueOutcome.AlreadyExists, null));
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new CancelBookingCommandRequest(booking.Id), CancellationToken.None);
+
+        Assert.Equal(BookingStatus.Cancelled, result.Status);
+    }
+
+    [Fact]
+    public async Task Handle_ForABookingInADifferentTenant_NeverEnqueuesACancellationNotification()
+    {
+        // FindByIdAsync is tenant-filtered in the real repository (BookSpaceDbContext's global query
+        // filter) - a booking from another tenant is never found at all, so this never reaches the enqueue
+        // call. Proven here at the handler boundary: simulating "not found" (what the filtered repository
+        // actually returns for a cross-tenant id) must never enqueue anything.
+        _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
+        _bookingRepository.Setup(r => r.FindByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync((Booking?)null);
+        var sut = CreateSut();
+
+        await Assert.ThrowsAsync<NotFoundException>(() => sut.Handle(new CancelBookingCommandRequest(Guid.NewGuid()), CancellationToken.None));
+
+        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -54,6 +125,7 @@ public sealed class CancelBookingCommandHandlerTests
 
         Assert.Equal(ErrorCodes.BookingNotFound, exception.ErrorCode);
         _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -71,6 +143,7 @@ public sealed class CancelBookingCommandHandlerTests
 
         Assert.Equal(ErrorCodes.BookingNotFound, exception.ErrorCode);
         _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -90,6 +163,7 @@ public sealed class CancelBookingCommandHandlerTests
 
         Assert.Equal(ErrorCodes.BookingNotFound, exception.ErrorCode);
         _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Theory]
@@ -111,7 +185,11 @@ public sealed class CancelBookingCommandHandlerTests
         Assert.Equal(adminUserId, booking.CancelledByUserId);
         Assert.NotEqual(booking.UserId, booking.CancelledByUserId);
         Assert.Equal("Freeing the resource for maintenance", booking.CancellationReason);
-        _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+        // The notification goes to the booking OWNER (booking.UserId), never the admin who performed the
+        // cancellation - adminUserId never appears as a RecipientUserId anywhere in this assertion.
+        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(
+            It.Is<NotificationOutboxRequest>(req => req.RecipientUserId == booking.UserId && req.NotificationType == BookingNotificationTypes.Cancellation),
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -144,6 +222,16 @@ public sealed class CancelBookingCommandHandlerTests
         Assert.Equal("Resource decommissioned", booking.CancellationReason);
         Assert.Equal("Resource decommissioned", laterOccurrence.CancellationReason);
         Assert.Equal(adminUserId, laterOccurrence.CancelledByUserId);
+        // One idempotent outbox item per actually-cancelled occurrence, not one for the whole series - see
+        // docs/background-jobs.md ("Booking lifecycle notifications - cancellation"). Both go to their
+        // respective owners (both UserId here), never to adminUserId.
+        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(
+            It.Is<NotificationOutboxRequest>(req => req.IdempotencyKey == $"booking:{booking.Id}:cancellation" && req.RecipientUserId == UserId),
+            It.IsAny<CancellationToken>()), Times.Once);
+        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(
+            It.Is<NotificationOutboxRequest>(req => req.IdempotencyKey == $"booking:{laterOccurrence.Id}:cancellation" && req.RecipientUserId == UserId),
+            It.IsAny<CancellationToken>()), Times.Once);
+        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
     }
 
     [Fact]
@@ -160,6 +248,8 @@ public sealed class CancelBookingCommandHandlerTests
 
         Assert.Equal(BookingStatus.Cancelled, result.Status);
         _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+        // Already Cancelled before this call = no real state change, so no new notification either.
+        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Theory]
@@ -178,6 +268,7 @@ public sealed class CancelBookingCommandHandlerTests
 
         Assert.Equal(ErrorCodes.BookingCancellationNotAllowed, exception.ErrorCode);
         _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -241,6 +332,13 @@ public sealed class CancelBookingCommandHandlerTests
         Assert.DoesNotContain(earlierOccurrence.Id, result.CascadedOccurrenceIds);
         Assert.DoesNotContain(alreadyCompletedLaterOccurrence.Id, result.CascadedOccurrenceIds);
         Assert.DoesNotContain(booking.Id, result.CascadedOccurrenceIds); // the anchor itself is Id, not a "cascaded" extra
+        // Exactly one notification per actually-cancelled occurrence (booking + laterOccurrence) - none for
+        // the untouched earlier or already-completed ones.
+        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(
+            It.Is<NotificationOutboxRequest>(req => req.IdempotencyKey == $"booking:{booking.Id}:cancellation"), It.IsAny<CancellationToken>()), Times.Once);
+        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(
+            It.Is<NotificationOutboxRequest>(req => req.IdempotencyKey == $"booking:{laterOccurrence.Id}:cancellation"), It.IsAny<CancellationToken>()), Times.Once);
+        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
     }
 
     [Fact]
@@ -326,7 +424,9 @@ public sealed class CancelBookingCommandHandlerTests
         var result = await sut.Handle(new CancelBookingCommandRequest(booking.Id), CancellationToken.None);
 
         Assert.Equal(BookingStatus.Cancelled, result.Status);
-        _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(
+            It.Is<NotificationOutboxRequest>(req => req.NotificationType == BookingNotificationTypes.Cancellation),
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]

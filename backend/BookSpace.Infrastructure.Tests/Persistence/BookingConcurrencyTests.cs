@@ -1,5 +1,6 @@
 using BookSpace.Application.Bookings;
 using BookSpace.Application.Common;
+using BookSpace.Application.Notifications;
 using BookSpace.Application.Security;
 using BookSpace.Domain.Entities;
 using BookSpace.Domain.Enums;
@@ -309,7 +310,8 @@ public sealed class BookingConcurrencyTests : IAsyncLifetime
                     new ResourceApproverRepository(attackerContext),
                     new ApprovalRequestRepository(attackerContext),
                     new TenantRepository(attackerContext),
-                    new FixedCurrentUserContext(_tenantId, _userAId));
+                    new FixedCurrentUserContext(_tenantId, _userAId),
+                    new NotificationOutboxWriter(attackerContext, NullLogger<NotificationOutboxWriter>.Instance));
 
                 var exception = await Assert.ThrowsAsync<ConflictException>(() =>
                     handler.Handle(new CreateBookingCommandRequest(resourceId, start, start.AddHours(1), Quantity: 1), CancellationToken.None));
@@ -364,7 +366,8 @@ public sealed class BookingConcurrencyTests : IAsyncLifetime
             new ResourceApproverRepository(dbContext),
             new ApprovalRequestRepository(dbContext),
             new TenantRepository(dbContext),
-            new FixedCurrentUserContext(_tenantId, userId));
+            new FixedCurrentUserContext(_tenantId, userId),
+            new NotificationOutboxWriter(dbContext, NullLogger<NotificationOutboxWriter>.Instance));
     }
 
     private BookSpaceDbContext CreateDbContext(Guid tenantId, Guid? userId = null)

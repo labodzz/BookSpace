@@ -1,5 +1,6 @@
 using BookSpace.Application.Bookings;
 using BookSpace.Application.Common;
+using BookSpace.Application.Notifications;
 using BookSpace.Application.Resources;
 using BookSpace.Application.Security;
 using BookSpace.Domain.Entities;
@@ -109,7 +110,8 @@ public sealed class UpdateResourceCapacityConcurrencyTests : IAsyncLifetime
                 new ResourceApproverRepository(dbContext),
                 new ApprovalRequestRepository(dbContext),
                 new TenantRepository(dbContext),
-                new FixedCurrentUserContext(_tenantId, _newBookingOwnerId));
+                new FixedCurrentUserContext(_tenantId, _newBookingOwnerId),
+                new NotificationOutboxWriter(dbContext, NullLogger<NotificationOutboxWriter>.Instance));
             try
             {
                 await handler.Handle(
@@ -177,7 +179,8 @@ public sealed class UpdateResourceCapacityConcurrencyTests : IAsyncLifetime
             new ResourceApproverRepository(dbContext),
             new ApprovalRequestRepository(dbContext),
             new TenantRepository(dbContext),
-            new FixedCurrentUserContext(_tenantId, _newBookingOwnerId));
+            new FixedCurrentUserContext(_tenantId, _newBookingOwnerId),
+            new NotificationOutboxWriter(dbContext, NullLogger<NotificationOutboxWriter>.Instance));
 
         var response = await handler.Handle(new CreateBookingCommandRequest(resourceId, start, start.AddHours(1), Quantity: 2), CancellationToken.None);
 

@@ -1,5 +1,6 @@
 using BookSpace.Application.Bookings;
 using BookSpace.Application.Common;
+using BookSpace.Application.Notifications;
 using BookSpace.Application.Resources;
 using BookSpace.Application.Security;
 using BookSpace.Domain.Entities;
@@ -21,23 +22,31 @@ public sealed class CreateRecurringSeriesCommandHandlerTests
     private readonly Mock<IApprovalRequestRepository> _approvalRequestRepository = new();
     private readonly Mock<ITenantRepository> _tenantRepository = new();
     private readonly Mock<ICurrentUserContext> _currentUserContext = new();
+    private readonly Mock<INotificationOutboxWriter> _notificationOutboxWriter = new();
 
     private static readonly DateOnly StartDate = new(2026, 1, 5); // a Monday
     private static readonly Guid TenantId = Guid.NewGuid();
     private static readonly Guid UserId = Guid.NewGuid();
 
-    private CreateRecurringSeriesCommandHandler CreateSut() => new(
-        new PassThroughResourceBookingLock(),
-        _resourceRepository.Object,
-        _availabilityRuleRepository.Object,
-        _blackoutPeriodRepository.Object,
-        _bookingAvailabilityRepository.Object,
-        _bookingRepository.Object,
-        _recurringSeriesRepository.Object,
-        _resourceApproverRepository.Object,
-        _approvalRequestRepository.Object,
-        _tenantRepository.Object,
-        _currentUserContext.Object);
+    private CreateRecurringSeriesCommandHandler CreateSut()
+    {
+        _notificationOutboxWriter
+            .Setup(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new EnqueueNotificationResult(EnqueueOutcome.Created, Guid.NewGuid()));
+        return new CreateRecurringSeriesCommandHandler(
+            new PassThroughResourceBookingLock(),
+            _resourceRepository.Object,
+            _availabilityRuleRepository.Object,
+            _blackoutPeriodRepository.Object,
+            _bookingAvailabilityRepository.Object,
+            _bookingRepository.Object,
+            _recurringSeriesRepository.Object,
+            _resourceApproverRepository.Object,
+            _approvalRequestRepository.Object,
+            _tenantRepository.Object,
+            _currentUserContext.Object,
+            _notificationOutboxWriter.Object);
+    }
 
     private static Resource CreateResource(int capacity = 8, bool requiresApproval = false) => new()
     {
@@ -91,7 +100,19 @@ public sealed class CreateRecurringSeriesCommandHandlerTests
         Assert.All(result.CreatedOccurrences, occurrence => Assert.Equal(BookingStatus.Confirmed, occurrence.Status));
         _recurringSeriesRepository.Verify(r => r.AddAsync(It.IsAny<RecurringSeries>(), It.IsAny<CancellationToken>()), Times.Once);
         _bookingRepository.Verify(r => r.AddAsync(It.IsAny<Booking>(), It.IsAny<CancellationToken>()), Times.Exactly(3));
-        _recurringSeriesRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+        // One confirmation notification per Confirmed occurrence - never one for the whole series. A small,
+        // bounded occurrence count (3), not an uncontrolled N+1 explosion.
+        foreach (var occurrence in result.CreatedOccurrences)
+        {
+            _notificationOutboxWriter.Verify(w => w.EnqueueAsync(
+                It.Is<NotificationOutboxRequest>(req =>
+                    req.NotificationType == BookingNotificationTypes.Confirmation && req.IdempotencyKey == $"booking:{occurrence.Id}:confirmation"),
+                It.IsAny<CancellationToken>()), Times.Once);
+        }
+        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()), Times.Exactly(3));
+        // EnqueueAsync's own SaveChangesAsync is the sole commit point when there's at least one
+        // confirmation to enqueue - no separate recurringSeriesRepository.SaveChangesAsync call.
+        _recurringSeriesRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -302,6 +323,25 @@ public sealed class CreateRecurringSeriesCommandHandlerTests
         var approvalRequestBookingIds = capturedApprovalRequests.Select(request => request.BookingId).ToHashSet();
         Assert.Equal(createdBookingIds, approvalRequestBookingIds);
         Assert.Equal(3, approvalRequestBookingIds.Count); // no duplicates
+        // No occurrence is Confirmed by this call - no confirmation notification for any of them. The
+        // series still needs its own explicit save since nothing else commits it.
+        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()), Times.Never);
+        _recurringSeriesRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Handle_WhenTheNotificationEnqueueFails_DoesNotPersistAnyOccurrenceEitherSinceNoSeparateSaveExists()
+    {
+        var resource = CreateResource();
+        SetupResource(resource);
+        var sut = CreateSut();
+        _notificationOutboxWriter
+            .Setup(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Simulated unexpected database failure."));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => sut.Handle(CreateRequest(resource.Id, occurrenceCount: 3), CancellationToken.None));
+
+        _recurringSeriesRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
