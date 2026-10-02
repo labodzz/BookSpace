@@ -28,33 +28,48 @@ internal sealed class ResourceBookingLock(BookSpaceDbContext dbContext, ILogger<
             return await operation(cancellationToken);
         }
 
-        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
-        try
+        // AddInfrastructure configures this DbContext with EnableRetryOnFailure, which puts a retrying
+        // execution strategy in front of every operation. That strategy refuses to let a caller open its
+        // own transaction directly (BeginTransactionAsync) - it cannot safely retry only part of an
+        // already-open transaction, and throws InvalidOperationException ("does not support user-initiated
+        // transactions") the moment any query runs inside one. CreateExecutionStrategy().ExecuteAsync(...)
+        // is EF Core's own prescribed fix: the whole delegate below - opening a fresh transaction,
+        // re-acquiring the row lock, re-running `operation` - is what gets retried as one atomic unit if a
+        // genuinely transient infrastructure fault (a dropped connection, a transient Azure SQL error)
+        // occurs, rather than EF attempting to retry a single statement mid-transaction.
+        var strategy = dbContext.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(async () =>
         {
-            // Locks exactly this one row until the transaction commits or rolls back (HOLDLOCK), so a
-            // second concurrent call for the SAME resource blocks here until the first is fully done.
-            // Executed as ExecuteNonQuery-style: the SELECT's result set is discarded, but SQL Server
-            // still takes and holds the row lock the hints request.
-            await dbContext.Database.ExecuteSqlInterpolatedAsync(
-                $"SELECT TOP (1) Id FROM Resources WITH (UPDLOCK, HOLDLOCK) WHERE Id = {resourceId}", cancellationToken);
+            await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+            try
+            {
+                // Locks exactly this one row until the transaction commits or rolls back (HOLDLOCK), so a
+                // second concurrent call for the SAME resource blocks here until the first is fully done.
+                // Executed as ExecuteNonQuery-style: the SELECT's result set is discarded, but SQL Server
+                // still takes and holds the row lock the hints request.
+                await dbContext.Database.ExecuteSqlInterpolatedAsync(
+                    $"SELECT TOP (1) Id FROM Resources WITH (UPDLOCK, HOLDLOCK) WHERE Id = {resourceId}", cancellationToken);
 
-            var result = await operation(cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
-            return result;
-        }
-        catch (SqlException exception) when (exception.Number is 1205 or 1222)
-        {
-            // 1205 = deadlock victim, 1222 = lock request timeout - both are transient contention, not a
-            // real conflict in the domain sense, but the client-facing contract is the same: retry.
-            logger.LogWarning(
-                exception, "Booking-creation lock wait for resource {ResourceId} ended in a deadlock/timeout, handled as a conflict", resourceId);
-            await transaction.RollbackAsync(cancellationToken);
-            throw new ConflictException("The request conflicts with another in-progress booking for this resource. Please retry.");
-        }
-        catch
-        {
-            await transaction.RollbackAsync(cancellationToken);
-            throw;
-        }
+                var result = await operation(cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+                return result;
+            }
+            catch (SqlException exception) when (exception.Number is 1205 or 1222)
+            {
+                // 1205 = deadlock victim, 1222 = lock request timeout - both are ordinary application-level
+                // lock contention, not an infrastructure fault the execution strategy itself would retry
+                // (they are not in EF's default transient-error list), so this catch still runs exactly as
+                // before: translated into a conflict for the caller, not silently retried.
+                logger.LogWarning(
+                    exception, "Booking-creation lock wait for resource {ResourceId} ended in a deadlock/timeout, handled as a conflict", resourceId);
+                await transaction.RollbackAsync(cancellationToken);
+                throw new ConflictException("The request conflicts with another in-progress booking for this resource. Please retry.");
+            }
+            catch
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                throw;
+            }
+        });
     }
 }

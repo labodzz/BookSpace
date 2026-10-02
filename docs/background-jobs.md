@@ -621,15 +621,252 @@ BackgroundJobsWorker
       -> a future per-item processor: send, then mark Sent / bump AttemptCount and reschedule / dead-letter
 ```
 
-That per-item processor, its retry/backoff computation, and wiring it into `IBackgroundJobCycle` are the
-next task's work, not this one's.
+That per-item processor, its retry/backoff computation, and wiring it into `IBackgroundJobCycle` were the
+next task's work - now described below.
 
-## What the hosted-service foundation and lease lock branches did not implement
+## Per-item processing and retry
 
-Reminder emails, no-show processing, stale-approval handling, an email provider, retry/backoff beyond
-"log and continue to the next poll," an ICS feed, or any new booking business logic. All of that remains
-future WP-8 work, layered on top of `IBackgroundJobCycle` without needing to change `BackgroundJobsWorker`,
-`JobLeaseCoordinator`, or `JobLeaseStore` themselves. In particular: the lease lock is infrastructure for
-*scheduling*, not for *correctness of business side effects* (see "What this guarantees, and what it does
-not" above), and the notification outbox is infrastructure for *durable, deduplicated intent*, not for
-*guaranteed email delivery* (see "What this task guarantees - and does not" above).
+A later WP-8 branch than the due-batch query above. Its goal: actually process a due batch, one item at a
+time, with persisted retry/backoff state and a maximum-attempt cap - **without yet sending any real
+email.** `INotificationSender` (the delivery abstraction this task adds) has no production implementation
+yet; only fake, test-controlled senders exist so far. See "Why this is not wired into the worker yet"
+below for what that means in practice.
+
+### Per-item isolation
+
+`INotificationOutboxProcessor.ProcessBatchAsync` iterates a batch one item at a time, and
+`ProcessItemAsync` - its single-item unit of work - creates its own fresh `IServiceScope` (and therefore
+its own fresh `BookSpaceDbContext` *and* its own fresh `INotificationSender`) for **every individual
+item**, not once per batch. This is the same "never hold a scoped dependency, create a fresh scope for
+each unit of work" pattern `BackgroundJobsWorker` already uses per cycle and `JobLeaseCoordinator` already
+uses per lease operation, now applied at per-*item* granularity:
+
+```text
+item 1 -> own DbContext -> succeeds -> commit
+item 2 -> own DbContext -> transient failure -> retry state computed -> commit
+item 3 -> own DbContext -> succeeds -> commit
+item 4 -> own DbContext -> permanent failure -> dead-letter -> commit
+```
+
+One item's database error can never corrupt another item's change tracker, because they never share a
+`DbContext` - and one item's failure can never roll back an already-committed earlier item's success,
+because each item's `SaveChangesAsync` is its own independent commit, never part of a shared transaction
+spanning the whole batch. `ProcessBatchAsync` wraps each item's processing in its own `try`/`catch`: an
+unexpected exception (a database error, a bug) is logged and the loop moves on to the next item, exactly
+like `BackgroundJobsWorker` already isolates one cycle's failure from the next poll.
+
+### The sender abstraction
+
+```csharp
+public interface INotificationSender
+{
+    Task<NotificationSendResult> SendAsync(NotificationMessage message, CancellationToken cancellationToken);
+}
+```
+
+`NotificationSendResult` is one of three outcomes - `Success`, `TransientFailure`, or `PermanentFailure` -
+never an exception for an ordinary delivery failure. This typed-result contract is what lets the processor
+tell "the provider was briefly down" (retry) apart from "this recipient/payload will never work" (dead-letter)
+apart from "something genuinely unexpected happened" (isolated and logged, never silently retried under the
+normal policy - see "Unexpected errors" below) - the processor never guesses by catching and classifying
+arbitrary exceptions itself. The only exception `SendAsync` is allowed to throw is `OperationCanceledException`,
+and only for genuine cancellation.
+
+### AttemptCount semantics
+
+> `AttemptCount` = the number of real delivery attempts that have actually **started**.
+
+It is incremented exactly once, immediately before `SendAsync` is called - not after success, not after
+failure, before the attempt itself. This is what makes the attempt cap exact rather than off-by-one: with
+`MaxNotificationAttempts = 5`, the fifth failed attempt increments `AttemptCount` to `5`, which is already
+`>= MaxNotificationAttempts`, so that same attempt's outcome is dead-lettered immediately - there is never
+a sixth call to `SendAsync`. A dedicated test drives one item through repeated transient failures and
+asserts the sender was invoked exactly `MaxNotificationAttempts` times, never once more.
+
+### Success
+
+On `Success`, the item's `Status` becomes `Sent`, `LastAttemptAtUtc` is set, and any previous `LastError`
+is cleared. There is no separate `SentAtUtc` column: when `Status == Sent`, `LastAttemptAtUtc` **is** the
+"sent at" record - a successful attempt is definitionally the last one that will ever run for that item,
+so "last attempt" and "sent at" never need to differ. The row itself is never deleted - it remains the
+durable idempotency/audit record the outbox task already established.
+
+### Transient failure and exponential backoff
+
+On `TransientFailure` (with attempts remaining), the processor computes a new `AvailableAtUtc` and leaves
+`Status` as `Pending` - the due-batch query will find it again once that instant passes. The delay
+doubles with each failed attempt:
+
+```text
+attempt 1 fails -> retry in  1 minute   (InitialRetryDelaySeconds * 2^0)
+attempt 2 fails -> retry in  2 minutes  (* 2^1)
+attempt 3 fails -> retry in  4 minutes  (* 2^2)
+attempt 4 fails -> retry in  8 minutes  (* 2^3)
+```
+
+clamped to `MaxRetryDelaySeconds` so a long-failing item's next attempt is never scheduled absurdly far
+out. `NotificationRetryBackoff.ComputeDelay` is a small, pure, static function - no database, no
+`TimeProvider`, nothing to mock - so backoff growth and clamping are both directly and deterministically
+unit-tested with zero real waiting.
+
+**Why not `await Task.Delay(retryDelay)` inside the processor**: that would block the per-item unit of
+work (and the whole batch behind it) for the entire backoff duration, holding a database connection and a
+scope open the whole time, for a retry that might be minutes or hours away - exactly the "worker busy-waits
+instead of polling" shape this codebase has avoided since the original hosted-service foundation. Instead
+the processor computes `NextAttemptAtUtc` (stored as `AvailableAtUtc`), finishes immediately, and a future
+poll cycle's own due-batch query naturally picks the item back up once that instant has passed - the same
+mechanism that already handles a crashed instance's abandoned work.
+
+**Clock**: `NextAttemptAtUtc` is computed as `TimeProvider.GetUtcNow() + delay` using the *injected*
+`TimeProvider` (`TimeProvider.System` in production, a `FakeTimeProvider` in tests) - not the due-batch
+query's SQL-authoritative `SYSUTCDATETIME()`. This is not an inconsistency: the due-batch query needs the
+database's clock because several instances compare a shared "now" against a shared `AvailableAtUtc`
+column to decide who sees what as due *right now*; computing what a *single* item's *own* next-attempt
+instant should be, once, at the moment this one instance just finished processing it, is an ordinary
+scheduling decision with no cross-instance agreement to get right - the same reasoning
+`NotificationOutboxWriter` already relies on for its own `TimeProvider`-free `DateTimeOffset.UtcNow` writes.
+
+### Permanent failure and dead-letter
+
+On `PermanentFailure`, the item is dead-lettered (`Status = DeadLettered`) **immediately**, regardless of
+how many attempts remain - retrying an invalid recipient or a malformed payload is never expected to help.
+A transient failure also dead-letters once it has exhausted `MaxNotificationAttempts` (see "AttemptCount
+semantics" above). Either way, `DeadLettered` is a genuinely terminal state:
+
+- It is never returned by the due-batch query again (the query's `WHERE Status = 'Pending'` - and the
+  identically-filtered covering index - already exclude anything that isn't `Pending`; `DeadLettered`
+  needed no index or query change to become excluded, exactly like `Sent` already was).
+- The row is never deleted - it remains in the database for diagnostics/audit, same as a `Sent` row.
+- `LastError` holds a short, sanitized summary of the last failure - truncated to
+  `NotificationOutboxItem.MaxLastErrorLength` (500 characters). It is **only ever** what
+  `NotificationSendResult.ErrorMessage` explicitly provided, truncated - never a raw exception's message
+  or stack trace, never a provider credential or full provider response. Sender implementations are
+  responsible for constructing that string deliberately; the processor itself never calls `.ToString()`
+  on an exception to build it.
+
+`NotificationOutboxStatus.DeadLettered` needed no migration to introduce: the column is a generic
+string-converted enum (`HasConversion<string>`), so a new C# enum member is purely an application-code
+change - exactly the extensibility the original outbox task's comment on this enum anticipated. The one
+real schema change this task makes is additive: a nullable `LastError nvarchar(500)` column
+(`AddNotificationOutboxLastErrorAndDeadLetterStatus`), touching no other table and requiring no index
+change (see "The index" below).
+
+### Unexpected errors
+
+An exception from `SendAsync` that is *not* `OperationCanceledException` - a bug, an unhandled edge case
+in a sender implementation - is **not** caught inside `ProcessItemAsync` and reinterpreted as a
+`TransientFailure`. It propagates out of `ProcessItemAsync` entirely (so nothing about that attempt is
+persisted - the in-memory `AttemptCount` bump is discarded along with the scope/DbContext that never got
+to call `SaveChangesAsync`) and is caught by `ProcessBatchAsync`'s own per-item `try`/`catch`, logged
+distinctly from the structured `Sent`/`RetryScheduled`/`DeadLettered` outcome logging, and the batch moves
+on to the next item. The same is true of a genuine database error (the entity failing to load, or
+`SaveChangesAsync` itself failing) - it is never reported as a provider transient failure, because by
+definition the sender was never asked anything, or its answer was never what triggered the exception. A
+dedicated test forces a real database connection failure and confirms the sender is never even invoked
+and the item is left completely untouched, proving the two failure modes can never be conflated.
+
+This is a deliberate, narrower policy than "treat every unexpected exception as transient and retry it
+under the normal backoff": an unexpected exception already escaped the one place (`SendAsync`'s typed
+result) this system trusts to classify a failure, so persisting *any* state for it here (even a retry
+schedule) would be guessing. Leaving the row entirely untouched means the next poll cycle's due-batch
+query simply finds it again unchanged (if it was already due) and retries the *whole* attempt cleanly -
+itself a bounded retry, since nothing was persisted to let it compound.
+
+### Cancellation behavior
+
+Cancellation (application shutdown, via the same token `BackgroundJobsWorker`/`JobLeaseCoordinator`
+already thread through this whole chain) is handled differently depending on exactly when it is observed:
+
+- **Before an item starts** (`ProcessItemAsync` checks `cancellationToken.ThrowIfCancellationRequested()`
+  as its very first action, and `ProcessBatchAsync` checks `IsCancellationRequested` before starting each
+  item in the loop): nothing is touched at all - no scope is even created, no new items are started once
+  the batch has observed cancellation.
+- **During the actual `SendAsync` call**: the delivery attempt was already counted in memory
+  (`AttemptCount` was bumped *before* calling `SendAsync` - see "AttemptCount semantics"), but
+  `ProcessItemAsync` catches `OperationCanceledException` specifically at that call site and **rethrows
+  without ever calling `SaveChangesAsync`**. The in-memory bump, along with the rest of that scope's
+  `DbContext`, is simply discarded - to the next cycle, the item looks exactly as if this attempt had
+  never been started at all. This is the concrete meaning of "never increment attempt count if the actual
+  delivery attempt did not complete": cancellation during the attempt counts as "did not complete," not as
+  a failure worth recording.
+- **After `SendAsync` returns a real outcome**: `SaveChangesAsync` is called with `CancellationToken.None`
+  deliberately - the attempt already completed and its outcome (`Sent`/`RetryScheduled`/`DeadLettered`) is
+  already known, so persisting it is the one thing that must not be cut short by a shutdown signal arriving
+  in that exact instant (the same reasoning `JobLeaseCoordinator`'s release-on-dispose already uses
+  `CancellationToken.None` for).
+
+`ProcessBatchAsync` never continues processing further items once cancellation has been observed, whether
+that was before starting one or because `ProcessItemAsync` itself propagated it mid-attempt - either way
+the loop returns immediately rather than starting the next item.
+
+### The index
+
+The due-batch covering index from the previous task (`IX_NotificationOutboxItems_AvailableAtUtc`, filtered
+`WHERE [Status] = 'Pending'`) needed **no changes** for this task. `DeadLettered` (like `Sent` already was)
+is simply excluded by that same `Status = 'Pending'` filter - a filtered index's predicate is evaluated
+against whatever the column's current value is, so a brand new enum value is automatically outside the
+filter without the index ever needing to know it exists. The one migration this task adds
+(`AddNotificationOutboxLastErrorAndDeadLetterStatus`) touches only the new `LastError` column, and nothing
+about the index.
+
+### Why this is not wired into the worker yet
+
+`NoOpBackgroundJobCycle` is still the only `IBackgroundJobCycle` implementation, and it still does
+nothing. `INotificationOutboxProcessor` is fully built and tested, but no `INotificationSender` is
+registered anywhere in production DI (`BookSpace.Infrastructure`/`BookSpace.Api`) - only fake,
+test-controlled senders exist. Wiring the processor into a real cycle today, with no real sender, would
+mean either leaving it unresolvable (a `DI` failure the moment anything tried to use it for real) or,
+worse, accidentally shipping a no-op/fake sender that silently marks real outbox items `Sent` without ever
+delivering anything - exactly the false "exactly-once email delivery" claim this whole work stream has
+been careful never to make. The intended future call chain, now complete end-to-end except for the sender
+itself:
+
+```text
+BackgroundJobsWorker
+  -> acquire the distributed lease (see "Job lease lock")
+  -> run the cycle
+      -> GetDueBatchAsync(BatchSize)        (see "Due-batch query")
+      -> ProcessBatchAsync(batch)           (this task)
+          -> per item: a REAL email sender  (next task)
+          -> success / retry / dead-letter  (this task)
+```
+
+Building a real, provider-backed `INotificationSender` and wiring all of this into `IBackgroundJobCycle`
+is the next task's work, not this one's.
+
+### Exactly-once limitation, still
+
+This task adds persisted attempt state, exponential backoff, a retry cap, and per-item failure isolation -
+all of it still aimed at the outbox *row's* lifecycle, never at the external email side effect itself.
+**A database transaction can never wrap an external HTTP call to an email provider** - the familiar
+remaining gap applies exactly as before:
+
+```text
+sender.SendAsync succeeds (the provider actually sent the email)
+    -> the application crashes before SaveChangesAsync records that
+    -> the row is still Pending with its old AttemptCount
+    -> a later cycle retries it
+    -> the recipient receives a duplicate email
+```
+
+Nothing in this task - or realistically any task built the same way - can close that gap purely with
+database state. When a real provider-backed sender is built, it should pass the outbox item's own
+`IdempotencyKey` (already durable and unique per `(TenantId, IdempotencyKey)` - see "Notification outbox"
+above) through to the provider as its own idempotency key, for the providers that support one; `Resend`,
+`SendGrid`, and similar providers typically accept a client-supplied deduplication key for exactly this
+reason. Where a provider offers no such mechanism, that sender task will need to explicitly document its
+actual delivery semantics (most realistically: at-least-once, with a rare duplicate email being an
+accepted, documented trade-off) rather than silently assuming a guarantee neither the database nor the
+provider actually provides.
+
+## What the earlier WP-8 branches did not implement
+
+Reminder/confirmation/cancellation/rejection event integrations that would actually call
+`INotificationOutboxWriter.EnqueueAsync` (no booking handler constructs a real `IdempotencyKey` yet), a
+real `INotificationSender` implementation, no-show processing, stale-approval handling, an ICS feed, or
+any new booking business logic. All of that remains future WP-8 work. In particular: the lease lock is
+infrastructure for *scheduling*, not for *correctness of business side effects* (see "What this guarantees,
+and what it does not" above); the notification outbox is infrastructure for *durable, deduplicated intent*,
+not for *guaranteed email delivery*; and per-item processing adds *persisted retry/backoff/dead-letter
+bookkeeping*, still not *exactly-once delivery* of the external side effect itself (see "Exactly-once
+limitation, still" above).

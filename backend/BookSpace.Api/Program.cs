@@ -20,6 +20,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
+using Scalar.AspNetCore;
 using Serilog;
 using Serilog.Events;
 using Serilog.Formatting.Compact;
@@ -245,7 +246,11 @@ try
     // Configure the HTTP request pipeline.
     if (app.Environment.IsDevelopment())
     {
-        app.MapOpenApi();
+        // Anonymous: same reasoning as the /health and SPA-fallback overrides below - the app has a
+        // global authenticated-fallback policy (see AddAuthorization above), and without this override
+        // the API docs would 401 before anyone could even see them.
+        app.MapOpenApi().AllowAnonymous();
+        app.MapScalarApiReference().AllowAnonymous();
         await app.Services.MigrateAndSeedDevelopmentDatabaseAsync();
     }
 

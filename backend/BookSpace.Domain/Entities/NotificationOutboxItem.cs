@@ -15,6 +15,11 @@ public sealed class NotificationOutboxItem : ITenantOwned
     // NotificationOutboxWriter's validation can never drift apart.
     public const int MaxIdempotencyKeyLength = 200;
 
+    // Kept in one place so BookSpaceModelConfiguration's column length and
+    // NotificationOutboxProcessor's truncation can never drift apart - see docs/background-jobs.md
+    // ("LastError") for why this is a short, sanitized summary, never a raw exception/stack trace.
+    public const int MaxLastErrorLength = 500;
+
     public Guid Id { get; set; }
     public Guid TenantId { get; set; }
 
@@ -52,5 +57,15 @@ public sealed class NotificationOutboxItem : ITenantOwned
     // never increments it (nothing processes items yet).
     public int AttemptCount { get; set; }
 
+    // Set on every processing attempt, successful or not - when Status is Sent, this instant IS the
+    // "sent at" record (no separate SentAtUtc column: nothing else needs "last attempt" and "sent at" to
+    // differ, since a successful attempt is definitionally the last one that will ever run).
     public DateTimeOffset? LastAttemptAtUtc { get; set; }
+
+    // Set only on a failed attempt (transient or permanent) - a short, sanitized summary of why, never a
+    // raw exception/stack trace (NotificationOutboxProcessor only ever stores what
+    // NotificationSendResult.ErrorMessage explicitly provides, truncated to MaxLastErrorLength). Cleared
+    // on a subsequent successful send; left in place when a retryable item is merely rescheduled, so the
+    // most recent failure reason is always visible for diagnostics while an item is still Pending.
+    public string? LastError { get; set; }
 }

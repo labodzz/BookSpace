@@ -13,6 +13,11 @@ public sealed class BackgroundJobsOptions
     // see docs/background-jobs.md ("BatchSize configuration") for the reasoning.
     public const int MaxBatchSize = 1000;
 
+    // Sanity caps BackgroundJobsOptionsValidator enforces on the retry settings below - see
+    // docs/background-jobs.md ("Retry configuration").
+    public const int MaxAllowedNotificationAttempts = 50;
+    public const int MaxAllowedRetryDelaySeconds = 86_400; // 24 hours
+
     public bool Enabled { get; init; }
     public int PollIntervalSeconds { get; init; } = 30;
 
@@ -36,4 +41,20 @@ public sealed class BackgroundJobsOptions
     // enforces 1..MaxBatchSize) so a backlog of thousands of due items is always processed in fixed-size
     // slices, never loaded all at once.
     public int BatchSize { get; init; } = 50;
+
+    // Maximum number of actual delivery attempts NotificationOutboxProcessor will make for one outbox
+    // item before dead-lettering it - see docs/background-jobs.md ("AttemptCount semantics"). An attempt
+    // that fails transiently on try number MaxNotificationAttempts dead-letters the item immediately;
+    // there is never a try number MaxNotificationAttempts + 1.
+    public int MaxNotificationAttempts { get; init; } = 5;
+
+    // Delay before the first retry after a transient failure - see docs/background-jobs.md ("Exponential
+    // backoff"). Doubles on each subsequent transient failure (NotificationRetryBackoff), up to
+    // MaxRetryDelaySeconds.
+    public int InitialRetryDelaySeconds { get; init; } = 60;
+
+    // Upper bound the exponential backoff delay is clamped to, regardless of how many attempts have
+    // failed - without this, a long-failing item's next attempt could end up scheduled absurdly far in
+    // the future.
+    public int MaxRetryDelaySeconds { get; init; } = 3600;
 }

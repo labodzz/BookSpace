@@ -52,6 +52,13 @@ public static class DependencyInjection
         services.AddScoped<IJobLeaseStore, JobLeaseStore>();
         services.AddScoped<INotificationOutboxWriter, NotificationOutboxWriter>();
         services.AddScoped<INotificationOutboxReader, NotificationOutboxReader>();
+        // Scoped, not singleton: it only ever holds IServiceScopeFactory itself (safe at any lifetime),
+        // but letting it be Scoped avoids ever forcing a future INotificationSender implementation that
+        // needs its own scoped dependencies (a scoped HttpClient, say) into a captive-dependency problem.
+        // No INotificationSender is registered here - see docs/background-jobs.md ("Why this is not wired
+        // into the worker yet"): there is no real sender yet, so resolving this processor's dependencies
+        // for real use would correctly fail fast rather than silently pretending to send email.
+        services.AddScoped<INotificationOutboxProcessor, NotificationOutboxProcessor>();
 
         return services;
     }
