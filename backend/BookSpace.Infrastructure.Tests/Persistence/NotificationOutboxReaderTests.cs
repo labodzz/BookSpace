@@ -94,15 +94,29 @@ public sealed class NotificationOutboxReaderTests : IAsyncLifetime
         Assert.Empty(result);
     }
 
-    // NotificationOutboxStatus currently has exactly two members: Pending and Sent (see
-    // BookSpace.Domain.Enums.NotificationOutboxStatus) - there is no terminal-failure/dead-letter status
-    // yet for a future retry processor to introduce. This test exists so that whenever one IS added, it
-    // fails here as a reminder to also add the corresponding "terminal items are never due" coverage,
-    // rather than that gap going unnoticed.
+    // DeadLettered (added by the per-item processor task) is the terminal-failure status this test class
+    // previously had no coverage for - see the superseded comment this replaced, and
+    // docs/background-jobs.md ("Dead-letter state"). A dead-lettered item must never be due again: it is
+    // permanently done, successfully or not.
     [Fact]
-    public void NotificationOutboxStatus_HasNoTerminalFailureStatusYet_SoThereIsNothingElseToExcludeHere()
+    public async Task GetDueBatchAsync_WithADeadLetteredItem_DoesNotReturnIt()
     {
-        Assert.Equal(["Pending", "Sent"], Enum.GetNames<NotificationOutboxStatus>());
+        await SeedItemAsync(_tenantAId, _userAId, availableAtUtc: DateTimeOffset.UtcNow.AddMinutes(-1), status: NotificationOutboxStatus.DeadLettered);
+
+        var result = await GetDueBatchAsync(batchSize: 50);
+
+        Assert.Empty(result);
+    }
+
+    // NotificationOutboxStatus now has exactly three members: Pending, Sent, DeadLettered (see
+    // BookSpace.Domain.Enums.NotificationOutboxStatus). This test exists so that whenever a FOURTH
+    // terminal/non-due status is ever added, it fails here as a reminder to also add the corresponding
+    // "this new status is never due" coverage, rather than that gap going unnoticed - exactly the
+    // reminder this test's own predecessor was for DeadLettered.
+    [Fact]
+    public void NotificationOutboxStatus_HasExactlyTheStatusesThisTestClassAccountsFor()
+    {
+        Assert.Equal(["Pending", "Sent", "DeadLettered"], Enum.GetNames<NotificationOutboxStatus>());
     }
 
     [Fact]

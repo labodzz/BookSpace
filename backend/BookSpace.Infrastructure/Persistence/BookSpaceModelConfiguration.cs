@@ -236,6 +236,7 @@ internal static class BookSpaceModelConfiguration
             entity.Property(item => item.IdempotencyKey).HasMaxLength(NotificationOutboxItem.MaxIdempotencyKeyLength).IsRequired();
             entity.Property(item => item.PayloadJson).IsRequired();
             entity.Property(item => item.Status).HasConversion<string>().HasMaxLength(20);
+            entity.Property(item => item.LastError).HasMaxLength(NotificationOutboxItem.MaxLastErrorLength);
             // Tenant-scoped, not globally unique - see docs/background-jobs.md for why: this schema's
             // convention scopes uniqueness to the tenant-owning column for everything except a
             // pre-authentication global lookup (User.Email), and a notification idempotency key has no

@@ -46,6 +46,37 @@ public sealed class BackgroundJobsOptionsValidator : IValidateOptions<Background
                 + "a misconfigured value should never let one poll pull an unbounded number of rows into memory.");
         }
 
+        if (options.MaxNotificationAttempts < 1)
+        {
+            return ValidateOptionsResult.Fail("BackgroundJobs:MaxNotificationAttempts must be at least 1.");
+        }
+
+        if (options.MaxNotificationAttempts > BackgroundJobsOptions.MaxAllowedNotificationAttempts)
+        {
+            return ValidateOptionsResult.Fail(
+                $"BackgroundJobs:MaxNotificationAttempts must not exceed {BackgroundJobsOptions.MaxAllowedNotificationAttempts}.");
+        }
+
+        if (options.InitialRetryDelaySeconds <= 0)
+        {
+            return ValidateOptionsResult.Fail("BackgroundJobs:InitialRetryDelaySeconds must be a positive number of seconds.");
+        }
+
+        if (options.MaxRetryDelaySeconds < options.InitialRetryDelaySeconds)
+        {
+            return ValidateOptionsResult.Fail(
+                "BackgroundJobs:MaxRetryDelaySeconds must be greater than or equal to BackgroundJobs:InitialRetryDelaySeconds.");
+        }
+
+        // Bounds the exponential backoff's clamp itself, independent of NotificationRetryBackoff's own
+        // overflow-safe (double/Math.Pow) computation - a misconfigured multi-year delay is a
+        // configuration mistake worth rejecting outright, not just something the math merely survives.
+        if (options.MaxRetryDelaySeconds > BackgroundJobsOptions.MaxAllowedRetryDelaySeconds)
+        {
+            return ValidateOptionsResult.Fail(
+                $"BackgroundJobs:MaxRetryDelaySeconds must not exceed {BackgroundJobsOptions.MaxAllowedRetryDelaySeconds} seconds.");
+        }
+
         return ValidateOptionsResult.Success;
     }
 }

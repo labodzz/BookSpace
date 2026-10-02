@@ -107,4 +107,76 @@ public sealed class BackgroundJobsOptionsValidatorTests
 
         Assert.True(result.Succeeded);
     }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Validate_WithAZeroOrNegativeMaxNotificationAttempts_Fails(int maxNotificationAttempts)
+    {
+        var result = _validator.Validate(name: null, new BackgroundJobsOptions { MaxNotificationAttempts = maxNotificationAttempts });
+
+        Assert.True(result.Failed);
+    }
+
+    [Fact]
+    public void Validate_WithMaxNotificationAttemptsAboveTheAllowedMaximum_Fails()
+    {
+        var result = _validator.Validate(
+            name: null, new BackgroundJobsOptions { MaxNotificationAttempts = BackgroundJobsOptions.MaxAllowedNotificationAttempts + 1 });
+
+        Assert.True(result.Failed);
+    }
+
+    [Fact]
+    public void Validate_WithMaxNotificationAttemptsOfExactlyOne_Succeeds()
+    {
+        var result = _validator.Validate(name: null, new BackgroundJobsOptions { MaxNotificationAttempts = 1 });
+
+        Assert.True(result.Succeeded);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Validate_WithAZeroOrNegativeInitialRetryDelay_Fails(int initialRetryDelaySeconds)
+    {
+        var result = _validator.Validate(name: null, new BackgroundJobsOptions { InitialRetryDelaySeconds = initialRetryDelaySeconds });
+
+        Assert.True(result.Failed);
+    }
+
+    [Fact]
+    public void Validate_WhenMaxRetryDelayIsLessThanInitialRetryDelay_Fails()
+    {
+        var result = _validator.Validate(
+            name: null, new BackgroundJobsOptions { InitialRetryDelaySeconds = 120, MaxRetryDelaySeconds = 60 });
+
+        Assert.True(result.Failed);
+    }
+
+    [Fact]
+    public void Validate_WhenMaxRetryDelayEqualsInitialRetryDelay_Succeeds()
+    {
+        var result = _validator.Validate(
+            name: null, new BackgroundJobsOptions { InitialRetryDelaySeconds = 60, MaxRetryDelaySeconds = 60 });
+
+        Assert.True(result.Succeeded);
+    }
+
+    [Fact]
+    public void Validate_WithMaxRetryDelayAboveTheAllowedMaximum_Fails()
+    {
+        var result = _validator.Validate(
+            name: null, new BackgroundJobsOptions { MaxRetryDelaySeconds = BackgroundJobsOptions.MaxAllowedRetryDelaySeconds + 1 });
+
+        Assert.True(result.Failed);
+    }
+
+    [Fact]
+    public void Validate_WithTheDefaultRetrySettings_Succeeds()
+    {
+        var result = _validator.Validate(name: null, new BackgroundJobsOptions());
+
+        Assert.True(result.Succeeded);
+    }
 }
