@@ -218,6 +218,124 @@ public sealed class NotificationOutboxWriterTests : IAsyncLifetime
         Assert.Equal(EnqueueOutcome.Created, nextResult.Outcome);
     }
 
+    // See docs/background-jobs.md ("Booking lifecycle notifications - recurring series") for why
+    // EnqueueManyAsync exists: a caller with several business mutations to commit together with several
+    // notifications (a recurring series, a cascaded approve/cancel) needs ONE SaveChangesAsync covering
+    // all of it, not one EnqueueAsync call per item.
+    [Fact]
+    public async Task EnqueueManyAsync_WithNewKeys_CreatesARowForEachAndReportsCreatedForEach()
+    {
+        var results = await EnqueueManyAsync(
+            BuildRequest("batch:1:confirmation"), BuildRequest("batch:2:confirmation"), BuildRequest("batch:3:confirmation"));
+
+        Assert.All(results, result => Assert.Equal(EnqueueOutcome.Created, result.Outcome));
+        Assert.All(results, result => Assert.NotNull(result.OutboxItemId));
+        Assert.Equal(3, results.Select(result => result.OutboxItemId).Distinct().Count());
+
+        await using var verify = CreateDbContext();
+        Assert.Equal(3, await verify.NotificationOutboxItems.IgnoreQueryFilters()
+            .CountAsync(i => i.IdempotencyKey.StartsWith("batch:") && i.TenantId == _tenantAId));
+    }
+
+    [Fact]
+    public async Task EnqueueManyAsync_WithAnEmptyList_ReturnsEmptyAndPerformsNoDatabaseWrite()
+    {
+        await using var dbContext = CreateDbContext();
+        var writer = new NotificationOutboxWriter(dbContext, NullLogger<NotificationOutboxWriter>.Instance);
+
+        var results = await writer.EnqueueManyAsync([], CancellationToken.None);
+
+        Assert.Empty(results);
+        // ChangeTracker never touched - no entity was ever staged, so there is nothing a stray
+        // SaveChangesAsync could have committed.
+        Assert.Empty(dbContext.ChangeTracker.Entries());
+    }
+
+    // The exact failure mode this method exists to close: the WHOLE caller operation (e.g. a cascaded
+    // approve/cancel) is retried after it had already fully succeeded, so every key in the batch is
+    // already recorded. Retrying must be silently idempotent, never a thrown exception and never a
+    // second row for any key.
+    [Fact]
+    public async Task EnqueueManyAsync_CalledTwiceWithTheIdenticalBatch_CreatesNoDuplicatesOnTheSecondCall()
+    {
+        var requests = new[] { BuildRequest("batch:retry:1"), BuildRequest("batch:retry:2"), BuildRequest("batch:retry:3") };
+
+        var first = await EnqueueManyAsync(requests);
+        var second = await EnqueueManyAsync(requests);
+
+        Assert.All(first, result => Assert.Equal(EnqueueOutcome.Created, result.Outcome));
+        Assert.All(second, result => Assert.Equal(EnqueueOutcome.AlreadyExists, result.Outcome));
+
+        await using var verify = CreateDbContext();
+        foreach (var request in requests)
+        {
+            Assert.Equal(1, await verify.NotificationOutboxItems.IgnoreQueryFilters().CountAsync(i => i.IdempotencyKey == request.IdempotencyKey));
+        }
+    }
+
+    // A batch is never all-or-nothing with respect to WHICH keys are new - only some of this batch's keys
+    // might already exist (e.g. a cascade partially completed before a crash, then the whole operation is
+    // retried and recomputes the identical set of requests). The genuinely new ones must still be created.
+    [Fact]
+    public async Task EnqueueManyAsync_WithAMixOfNewAndAlreadyExistingKeys_CreatesOnlyTheGenuinelyNewOnes()
+    {
+        await EnqueueManyAsync(BuildRequest("batch:mix:1"));
+
+        var results = await EnqueueManyAsync(BuildRequest("batch:mix:1"), BuildRequest("batch:mix:2"), BuildRequest("batch:mix:3"));
+
+        Assert.Equal(EnqueueOutcome.AlreadyExists, results[0].Outcome);
+        Assert.Equal(EnqueueOutcome.Created, results[1].Outcome);
+        Assert.Equal(EnqueueOutcome.Created, results[2].Outcome);
+
+        await using var verify = CreateDbContext();
+        Assert.Equal(1, await verify.NotificationOutboxItems.IgnoreQueryFilters().CountAsync(i => i.IdempotencyKey == "batch:mix:1"));
+        Assert.Equal(1, await verify.NotificationOutboxItems.IgnoreQueryFilters().CountAsync(i => i.IdempotencyKey == "batch:mix:2"));
+        Assert.Equal(1, await verify.NotificationOutboxItems.IgnoreQueryFilters().CountAsync(i => i.IdempotencyKey == "batch:mix:3"));
+    }
+
+    // The core concurrency guarantee for the batch path, mirroring EnqueueAsync's own proven race test:
+    // two callers racing to enqueue the IDENTICAL batch (e.g. two instances both retrying the same
+    // cascaded operation after a crash) must leave exactly one row per key, never two, and neither call
+    // may throw an unhandled exception - the (TenantId, IdempotencyKey) unique constraint remains the sole
+    // authority, not the in-process existence check.
+    [Fact]
+    public async Task EnqueueManyAsync_TwoConcurrentCallsWithTheIdenticalBatch_LeavesExactlyOneRowPerKey()
+    {
+        var requests = new[] { BuildRequest("batch:concurrent:1"), BuildRequest("batch:concurrent:2"), BuildRequest("batch:concurrent:3") };
+        using var startGate = new Barrier(2);
+
+        async Task<IReadOnlyList<EnqueueNotificationResult>> AttemptAsync()
+        {
+            startGate.SignalAndWait();
+            return await EnqueueManyAsync(requests);
+        }
+
+        var allResults = await Task.WhenAll(Task.Run(AttemptAsync), Task.Run(AttemptAsync));
+
+        // Both calls pass the SAME requests array/order, so index i in each result list corresponds to
+        // the same logical key across both concurrent attempts.
+        for (var index = 0; index < requests.Length; index++)
+        {
+            var outcomesForThisKey = allResults.Select(results => results[index].Outcome).ToList();
+            Assert.Equal(1, outcomesForThisKey.Count(outcome => outcome == EnqueueOutcome.Created));
+            Assert.Equal(1, outcomesForThisKey.Count(outcome => outcome == EnqueueOutcome.AlreadyExists));
+        }
+
+        await using var verify = CreateDbContext();
+        foreach (var request in requests)
+        {
+            Assert.Equal(1, await verify.NotificationOutboxItems.IgnoreQueryFilters().CountAsync(i => i.IdempotencyKey == request.IdempotencyKey));
+        }
+    }
+
+    // Each call gets its own BookSpaceDbContext, matching EnqueueAsync's own convention above.
+    private async Task<IReadOnlyList<EnqueueNotificationResult>> EnqueueManyAsync(params NotificationOutboxRequest[] requests)
+    {
+        await using var dbContext = CreateDbContext();
+        var writer = new NotificationOutboxWriter(dbContext, NullLogger<NotificationOutboxWriter>.Instance);
+        return await writer.EnqueueManyAsync(requests, CancellationToken.None);
+    }
+
     // Functional proof that the schema/filtered index actually supports the future retry processor's
     // query shape (docs/background-jobs.md): Pending items whose AvailableAtUtc has passed, oldest first,
     // excluding both not-yet-due and already-Sent items. No repository for this exists yet (out of scope

@@ -388,15 +388,15 @@ persists the new `Booking` row and the new `NotificationOutboxItem` row in one t
 fails for any reason, neither row is persisted; there is no possible outcome where the booking is
 confirmed but the notification silently never existed, or vice versa.
 
-**A known, currently-accepted limitation of this mechanism**: `EnqueueAsync`'s narrow catch
-(`SqlException.Number is 2601 or 2627`) cannot yet distinguish "my own `(TenantId, IdempotencyKey)`
+**A known, currently-accepted limitation of this mechanism**: `EnqueueAsync`/`EnqueueManyAsync`'s narrow
+catch (`SqlException.Number is 2601 or 2627`) cannot distinguish "my own `(TenantId, IdempotencyKey)`
 constraint fired" from "some other unique constraint on an entity staged earlier in the same
 `SaveChangesAsync` call also fired at the same moment" - both currently resolve to
-`EnqueueOutcome.AlreadyExists`, which would be the wrong answer in the (today, impossible, since nothing
-calls `EnqueueAsync` from a handler yet) scenario where the business entity's *own* uniqueness check is
-what actually collided. Whichever future task wires a real business handler into this writer should
-revisit this if the business write it is combined with has its own unique constraint capable of
-colliding at the same instant.
+`EnqueueOutcome.AlreadyExists`. This stays theoretical for every booking lifecycle flow that calls these
+methods today (`Booking`/`ApprovalRequest`/`RecurringSeries` have no unique constraint of their own capable
+of colliding at that instant - only the outbox's own `(TenantId, IdempotencyKey)` index can fire), but a
+future handler combining an enqueue with a business entity that DOES have its own unique constraint should
+revisit this before relying on the same assumption.
 
 ### What this task guarantees - and does not
 
@@ -898,27 +898,37 @@ minimal - exactly what a future sender/template needs, never the recipient's ema
 Every handler above follows the same shape the "How this will share a transaction with a future business
 write" section (under "Notification outbox") already anticipated: the booking/`ApprovalRequest` mutation is
 only *staged* (`AddAsync`, or an in-memory property change on an already-tracked entity) - never followed by
-the handler's own `SaveChangesAsync`. `EnqueueAsync` is called last, and its own internal
-`SaveChangesAsync` is the single commit point, persisting the state change and the new outbox row together.
-If it throws, nothing commits - proven per handler by a test that makes `EnqueueAsync` throw and asserts
-the repository's own `SaveChangesAsync` was never called (there is no other commit path that could have
-persisted the mutation anyway).
+the handler's own `SaveChangesAsync`. The outbox writer is called last, and its own internal
+`SaveChangesAsync` is the single commit point, persisting every state change and every new outbox row
+together. If it throws, nothing commits - proven per handler by a test that makes the writer throw and
+asserts the repository's own `SaveChangesAsync` was never called (there is no other commit path that could
+have persisted the mutation anyway), and, for the multi-occurrence flows below, by a test that injects a
+real `SaveChangesInterceptor` failure and then reads back from a *separate* `DbContext`/connection to prove
+neither the booking mutations nor any outbox row survived.
 
-`CreateBookingCommandHandler` and `RejectBookingCommandHandler` always touch exactly one booking, so this is
-unconditionally atomic. Three flows can touch **more than one** booking in a single call -
-`CreateRecurringSeriesCommandHandler` (several occurrences created `Confirmed` at once),
+`CreateBookingCommandHandler` and `RejectBookingCommandHandler` always touch exactly one booking, so they
+call `INotificationOutboxWriter.EnqueueAsync` - one request, one row, unconditionally atomic with the
+mutation via its single `SaveChangesAsync`. Three flows can touch **more than one** booking in a single call
+- `CreateRecurringSeriesCommandHandler` (several occurrences created `Confirmed` at once),
 `ApproveBookingCommandHandler` with `ApproveRemainingSeries`, and `CancelBookingCommandHandler` with
-`CancelRemainingSeries`. In all three, every affected booking is mutated *before* the first `EnqueueAsync`
-call, so that first call's `SaveChangesAsync` commits every mutation in the batch together, plus its own
-outbox row; each further call (one per additional occurrence) then commits only its own outbox row, since
-the booking rows are already durably saved by then. **Accepted, narrow gap**: if the process crashes
-between two of these later calls, the already-cancelled/approved/confirmed occurrences whose own call
-hadn't run yet are left correctly in their new status but without a notification ever enqueued for them -
-nothing today retries or backfills that. Closing it fully would mean wrapping the whole cascade in one
-explicit database transaction, which none of these flows currently open (cancellation in particular has no
-`IResourceBookingLock` at all - see `docs/bookings-and-concurrency.md`) and which this task deliberately did
-not add, to avoid a bigger transaction-management refactor than the task warranted. The *first* occurrence
-in each cascade (always the primary, request-targeted booking) is never affected by this gap.
+`CancelRemainingSeries`. These three call `INotificationOutboxWriter.EnqueueManyAsync` **once**, passing
+every occurrence's notification request together, after every affected booking has already been staged:
+`EnqueueManyAsync` performs exactly **one** `SaveChangesAsync` covering every staged booking/`ApprovalRequest`
+mutation plus every outbox row in the same batch. Either the whole cascade and all of its notifications
+land, or none of it does - there is no longer a window between two separate commits where some occurrences
+are durably mutated but missing their notification. A dedicated test for each of the three cascades proves
+this directly against real SQL Server: every affected occurrence and every one of its outbox rows is read
+back, via a fresh `DbContext`, as present together; a further test proves the common (no-conflict) path
+issues exactly **one** `SaveChangesAsync` call for the whole cascade, not one per occurrence.
+
+`EnqueueManyAsync` stays correct under retry without weakening the `(TenantId, IdempotencyKey)` unique
+constraint as the authority: it first attempts one combined `SaveChangesAsync` for every row; only if that
+fails on a duplicate-key violation does it re-query which of the batch's keys already exist (one `SELECT`)
+and retry with just the genuinely new rows - still carrying the same staged business mutations, since
+nothing committed on the first, failed attempt. A batch where every key already exists (the whole cascade
+being retried after it had already fully succeeded) still correctly commits any other staged mutation on
+that `DbContext` and returns `AlreadyExists` for every item, never a duplicate row and never a thrown
+exception for the ordinary retry case.
 
 ### Recurring cancellation: one outbox item per occurrence, not one per series
 
@@ -952,5 +962,6 @@ already decided. All of that remains future WP-8 work. In particular: the lease 
 not" above); the notification outbox is infrastructure for *durable, deduplicated intent*, not for
 *guaranteed email delivery*; per-item processing adds *persisted retry/backoff/dead-letter bookkeeping*,
 still not *exactly-once delivery* of the external side effect itself (see "Exactly-once limitation, still"
-above); and this branch makes the booking/notification *commit* atomic, without yet closing the narrow
-multi-occurrence-cascade gap described above.
+above); and this branch makes the booking state change and its notification enqueue(s) commit atomically -
+including for every multi-occurrence cascade - without yet guaranteeing anything about the eventual email
+delivery itself, which remains a separate, later concern once a real `INotificationSender` exists.

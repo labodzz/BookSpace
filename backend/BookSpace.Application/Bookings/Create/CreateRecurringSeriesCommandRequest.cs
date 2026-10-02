@@ -240,14 +240,12 @@ public sealed class CreateRecurringSeriesCommandHandler(
         }
 
         // One confirmation per occurrence that is ACTUALLY Confirmed by this call - never for a Pending
-        // (approval-required) occurrence. EnqueueAsync calls SaveChangesAsync itself: the FIRST call below
-        // commits the series, every staged Booking/ApprovalRequest, and that first outbox row together in
-        // one transaction; each subsequent call (one per additional confirmed occurrence) then commits its
-        // own outbox row on its own, since the series/booking rows are already durably saved by then - see
-        // docs/background-jobs.md ("Booking lifecycle notifications - recurring series") for why a crash
-        // between two of these calls is an accepted, narrow gap (already-saved bookings whose own
-        // notification didn't get enqueued yet), not a half-saved booking. A series with no confirmed
-        // occurrence at all (every occurrence required approval) still needs its own explicit save.
+        // (approval-required) occurrence. EnqueueManyAsync performs exactly ONE SaveChangesAsync covering
+        // the series, every staged Booking/ApprovalRequest, AND every confirmation outbox row together -
+        // either the whole series and all its confirmations land, or none of it does (see
+        // docs/background-jobs.md, "Booking lifecycle notifications - recurring series"). A series with no
+        // confirmed occurrence at all (every occurrence required approval) still needs its own explicit
+        // save, since EnqueueManyAsync is a no-op (no SaveChangesAsync call) for an empty request list.
         var confirmedOccurrences = bookings.Where(candidate => candidate.Status == BookingStatus.Confirmed).ToList();
         if (confirmedOccurrences.Count == 0)
         {
@@ -255,10 +253,8 @@ public sealed class CreateRecurringSeriesCommandHandler(
         }
         else
         {
-            foreach (var confirmedOccurrence in confirmedOccurrences)
-            {
-                await notificationOutboxWriter.EnqueueAsync(BookingNotificationFactory.Confirmation(confirmedOccurrence), cancellationToken);
-            }
+            await notificationOutboxWriter.EnqueueManyAsync(
+                confirmedOccurrences.Select(BookingNotificationFactory.Confirmation).ToList(), cancellationToken);
         }
 
         return new CreateRecurringSeriesResponse(

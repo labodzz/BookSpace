@@ -29,8 +29,9 @@ public sealed class ApproveBookingCommandHandlerTests
     private ApproveBookingCommandHandler CreateSut()
     {
         _notificationOutboxWriter
-            .Setup(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new EnqueueNotificationResult(EnqueueOutcome.Created, Guid.NewGuid()));
+            .Setup(w => w.EnqueueManyAsync(It.IsAny<IReadOnlyList<NotificationOutboxRequest>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<NotificationOutboxRequest> requests, CancellationToken _) =>
+                (IReadOnlyList<EnqueueNotificationResult>)requests.Select(_ => new EnqueueNotificationResult(EnqueueOutcome.Created, Guid.NewGuid())).ToList());
         return new ApproveBookingCommandHandler(
             new PassThroughResourceBookingLock(),
             _bookingRepository.Object,
@@ -100,11 +101,11 @@ public sealed class ApproveBookingCommandHandlerTests
         Assert.Equal(BookingStatus.Confirmed, result.Status);
         Assert.Equal(BookingStatus.Confirmed, booking.Status);
         // Confirmation goes to the booking OWNER, not the approver (ApproverUserId != booking.UserId here).
-        // EnqueueAsync's own SaveChangesAsync is the sole commit point.
-        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(
-            It.Is<NotificationOutboxRequest>(req =>
-                req.TenantId == TenantId && req.NotificationType == BookingNotificationTypes.Confirmation &&
-                req.RecipientUserId == booking.UserId && req.IdempotencyKey == $"booking:{booking.Id}:confirmation"),
+        // EnqueueManyAsync's own SaveChangesAsync is the sole commit point.
+        _notificationOutboxWriter.Verify(w => w.EnqueueManyAsync(
+            It.Is<IReadOnlyList<NotificationOutboxRequest>>(requests => requests.Count == 1 &&
+                requests[0].TenantId == TenantId && requests[0].NotificationType == BookingNotificationTypes.Confirmation &&
+                requests[0].RecipientUserId == booking.UserId && requests[0].IdempotencyKey == $"booking:{booking.Id}:confirmation"),
             It.IsAny<CancellationToken>()), Times.Once);
         _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -117,7 +118,7 @@ public sealed class ApproveBookingCommandHandlerTests
         SetupEligible(resource, booking);
         var sut = CreateSut();
         _notificationOutboxWriter
-            .Setup(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()))
+            .Setup(w => w.EnqueueManyAsync(It.IsAny<IReadOnlyList<NotificationOutboxRequest>>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("Simulated unexpected database failure."));
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -133,8 +134,9 @@ public sealed class ApproveBookingCommandHandlerTests
         var booking = CreatePendingBooking(resource);
         SetupEligible(resource, booking);
         _notificationOutboxWriter
-            .Setup(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new EnqueueNotificationResult(EnqueueOutcome.AlreadyExists, null));
+            .Setup(w => w.EnqueueManyAsync(It.IsAny<IReadOnlyList<NotificationOutboxRequest>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<NotificationOutboxRequest> requests, CancellationToken _) =>
+                (IReadOnlyList<EnqueueNotificationResult>)requests.Select(_ => new EnqueueNotificationResult(EnqueueOutcome.AlreadyExists, null)).ToList());
         var sut = CreateSut();
 
         var result = await sut.Handle(new ApproveBookingCommandRequest(booking.Id, "Looks good"), CancellationToken.None);
@@ -195,7 +197,7 @@ public sealed class ApproveBookingCommandHandlerTests
 
         Assert.Equal(ErrorCodes.BookingApprovalForbidden, exception.ErrorCode);
         _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
-        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()), Times.Never);
+        _notificationOutboxWriter.Verify(w => w.EnqueueManyAsync(It.IsAny<IReadOnlyList<NotificationOutboxRequest>>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -209,7 +211,7 @@ public sealed class ApproveBookingCommandHandlerTests
             sut.Handle(new ApproveBookingCommandRequest(Guid.NewGuid(), null), CancellationToken.None));
 
         Assert.Equal(ErrorCodes.BookingNotFound, exception.ErrorCode);
-        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()), Times.Never);
+        _notificationOutboxWriter.Verify(w => w.EnqueueManyAsync(It.IsAny<IReadOnlyList<NotificationOutboxRequest>>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Theory]
@@ -229,7 +231,7 @@ public sealed class ApproveBookingCommandHandlerTests
 
         Assert.Equal(ErrorCodes.BookingApprovalNotAllowed, exception.ErrorCode);
         _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
-        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()), Times.Never);
+        _notificationOutboxWriter.Verify(w => w.EnqueueManyAsync(It.IsAny<IReadOnlyList<NotificationOutboxRequest>>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -254,7 +256,7 @@ public sealed class ApproveBookingCommandHandlerTests
         Assert.Equal(ErrorCodes.BookingBlackoutConflict, exception.ErrorCode);
         Assert.Equal(BookingStatus.Pending, booking.Status); // never partially approved
         _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
-        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()), Times.Never);
+        _notificationOutboxWriter.Verify(w => w.EnqueueManyAsync(It.IsAny<IReadOnlyList<NotificationOutboxRequest>>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -299,7 +301,7 @@ public sealed class ApproveBookingCommandHandlerTests
         Assert.Equal(ErrorCodes.BookingResourceUnavailable, exception.ErrorCode);
         Assert.Equal(BookingStatus.Pending, booking.Status);
         _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
-        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()), Times.Never);
+        _notificationOutboxWriter.Verify(w => w.EnqueueManyAsync(It.IsAny<IReadOnlyList<NotificationOutboxRequest>>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     // The defensive resourceRepository.FindByIdAsync null-check inside ApproveUnderLockAsync - unreachable
@@ -372,14 +374,16 @@ public sealed class ApproveBookingCommandHandlerTests
         Assert.Equal([sibling1.Id, sibling2.Id], result.CascadedApprovedOccurrenceIds);
         Assert.Empty(result.CascadedConflicts);
         // One confirmation per actually-approved occurrence (primary + both siblings) - all three go to
-        // their own owner (booking.UserId for every occurrence in this series, per CreateSeriesOccurrence).
-        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(
-            It.Is<NotificationOutboxRequest>(req => req.IdempotencyKey == $"booking:{booking.Id}:confirmation"), It.IsAny<CancellationToken>()), Times.Once);
-        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(
-            It.Is<NotificationOutboxRequest>(req => req.IdempotencyKey == $"booking:{sibling1.Id}:confirmation"), It.IsAny<CancellationToken>()), Times.Once);
-        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(
-            It.Is<NotificationOutboxRequest>(req => req.IdempotencyKey == $"booking:{sibling2.Id}:confirmation"), It.IsAny<CancellationToken>()), Times.Once);
-        _notificationOutboxWriter.Verify(w => w.EnqueueAsync(It.IsAny<NotificationOutboxRequest>(), It.IsAny<CancellationToken>()), Times.Exactly(3));
+        // their own owner (booking.UserId for every occurrence in this series, per CreateSeriesOccurrence),
+        // requested in a SINGLE EnqueueManyAsync call so one SaveChangesAsync covers every mutation and
+        // every confirmation together.
+        _notificationOutboxWriter.Verify(w => w.EnqueueManyAsync(
+            It.Is<IReadOnlyList<NotificationOutboxRequest>>(requests =>
+                requests.Count == 3 &&
+                requests.Any(req => req.IdempotencyKey == $"booking:{booking.Id}:confirmation") &&
+                requests.Any(req => req.IdempotencyKey == $"booking:{sibling1.Id}:confirmation") &&
+                requests.Any(req => req.IdempotencyKey == $"booking:{sibling2.Id}:confirmation")),
+            It.IsAny<CancellationToken>()), Times.Once);
         _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
