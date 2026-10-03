@@ -126,8 +126,11 @@ internal sealed class NotificationOutboxProcessor(
         return outcome;
     }
 
-    public async Task ProcessBatchAsync(IReadOnlyList<DueNotificationOutboxItem> batch, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<NotificationOutboxBatchItemResult>> ProcessBatchAsync(
+        IReadOnlyList<DueNotificationOutboxItem> batch, CancellationToken cancellationToken)
     {
+        var results = new List<NotificationOutboxBatchItemResult>(batch.Count);
+
         for (var index = 0; index < batch.Count; index++)
         {
             var item = batch[index];
@@ -138,18 +141,33 @@ internal sealed class NotificationOutboxProcessor(
                     "Notification outbox batch processing stopped before item {OutboxItemId} - cancellation requested; {RemainingCount} item(s) in this batch were not started.",
                     item.Id,
                     batch.Count - index);
-                return;
+                return results;
             }
+
+            // Every log line for this item - including the structured outcome logging inside
+            // ProcessItemAsync and the unexpected-exception logging below - carries these two properties,
+            // the same ILogger.BeginScope bridge Serilog uses elsewhere in this codebase to flow
+            // contextual properties without a direct Serilog dependency in this layer (contrast
+            // CorrelationIdMiddleware's own LogContext.PushProperty, which is fine to use directly only
+            // because BookSpace.Api already references Serilog). See docs/background-jobs.md
+            // ("Notification outbox cycle") for the full job-run/item correlation story.
+            using var itemScope = logger.BeginScope(new Dictionary<string, object?>
+            {
+                ["OutboxItemId"] = item.Id,
+                ["NotificationType"] = item.NotificationType,
+            });
 
             try
             {
-                await ProcessItemAsync(item, cancellationToken);
+                var outcome = await ProcessItemAsync(item, cancellationToken);
+                results.Add(new NotificationOutboxBatchItemResult(item.Id, outcome));
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 // Already logged (with more detail) inside ProcessItemAsync - this just stops the loop
-                // rather than starting the next item.
-                return;
+                // rather than starting the next item. No result is recorded for this item: it was
+                // cancelled mid-attempt, not processed.
+                return results;
             }
             catch (Exception ex)
             {
@@ -157,11 +175,15 @@ internal sealed class NotificationOutboxProcessor(
                 // here (a database error loading/saving the item, a bug) is logged distinctly from the
                 // structured Sent/RetryScheduled/DeadLettered outcome logging in ProcessItemAsync, and is
                 // isolated from the rest of the batch exactly like BackgroundJobsWorker isolates one
-                // cycle's failure from the next poll.
+                // cycle's failure from the next poll. Recorded with a null Outcome so a caller's summary
+                // can count it separately from an ordinary delivery outcome.
                 logger.LogError(
                     ex, "Unexpected error processing notification outbox item {OutboxItemId}; continuing with the next item in this batch.", item.Id);
+                results.Add(new NotificationOutboxBatchItemResult(item.Id, Outcome: null));
             }
         }
+
+        return results;
     }
 
     // Only ever truncates what NotificationSendResult.ErrorMessage explicitly provided - never a raw

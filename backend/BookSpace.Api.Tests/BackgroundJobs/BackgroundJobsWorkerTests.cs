@@ -1,7 +1,9 @@
 using BookSpace.Api.BackgroundJobs;
 using BookSpace.Application.BackgroundJobs;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging.Testing;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
@@ -131,6 +133,59 @@ public sealed class BackgroundJobsWorkerTests
         await worker.StopAsync(CancellationToken.None);
     }
 
+    // The missing direct proof (WP-8 audit) that BackgroundJobsWorker.RunCycleAsync's broad catch around
+    // IBackgroundJobCycle.RunCycleAsync does what its own comment claims: a single cycle's unexpected
+    // exception is logged and isolated, never silently killing the hosted service for the rest of the
+    // app's lifetime - the worker goes on to attempt a brand new cycle on the very next poll interval.
+    // FakeTimeProvider.Advance (not a real elapsed delay) is what makes "the next poll interval" happen
+    // deterministically and instantly in a test.
+    [Fact]
+    public async Task RunCycleAsync_WhenACycleThrowsUnexpectedly_LogsItAndStillAttemptsANewCycleAfterTheNextPollInterval()
+    {
+        var recorder = new CycleRecorder();
+        var services = new ServiceCollection();
+        services.AddSingleton(recorder);
+        // A fresh scope (and therefore a fresh ThrowsOnceThenRecordsCycle instance) backs every cycle -
+        // same as the real worker - so "has it already thrown" must live in a singleton shared across
+        // instances, not on the scoped cycle instance itself.
+        services.AddSingleton<ThrowOnceGate>();
+        services.AddScoped<IBackgroundJobCycle, ThrowsOnceThenRecordsCycle>();
+        var scopeFactory = services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
+        var timeProvider = new FakeTimeProvider();
+        var fakeLogger = new FakeLogger<BackgroundJobsWorker>();
+        var worker = new BackgroundJobsWorker(
+            scopeFactory,
+            new StubJobLeaseCoordinator(),
+            Options.Create(new BackgroundJobsOptions { Enabled = true, PollIntervalSeconds = 30 }),
+            timeProvider,
+            fakeLogger);
+
+        await worker.StartAsync(CancellationToken.None);
+
+        // The first cycle throws - give the loop a moment to reach and catch it before advancing time,
+        // by waiting for the error to actually be logged rather than an arbitrary delay.
+        await WaitForLogAsync(fakeLogger, LogLevel.Error, RealTimeTestTimeout);
+
+        timeProvider.Advance(TimeSpan.FromSeconds(30));
+        await recorder.WaitForCountAsync(1, RealTimeTestTimeout);
+
+        await worker.StopAsync(CancellationToken.None);
+
+        Assert.Contains(
+            fakeLogger.Collector.GetSnapshot(),
+            record => record.Level == LogLevel.Error && record.Exception is InvalidOperationException);
+    }
+
+    private static async Task WaitForLogAsync(FakeLogger logger, LogLevel level, TimeSpan timeout)
+    {
+        using var cts = new CancellationTokenSource(timeout);
+        while (!logger.Collector.GetSnapshot().Any(record => record.Level == level))
+        {
+            cts.Token.ThrowIfCancellationRequested();
+            await Task.Delay(10, cts.Token);
+        }
+    }
+
     private static IServiceScopeFactory BuildScopeFactory(CycleRecorder recorder)
     {
         var services = new ServiceCollection();
@@ -202,6 +257,32 @@ public sealed class BackgroundJobsWorkerTests
         public Task WaitUntilStartedAsync(TimeSpan timeout) => _started.Task.WaitAsync(timeout);
 
         public Task WaitUntilCancelledAsync(TimeSpan timeout) => _observedCancellation.Task.WaitAsync(timeout);
+    }
+
+    // Shared (singleton) across every per-cycle scope, so "has the one simulated failure already
+    // happened" survives across the fresh ThrowsOnceThenRecordsCycle instance each new scope creates.
+    private sealed class ThrowOnceGate
+    {
+        private int _hasThrown;
+
+        public bool ShouldThrow() => Interlocked.Exchange(ref _hasThrown, 1) == 0;
+    }
+
+    // Throws on the very first cycle attempt across the whole test (simulating an unexpected bug in a
+    // real IBackgroundJobCycle), then behaves exactly like RecordingCycle on every later one - the test
+    // spy for RunCycleAsync_WhenACycleThrowsUnexpectedly_LogsItAndStillAttemptsANewCycleAfterTheNextPollInterval.
+    private sealed class ThrowsOnceThenRecordsCycle(CycleRecorder recorder, ThrowOnceGate gate) : IBackgroundJobCycle
+    {
+        public Task RunCycleAsync(CancellationToken cancellationToken)
+        {
+            if (gate.ShouldThrow())
+            {
+                throw new InvalidOperationException("Simulated unexpected failure on the first cycle attempt.");
+            }
+
+            recorder.Record(Guid.NewGuid());
+            return Task.CompletedTask;
+        }
     }
 
     // Records which *instance* ran each cycle (not just how many) - the test spy for proving a fresh

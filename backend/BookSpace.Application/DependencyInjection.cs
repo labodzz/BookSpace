@@ -18,8 +18,8 @@ public static class DependencyInjection
         services.AddSingleton<ICorrelationIdContext, CorrelationIdContext>();
 
         // Scoped: resolved fresh per cycle by BackgroundJobsWorker (BookSpace.Api), never held by that
-        // singleton itself - see docs/background-jobs.md.
-        services.AddScoped<IBackgroundJobCycle, NoOpBackgroundJobCycle>();
+        // singleton itself - see docs/background-jobs.md ("Notification outbox cycle").
+        services.AddScoped<IBackgroundJobCycle, NotificationOutboxJobCycle>();
         services.AddSingleton<IValidateOptions<BackgroundJobsOptions>, BackgroundJobsOptionsValidator>();
 
         // Stateless - safe as a singleton. See docs/background-jobs.md ("Email templates").
