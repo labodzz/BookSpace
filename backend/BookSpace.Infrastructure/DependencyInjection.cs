@@ -5,6 +5,7 @@ using BookSpace.Application.Notifications;
 using BookSpace.Application.ResourceTypes;
 using BookSpace.Application.Resources;
 using BookSpace.Application.Security;
+using BookSpace.Infrastructure.Email;
 using BookSpace.Infrastructure.Persistence;
 using BookSpace.Infrastructure.Security;
 using Microsoft.EntityFrameworkCore;
@@ -55,10 +56,17 @@ public static class DependencyInjection
         // Scoped, not singleton: it only ever holds IServiceScopeFactory itself (safe at any lifetime),
         // but letting it be Scoped avoids ever forcing a future INotificationSender implementation that
         // needs its own scoped dependencies (a scoped HttpClient, say) into a captive-dependency problem.
-        // No INotificationSender is registered here - see docs/background-jobs.md ("Why this is not wired
-        // into the worker yet"): there is no real sender yet, so resolving this processor's dependencies
-        // for real use would correctly fail fast rather than silently pretending to send email.
         services.AddScoped<INotificationOutboxProcessor, NotificationOutboxProcessor>();
+
+        // Gmail SMTP sender - see docs/background-jobs.md ("Gmail SMTP sender"). IEmailRecipientResolver
+        // is Scoped (needs the scoped BookSpaceDbContext); INotificationSender is Scoped to match it -
+        // NotificationOutboxProcessor already resolves a fresh one per individual outbox item via its own
+        // per-item DI scope, so this never becomes a captive-dependency problem. The transport factory is
+        // a stateless Singleton: it only ever hands out brand new, never-shared ISmtpTransport instances
+        // (see MailKitSmtpTransportFactory) - the transport itself is never registered in DI at all.
+        services.AddScoped<IEmailRecipientResolver, EmailRecipientResolver>();
+        services.AddSingleton<ISmtpTransportFactory, MailKitSmtpTransportFactory>();
+        services.AddScoped<INotificationSender, SmtpNotificationSender>();
 
         return services;
     }

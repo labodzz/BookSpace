@@ -1,6 +1,7 @@
 using System.Reflection;
 using BookSpace.Application.Auth;
 using BookSpace.Application.BackgroundJobs;
+using BookSpace.Application.Email;
 using BookSpace.Application.Logging;
 using BookSpace.Application.Mediator;
 using FluentValidation;
@@ -20,6 +21,10 @@ public static class DependencyInjection
         // singleton itself - see docs/background-jobs.md.
         services.AddScoped<IBackgroundJobCycle, NoOpBackgroundJobCycle>();
         services.AddSingleton<IValidateOptions<BackgroundJobsOptions>, BackgroundJobsOptionsValidator>();
+
+        // Stateless - safe as a singleton. See docs/background-jobs.md ("Email templates").
+        services.AddSingleton<IEmailTemplateRenderer, BookingEmailTemplateRenderer>();
+        services.AddSingleton<IValidateOptions<EmailOptions>, EmailOptionsValidator>();
 
         // Singleton: one stable OwnerId, and one lease coordinator holding only IServiceScopeFactory, for
         // this instance's entire lifetime - see docs/background-jobs.md ("Job lease lock"). Neither ever
