@@ -7,6 +7,7 @@ using BookSpace.Api.Logging;
 using BookSpace.Api.Security;
 using BookSpace.Application;
 using BookSpace.Application.BackgroundJobs;
+using BookSpace.Application.Email;
 using BookSpace.Application.Logging;
 using BookSpace.Application.Security;
 using BookSpace.Infrastructure;
@@ -181,6 +182,14 @@ try
         .ValidateOnStart();
     builder.Services.AddSingleton(TimeProvider.System);
     builder.Services.AddHostedService<BackgroundJobsWorker>();
+
+    // Gmail SMTP sender - see docs/background-jobs.md ("Gmail SMTP sender"). Same ValidateOnStart
+    // convention as BackgroundJobsOptions above; EmailOptionsValidator only requires any SMTP field when
+    // Email:Enabled is true, so Development/Testing/an unconfigured deployment never needs SMTP
+    // credentials just to start.
+    builder.Services.AddOptions<EmailOptions>()
+        .Bind(builder.Configuration.GetSection("Email"))
+        .ValidateOnStart();
 
     builder.Services.AddHttpContextAccessor();
     builder.Services.AddScoped<ICurrentUserContext, CurrentUserContext>();

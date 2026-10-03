@@ -1,11 +1,14 @@
 namespace BookSpace.Application.Notifications;
 
 // Exactly what a sender needs to actually deliver one notification - deliberately NOT the full
-// NotificationOutboxItem/DueNotificationOutboxItem (no Id-as-outbox-row-identity confusion, no
-// IdempotencyKey a sender has no business comparing). OutboxItemId is included only so a future real
-// sender can pass it through as the provider's own idempotency key where supported - see
-// docs/background-jobs.md ("Exactly-once limitation").
-public sealed record NotificationMessage(Guid OutboxItemId, string NotificationType, Guid RecipientUserId, string PayloadJson);
+// NotificationOutboxItem/DueNotificationOutboxItem (no IdempotencyKey a sender has no business
+// comparing). OutboxItemId is included only so a real sender can derive a stable Message-Id from it -
+// see docs/background-jobs.md ("Message-Id and the SMTP/Gmail crash window"). TenantId was added
+// alongside RecipientUserId (not read from any ambient context - there is none in background
+// processing) specifically so a sender's recipient lookup can require both together, the same
+// documented, narrow tenant-filter exception used elsewhere for background processing - see
+// IEmailRecipientResolver.
+public sealed record NotificationMessage(Guid OutboxItemId, Guid TenantId, string NotificationType, Guid RecipientUserId, string PayloadJson);
 
 public enum NotificationSendOutcome
 {

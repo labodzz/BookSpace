@@ -865,9 +865,9 @@ provider actually provides.
 A later WP-8 branch than per-item processing above. Its goal: when a booking actually transitions to
 `Confirmed`, `Rejected`, or `Cancelled`, enqueue the matching notification in the **same** persistence
 operation as the state change - no separate step, no window where one is saved and the other is not. This
-branch still only enqueues; it does not send anything (no `INotificationSender` implementation exists, and
-the outbox processor still is not wired into the worker cycle - see "What this task does not implement"
-under "Notification outbox" above).
+branch still only enqueues; a real `INotificationSender` now exists (see "Gmail SMTP sender" below), but
+the outbox processor is still not wired into the worker cycle - see "What this task does not implement"
+under "Notification outbox" above.
 
 ### Event -> handler -> type -> recipient -> idempotency key
 
@@ -952,16 +952,192 @@ itself, never from `ICurrentUserContext` - so the recipient is always the bookin
 approver or TenantAdmin/SysAdmin who performed the approve/reject/cancel action, even when that caller
 belongs to the same tenant as the booking.
 
+## Gmail SMTP sender
+
+The first real `INotificationSender` implementation (`SmtpNotificationSender`,
+`BookSpace.Infrastructure/Email/`) - delivers an outbox item's notification via SMTP, using
+[MailKit](https://github.com/jstedfast/MailKit) (never `System.Net.Mail.SmtpClient`, which is legacy and
+does not support modern STARTTLS/OAuth flows well). This task only implements sending - it does **not**
+wire the outbox processor into `BackgroundJobsWorker`'s cycle (still `NoOpBackgroundJobCycle` - see "What
+the earlier WP-8 branches did not implement" below), so nothing is actually sent automatically yet.
+
+**Why Gmail**: it needs no owned domain, no DNS records (SPF/DKIM/DMARC), and no paid transactional-email
+account to get a real, working SMTP sender during development - a personal Gmail account's SMTP submission
+endpoint (`smtp.gmail.com:587`, STARTTLS) is free and immediately available. The configuration shape is
+deliberately **provider-neutral** (`EmailOptions`/`SmtpOptions` - `BookSpace.Application/Email/`) - nothing
+but the default `Host`/`Port`/`Security` values is Gmail-specific, so swapping in a real transactional
+provider (SendGrid, Postmark, Azure Communication Services, ...) later is a configuration change plus a new
+`INotificationSender`, not a redesign. This is explicitly **not** meant for production-scale bulk sending -
+a personal Gmail account has its own daily sending caps and is not a transactional-email provider.
+
+### Manual, one-time setup (not automated - and cannot be)
+
+1. A Google Account with 2-Step Verification turned on (required before an App Password can exist).
+2. Generate an **App Password** for it (Google Account -> Security -> 2-Step Verification -> App
+   passwords) - a 16-character credential scoped to this one use, **never the real account password**.
+3. Set `Email__Smtp__Username` to the Gmail address and `Email__Smtp__Password` to that App Password, via
+   environment variables (`Email__Smtp__Password` double-underscore convention for Podman/Azure - see
+   `.env.example`/`compose.local.yaml`) or `dotnet user-secrets` locally - **never** in an
+   `appsettings*.json` file (`EmailOptionsValidator` does not even look there; nothing reads a password
+   from committed configuration).
+4. Set `Email__Enabled=true` only once the above exists. Leaving it `false` (the default) is the normal
+   state for local development and CI - the app and the entire automated test suite run with zero SMTP
+   configuration at all when it's `false`, and `SmtpNotificationSender` returns a `PermanentFailure`
+   immediately (never a fake `Success`) if it is somehow still invoked while disabled.
+
+### Manually testing a real send
+
+There is no automated test that sends a real email - every `SmtpNotificationSenderTests`/
+`EmailRecipientResolverTests` case uses a fake `ISmtpTransport`/fake recipient resolver, never a real
+network connection or a real Gmail account (see "Testing" below). To actually verify delivery: set the five
+`Email__Smtp__*` variables plus `Email__Enabled=true` locally (user-secrets, or `.env` for the container),
+start the app, and enqueue a real booking lifecycle notification (e.g. confirm a booking) - this is a
+deliberate manual step, not part of `dotnet test`.
+
+### Recipient lookup
+
+An outbox item only carries `RecipientUserId` (and, as of this task, `TenantId` on `NotificationMessage` -
+see `INotificationSender.cs`) - never an email address. `IEmailRecipientResolver`
+(`BookSpace.Application/Notifications/IEmailRecipientResolver.cs`, implemented by `EmailRecipientResolver`
+in Infrastructure) resolves the live address at send time. This is **the one, narrow, documented exception**
+to the global tenant query filter for background email delivery - background processing has no HTTP
+request/JWT claim to scope an ambient tenant by, the same justification already used by
+`NotificationOutboxReader`/`NotificationOutboxProcessor` (see docs/tenant-isolation.md). The query filters
+by **both** `TenantId` and `RecipientUserId` in the same `Where` clause, `AsNoTracking()`, projecting only
+`Email`/`FirstName`/`LastName` - never `UserId` alone, so a cross-tenant `(tenantId, recipientUserId)`
+combination can never resolve to a row (proven against real SQL Server LocalDB in
+`EmailRecipientResolverTests`). A missing user or one with no usable email address returns `null`, which
+`SmtpNotificationSender` treats as a **permanent** failure - retrying will not make a nonexistent recipient
+deliverable.
+
+### Email templates
+
+`BookingEmailTemplateRenderer` (`BookSpace.Application/Email/`) renders the three booking lifecycle types
+deterministically - plain string composition, no Razor, no external template engine, since there are
+exactly three fixed shapes:
+
+| `NotificationType` | Subject |
+|---|---|
+| `Booking.Confirmation` | "Your BookSpace booking is confirmed" |
+| `Booking.Rejection` | "Your BookSpace booking was not approved" |
+| `Booking.Cancellation` | "Your BookSpace booking has been cancelled" |
+
+Every message gets both a plain-text and a basic HTML body, built from `BookingNotificationPayload`
+(`BookingId`/`ResourceId`/`StartUtc`/`EndUtc`/`Quantity`) plus the resolved recipient's display name. Every
+dynamic value placed into the HTML body - including the recipient's own display name, the one genuinely
+user-controlled string involved - is HTML-encoded (`System.Net.WebUtility.HtmlEncode`); times are rendered
+in UTC and explicitly labeled "UTC" - this renderer has no resource/user timezone available to it and must
+never invent one. A malformed `PayloadJson` or an unrecognized `NotificationType` throws
+`EmailTemplateException`, which `SmtpNotificationSender` turns into a **permanent** failure - retrying
+cannot make a malformed payload become renderable.
+
+### Message-Id and the SMTP/Gmail crash window
+
+Every outgoing message gets `Message-Id: <bookspace-outbox-{outboxItemId}@bookspace.local>` and an
+`X-BookSpace-Outbox-Id` header, both deterministic from the outbox item's own id - identical on a retry of
+the same item (proven in `SmtpNotificationSenderTests`: calling `SendAsync` twice for the same
+`OutboxItemId` produces byte-identical `MessageId`/header/subject/body). **This is not a deduplication
+guarantee** - Gmail, and SMTP generally, is not obligated to honor `Message-Id` for dedup. It exists purely
+for traceability (and possible dedup on the *receiving* client/provider side, which this system has no
+control over).
+
+The actual crash window this cannot close: (1) Gmail's SMTP server accepts the message (the `SendAsync`
+call returns successfully); (2) the application crashes before `NotificationOutboxProcessor` persists
+`Status = Sent` back to the database; (3) the outbox item is still `Pending`/due for retry; (4) the next
+processing attempt sends the identical message again, with the identical `Message-Id`, and Gmail has no
+obligation to recognize or drop the duplicate. The `(TenantId, IdempotencyKey)` unique constraint and the
+outbox's own idempotent *enqueue* prevent a duplicate outbox **row** from ever being created - they cannot
+prevent this external, already-sent-twice SMTP delivery. **The system therefore has at-least-once, not
+exactly-once, delivery semantics** - this is a deliberate, accepted limitation of the outbox pattern applied
+to a side effect (sending an email) that cannot itself be made transactional with the database.
+
+### Transient/permanent failure classification
+
+`SmtpNotificationSender` never retries internally - it returns exactly one `NotificationSendResult` per
+call; `NotificationOutboxProcessor` remains the sole owner of `AttemptCount`, exponential backoff,
+`AvailableAtUtc`, the max-attempt cap, and `DeadLettered`. A caller's own `OperationCanceledException`
+(from the `CancellationToken` this method was given) always propagates untouched - never caught, never
+turned into a `Transient`/`Permanent` result.
+
+| Condition | Outcome |
+|---|---|
+| `Email:Enabled` is `false` | Permanent |
+| Recipient not found, or has no usable email address | Permanent |
+| Malformed `PayloadJson`, or an unrecognized `NotificationType` | Permanent |
+| `MailKit.Security.AuthenticationException` (SMTP AUTH failure) | Permanent |
+| `SmtpCommandException` with a 4xx `StatusCode` | Transient |
+| `SmtpCommandException` with a 5xx `StatusCode` | Permanent |
+| `SmtpProtocolException` / `SocketException` / `IOException` (connection-level) | Transient |
+| `ArgumentException` / `FormatException` (bad configuration/address) | Permanent |
+| Any other, unclassified exception | Transient (conservative default - bounded by the existing max-attempt cap rather than dead-lettering on the first occurrence of something this sender did not specifically anticipate) |
+
+Logging is deliberately narrow: `OutboxItemId`, `NotificationType`, outcome, SMTP status code, and duration
+are logged; the password/App Password, the recipient's email address, the full payload, the full HTML body,
+and raw SMTP authentication exchanges never are. Even on a classified failure, the raw exception
+message/`ToString()` is never logged (a MailKit auth/command exception's own message could in principle
+embed server response text this sender has no way to guarantee is credential-free) - only the exception's
+type name and, where available, the SMTP status code.
+
+### SMTP connection lifetime
+
+One connect/authenticate/send/disconnect cycle **per message**, via `ISmtpTransport`/`ISmtpTransportFactory`
+(`BookSpace.Infrastructure/Email/`) wrapping MailKit's `SmtpClient` - never a shared, reused connection
+across messages, and never registered as a singleton (`SmtpClient` is not thread-safe). This is the natural
+fit for how this system already processes notifications: `NotificationOutboxProcessor.ProcessBatchAsync`
+processes items **sequentially**, one at a time, and `ProcessItemAsync` already creates a fresh DI scope -
+and therefore a fresh `INotificationSender` - per individual item (see "Per-item processing and retry"
+above), so a connection reused *across* items would require working against that existing per-item
+isolation, not with it. The tradeoff accepted is a small SMTP handshake cost per message rather than a
+pooled/reused connection - acceptable at the batch sizes this system targets, and far simpler to reason
+about and test than a connection pool would be. `ISmtpTransportFactory` exists specifically so tests can
+inject a fake transport (`FakeSmtpTransport`) and assert proper `Connect`/`Authenticate`/`Send`/`Disconnect`/
+`Dispose` sequencing without ever touching a real network.
+
+### Configuration
+
+Bound from the `Email` section, validated via `EmailOptionsValidator` (`IValidateOptions<EmailOptions>`,
+`ValidateOnStart()` in `Program.cs` - same convention as `BackgroundJobsOptions`), every check gated behind
+`Enabled=true` first so a disabled/default configuration needs zero SMTP fields to start:
+
+```
+Email__Enabled               # false by default - keep it false locally/in CI
+Email__Provider              # "Smtp" - the only provider today, kept as a field for a future second one
+Email__FromAddress           # required when Enabled=true
+Email__FromName              # defaults to "BookSpace"
+Email__Smtp__Host            # defaults to smtp.gmail.com
+Email__Smtp__Port            # defaults to 587
+Email__Smtp__Security        # "StartTls" (default) | "SslOnConnect" | "None"
+Email__Smtp__Username        # required when Enabled=true - never in appsettings*.json
+Email__Smtp__Password        # required when Enabled=true - a Gmail App Password, never in appsettings*.json
+```
+
+`appsettings.json` only carries `Enabled`/`Provider`/`FromAddress`/`FromName`/`Smtp:Host`/`Smtp:Port`/
+`Smtp:Security` (all safe, non-secret defaults) - `Smtp:Username`/`Smtp:Password` are deliberately absent
+from it entirely, not merely left blank, so there is no key in committed configuration that could ever look
+like an acceptable place to put a credential.
+
+### Testing
+
+No automated test sends a real email or touches a real Gmail account - `SmtpNotificationSenderTests` uses
+`FakeSmtpTransport`/`FakeSmtpTransportFactory` (`BookSpace.Infrastructure.Tests/Email/`) for every
+success/failure/classification/disposal/logging-safety case, and `EmailRecipientResolverTests` proves the
+tenant-isolation guarantee against real SQL Server LocalDB (the global query filter itself is what is under
+test there, so a mock would not prove anything). `BookingEmailTemplateRendererTests` covers all three
+templates, HTML escaping, UTC labeling, and the malformed-payload/unknown-type failure cases with no
+database or network involved at all.
+
 ## What the earlier WP-8 branches did not implement
 
-A real `INotificationSender` implementation, the actual transactional email integration, no-show
-processing, stale-approval handling, an ICS feed, wiring the outbox processor into the worker's cycle, or
-any new booking business logic beyond enqueuing a notification at the point a lifecycle transition is
-already decided. All of that remains future WP-8 work. In particular: the lease lock is infrastructure for
-*scheduling*, not for *correctness of business side effects* (see "What this guarantees, and what it does
-not" above); the notification outbox is infrastructure for *durable, deduplicated intent*, not for
-*guaranteed email delivery*; per-item processing adds *persisted retry/backoff/dead-letter bookkeeping*,
-still not *exactly-once delivery* of the external side effect itself (see "Exactly-once limitation, still"
-above); and this branch makes the booking state change and its notification enqueue(s) commit atomically -
-including for every multi-occurrence cascade - without yet guaranteeing anything about the eventual email
-delivery itself, which remains a separate, later concern once a real `INotificationSender` exists.
+No-show processing, stale-approval handling, an ICS feed, wiring the outbox processor into the worker's
+cycle (still `NoOpBackgroundJobCycle` - a real `INotificationSender` now exists, but nothing calls it
+automatically yet), job correlation IDs, aggregate per-cycle logging, or any new booking business logic
+beyond enqueuing a notification at the point a lifecycle transition is already decided. All of that remains
+future WP-8 work. In particular: the lease lock is infrastructure for *scheduling*, not for *correctness of
+business side effects* (see "What this guarantees, and what it does not" above); the notification outbox is
+infrastructure for *durable, deduplicated intent*, not for *guaranteed email delivery*; per-item processing
+adds *persisted retry/backoff/dead-letter bookkeeping*, still not *exactly-once delivery* of the external
+side effect itself; the booking-lifecycle-notification branch makes the booking state change and its
+notification enqueue(s) commit atomically, including for every multi-occurrence cascade; and this Gmail SMTP
+sender can now actually deliver one of those enqueued notifications - but only with **at-least-once**
+delivery semantics (see "Message-Id and the SMTP/Gmail crash window" above), and only once something besides
+a manual test actually calls it.

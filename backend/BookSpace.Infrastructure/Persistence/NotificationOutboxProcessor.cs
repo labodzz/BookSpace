@@ -53,7 +53,7 @@ internal sealed class NotificationOutboxProcessor(
         // not "succeeded" - see docs/background-jobs.md ("AttemptCount semantics"). Still only in memory:
         // nothing is persisted until the attempt actually completes (see the catch below for why).
         entity.AttemptCount += 1;
-        var message = new NotificationMessage(entity.Id, entity.NotificationType, entity.RecipientUserId, entity.PayloadJson);
+        var message = new NotificationMessage(entity.Id, entity.TenantId, entity.NotificationType, entity.RecipientUserId, entity.PayloadJson);
 
         NotificationSendResult result;
         try
