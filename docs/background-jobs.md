@@ -1126,18 +1126,140 @@ test there, so a mock would not prove anything). `BookingEmailTemplateRendererTe
 templates, HTML escaping, UTC labeling, and the malformed-payload/unknown-type failure cases with no
 database or network involved at all.
 
+## Notification outbox cycle
+
+`NotificationOutboxJobCycle` (`BookSpace.Application.BackgroundJobs`) is the real `IBackgroundJobCycle`
+`BackgroundJobsWorker` resolves from its per-cycle scope - it replaces `NoOpBackgroundJobCycle`, which has
+been deleted (it had no remaining purpose once a real cycle existed; `BackgroundJobsWorkerTests.cs`'s own
+worker-level tests already use their own purpose-built fakes, never `NoOpBackgroundJobCycle` itself). This
+is the piece that finally connects every earlier WP-8 branch into one running system:
+
+```
+BackgroundJobsWorker (singleton, owns the poll loop)
+  -> IJobLeaseCoordinator.TryAcquireAsync (skips this poll entirely if another instance already owns the lease)
+  -> fresh IServiceScope, resolves IBackgroundJobCycle = NotificationOutboxJobCycle
+    -> INotificationOutboxReader.GetDueBatchAsync(BackgroundJobsOptions.BatchSize)  (one bounded call, once)
+    -> INotificationOutboxProcessor.ProcessBatchAsync(batch)                        (per-item retry/backoff/dead-letter, unchanged)
+      -> INotificationSender.SendAsync (SmtpNotificationSender, per item)
+```
+
+### What the cycle owns, and what it deliberately does not
+
+`NotificationOutboxJobCycle` is thin on purpose: it owns the `Email:Enabled` short-circuit, the one bounded
+due-batch query per poll, correlation, and the one end-of-cycle summary log line. It owns **none** of
+`AttemptCount`/backoff/`AvailableAtUtc`/`Sent`/`DeadLettered`/transient-vs-permanent classification/actual
+SMTP sending - `NotificationOutboxProcessor` already owns every bit of that, completely unchanged in
+behavior by this branch. The one change made to `INotificationOutboxProcessor` here is that
+`ProcessBatchAsync` now *returns* `IReadOnlyList<NotificationOutboxBatchItemResult>` (one entry per item
+actually started - `Outcome` is `null` exactly when that item's own unexpected exception was already caught
+and logged inside `ProcessBatchAsync`) instead of returning nothing - the cycle's summary counts are built
+entirely from this structured list, never by parsing a log line or an exception message.
+
+### Email disabled: the cycle checks this itself, not just the sender
+
+`SmtpNotificationSender` already refuses to send and returns `Permanent` when `Email:Enabled` is false (see
+"Gmail SMTP sender" above) - but relying on only that guard would still mean the *processor* ran, marked a
+real due item's delivery attempt as failed, and - on whichever attempt happened to be the
+`MaxNotificationAttempts`-th - dead-lettered it, the first time this cycle ever ran with Email disabled and
+real items due. `NotificationOutboxJobCycle` checks `EmailOptions.Enabled` itself, first, before calling the
+reader at all: when disabled, it returns immediately having made zero database reads, zero database writes,
+and zero network calls. Every `Pending` item is left byte-for-byte untouched - `AttemptCount` unchanged,
+nothing dead-lettered - confirmed live against the real dev database (not just unit-tested): starting the
+app with `BackgroundJobs:Enabled=true` and the default `Email:Enabled=false` produces exactly one line per
+poll - `Notification outbox cycle skipped - Email:Enabled is false.` - and nothing else.
+
+### Bounded batch, one poll at a time
+
+The cycle calls `GetDueBatchAsync` exactly **once** per `RunCycleAsync` invocation, using
+`BackgroundJobsOptions.BatchSize` unchanged (no second batch-size knob was introduced). A backlog of 1,000
+due items with `BatchSize=50` is processed 50 at a time, one poll interval apart - there is no inner loop
+that drains an entire backlog in one cycle. `ProcessedCount` (`PickedCount` in the summary line) is always
+`<= BatchSize`, since the reader itself already enforces that bound.
+
+### DI scope: per cycle, and per item within it
+
+Unchanged from "Why it creates a new DI scope per cycle" above, now with a concrete cycle to prove it:
+`NotificationOutboxJobCycle` is registered `Scoped` and depends only on other `Scoped`/singleton-safe
+services (`INotificationOutboxReader`, `INotificationOutboxProcessor`, `IOptions<T>`,
+`IBackgroundJobInstanceIdentity`, `ICorrelationIdContext`, `TimeProvider`, `ILogger`) - it is only ever
+resolved from the fresh per-cycle scope `BackgroundJobsWorker` already creates, never held by that singleton
+itself. `NotificationOutboxProcessor` then creates a **second**, finer-grained scope **per individual item**
+inside that batch (unchanged, pre-existing behavior) - so one item's database error can never corrupt
+another item's `DbContext`/change tracker within the same cycle.
+
+### Job-run and item correlation
+
+A new correlation id (`Guid.NewGuid()`) is minted at the start of every `RunCycleAsync` call and set on the
+same `ICorrelationIdContext` an HTTP request would use (it is `AsyncLocal`-backed specifically so it works
+for a background job with no `HttpContext` at all - see its own doc comment). It is pushed onto the logging
+pipeline via `ILogger.BeginScope(new Dictionary<string, object?> { ["CorrelationId"] = ..., ["JobName"] =
+"notification-outbox", ["JobOwnerId"] = instanceIdentity.OwnerId })` - the same `"CorrelationId"` property
+name `CorrelationIdMiddleware` uses for an HTTP request, but via `ILogger.BeginScope` rather than
+`Serilog.Context.LogContext.PushProperty` directly, since `BookSpace.Application` (unlike `BookSpace.Api`)
+has no direct Serilog package reference - Serilog's own `Microsoft.Extensions.Logging` bridge enriches log
+events with `BeginScope`'s dictionary entries identically either way, confirmed live: a running instance's
+log line reads `(cid: d4bef29f-...) Notification outbox cycle skipped - Email:Enabled is false.`, using the
+exact same `(cid: ...)` output template convention an HTTP request's log lines already use, while lines
+emitted *outside* that scope (lease acquire/release, raw `DbCommand` logging) correctly show an empty `(cid:
+)`. `NotificationOutboxProcessor.ProcessBatchAsync` additionally pushes `OutboxItemId`/`NotificationType`
+as their own nested `BeginScope` around each item's own processing, so the full chain - job run -> due-batch
+query -> one specific outbox item -> its processor attempt -> its sender attempt -> its status update - can
+be followed through a correlation id plus two item-identifying properties, without ever needing the
+recipient's email, `PayloadJson`, SMTP credentials, or any token in a log line to do it.
+
+### The end-of-cycle summary
+
+Exactly one structured line per **normally completed** cycle:
+
+```
+Notification outbox cycle completed. JobName=notification-outbox CorrelationId=... RequestedBatchSize=50
+PickedCount=3 SucceededCount=2 TransientFailureCount=1 PermanentFailureCount=0 DeadLetterCount=0
+UnexpectedFailureCount=0 ElapsedMilliseconds=842.3
+```
+
+`PermanentFailureCount` and `DeadLetterCount` are always reported as the same number in this implementation:
+`NotificationOutboxItemOutcome` does not distinguish "a permanent send failure" from "a transient failure
+that just exhausted `MaxNotificationAttempts`" - both already collapse into the single `DeadLettered`
+outcome inside `NotificationOutboxProcessor` (see "Per-item processing and retry" above). Splitting that
+further here would mean reinterpreting classification logic the processor already owns, not just reporting
+it, so this doc states the equivalence rather than pretending a distinction the outcome model does not
+actually make. `ElapsedMilliseconds` is measured via `TimeProvider.GetTimestamp()`/`GetElapsedTime(...)`
+(the same `TimeProvider` abstraction used everywhere else in this subsystem), which is what makes it
+testable with `FakeTimeProvider` instead of a real elapsed delay.
+
+A cycle that is **interrupted** (the stopping token fires, or the job lease is lost mid-cycle - both arrive
+as the one linked `CancellationToken` `BackgroundJobsWorker` already passes down; this cycle does not
+distinguish between them, and does not implement any lease of its own) never logs the normal summary line -
+it logs a distinct "cycle interrupted" line naming how many of the picked items had actually been started,
+then re-raises `OperationCanceledException` via `cancellationToken.ThrowIfCancellationRequested()` so
+`BackgroundJobsWorker.RunCycleAsync`'s existing two separate `catch` clauses (real shutdown vs. lease lost)
+still see a genuine cancellation to distinguish, exactly as they did before this cycle existed.
+
+### Three distinct guarantees, not one
+
+Worth restating precisely now that all three actually exist in the running system:
+
+- **The job lease** (`IJobLeaseCoordinator`) prevents two application instances from running the
+  *notification-outbox cycle itself* at the same time - a scheduling guarantee, not a data guarantee.
+- **The outbox's own `(TenantId, IdempotencyKey)` unique constraint** prevents a duplicate *outbox row* from
+  ever being created for the same logical notification, regardless of how many times the enqueuing business
+  operation is retried (see "Booking lifecycle notifications" above).
+- **Gmail/SMTP delivery** still has the at-least-once crash window described in "Message-Id and the SMTP/
+  Gmail crash window" above: the lease stops two instances from racing to process the *same due item*
+  concurrently, and the idempotency key stops a *second outbox row* from ever existing, but neither one can
+  stop a *second real email* from reaching a real inbox if the process crashes after Gmail accepted the
+  message but before this system recorded `Status=Sent`. Nothing in this cycle (or anywhere else in this
+  branch) closes that gap - it is a property of at-least-once delivery, not a bug.
+
 ## What the earlier WP-8 branches did not implement
 
-No-show processing, stale-approval handling, an ICS feed, wiring the outbox processor into the worker's
-cycle (still `NoOpBackgroundJobCycle` - a real `INotificationSender` now exists, but nothing calls it
-automatically yet), job correlation IDs, aggregate per-cycle logging, or any new booking business logic
-beyond enqueuing a notification at the point a lifecycle transition is already decided. All of that remains
-future WP-8 work. In particular: the lease lock is infrastructure for *scheduling*, not for *correctness of
-business side effects* (see "What this guarantees, and what it does not" above); the notification outbox is
-infrastructure for *durable, deduplicated intent*, not for *guaranteed email delivery*; per-item processing
-adds *persisted retry/backoff/dead-letter bookkeeping*, still not *exactly-once delivery* of the external
-side effect itself; the booking-lifecycle-notification branch makes the booking state change and its
-notification enqueue(s) commit atomically, including for every multi-occurrence cascade; and this Gmail SMTP
-sender can now actually deliver one of those enqueued notifications - but only with **at-least-once**
-delivery semantics (see "Message-Id and the SMTP/Gmail crash window" above), and only once something besides
-a manual test actually calls it.
+No-show processing, stale-approval handling, an ICS feed, and any new booking business logic beyond
+enqueuing a notification at the point a lifecycle transition is already decided, all remain future WP-8
+work - unchanged by this branch. In particular: the notification outbox is infrastructure for *durable,
+deduplicated intent*, not for *guaranteed email delivery*; per-item processing adds *persisted retry/
+backoff/dead-letter bookkeeping*, still not *exactly-once delivery* of the external side effect itself; the
+booking-lifecycle-notification branch makes the booking state change and its notification enqueue(s) commit
+atomically, including for every multi-occurrence cascade; and the real notification-outbox cycle this branch
+adds now actually drives all of that automatically, end to end, once an application instance is configured
+with `BackgroundJobs:Enabled=true` and `Email:Enabled=true` - but still only with **at-least-once** delivery
+semantics overall (see "Three distinct guarantees, not one" just above).

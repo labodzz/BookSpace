@@ -7,6 +7,7 @@ using BookSpace.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging.Testing;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
@@ -389,6 +390,137 @@ public sealed class NotificationOutboxProcessorTests : IAsyncLifetime
 
         await processor.ProcessItemAsync(item, CancellationToken.None);
         Assert.Null((await LoadEntityAsync(item.Id)).LastError);
+    }
+
+    // --- ProcessBatchAsync: structured results + item-level log scope (docs/background-jobs.md,
+    // "Notification outbox cycle") ---
+
+    [Fact]
+    public async Task ProcessBatchAsync_ReturnsOneResultPerStartedItem_InTheSameOrderAsTheBatch()
+    {
+        var item1 = await SeedItemAsync();
+        var item2 = await SeedItemAsync();
+        var sender = new FakeNotificationSender();
+        sender.Enqueue(NotificationSendResult.Success());
+        sender.Enqueue(NotificationSendResult.Transient("temporary"));
+        var (processor, _) = CreateProcessor(sender);
+
+        var results = await processor.ProcessBatchAsync([item1, item2], CancellationToken.None);
+
+        Assert.Equal(2, results.Count);
+        Assert.Equal((item1.Id, NotificationOutboxItemOutcome.Sent), (results[0].OutboxItemId, results[0].Outcome));
+        Assert.Equal((item2.Id, NotificationOutboxItemOutcome.RetryScheduled), (results[1].OutboxItemId, results[1].Outcome));
+    }
+
+    [Fact]
+    public async Task ProcessBatchAsync_WhenAnItemThrowsUnexpectedly_ReportsThatItemWithANullOutcome()
+    {
+        var item1 = await SeedItemAsync();
+        var item2 = await SeedItemAsync();
+        var sender = new FakeNotificationSender();
+        sender.EnqueueThrow(new InvalidOperationException("boom"));
+        sender.Enqueue(NotificationSendResult.Success());
+        var (processor, _) = CreateProcessor(sender);
+
+        var results = await processor.ProcessBatchAsync([item1, item2], CancellationToken.None);
+
+        Assert.Equal(2, results.Count);
+        Assert.Null(results[0].Outcome);
+        Assert.Equal(NotificationOutboxItemOutcome.Sent, results[1].Outcome);
+    }
+
+    [Fact]
+    public async Task ProcessBatchAsync_WhenCancelledMidBatch_ReturnsOnlyResultsForItemsThatActuallyStarted()
+    {
+        var item1 = await SeedItemAsync();
+        var item2 = await SeedItemAsync();
+        var sender = new FakeNotificationSender();
+        var cts = new CancellationTokenSource();
+        sender.CancelDuringSend = cts; // cancels the shared token the instant the first item's SendAsync is invoked
+        var (processor, _) = CreateProcessor(sender);
+
+        var results = await processor.ProcessBatchAsync([item1, item2], cts.Token);
+
+        Assert.Empty(results); // the first item's own attempt was itself cancelled mid-delivery, so it has no result either
+        var entity = await LoadEntityAsync(item2.Id);
+        Assert.Equal(0, entity.AttemptCount); // the second item was never started
+    }
+
+    [Fact]
+    public async Task ProcessBatchAsync_LogsEveryItemLineWithinAScopeCarryingOutboxItemIdAndNotificationType()
+    {
+        var item = await SeedItemAsync();
+        var sender = new FakeNotificationSender();
+        sender.Enqueue(NotificationSendResult.Success());
+        var fakeLogger = new FakeLogger<NotificationOutboxProcessor>();
+        var scopeFactory = BuildScopeFactory(sender);
+        var processor = new NotificationOutboxProcessor(
+            scopeFactory, Options.Create(new BackgroundJobsOptions()), new FakeTimeProvider(DateTimeOffset.UtcNow), fakeLogger);
+
+        await processor.ProcessBatchAsync([item], CancellationToken.None);
+
+        var records = fakeLogger.Collector.GetSnapshot();
+        Assert.NotEmpty(records);
+        Assert.All(records, record => Assert.Contains(
+            record.Scopes,
+            scope => scope is IEnumerable<KeyValuePair<string, object?>> pairs
+                && pairs.Any(pair => pair.Key == "OutboxItemId" && Equals(pair.Value, item.Id))));
+        Assert.All(records, record => Assert.Contains(
+            record.Scopes,
+            scope => scope is IEnumerable<KeyValuePair<string, object?>> pairs
+                && pairs.Any(pair => pair.Key == "NotificationType" && Equals(pair.Value, item.NotificationType))));
+    }
+
+    // Proves the per-item isolation/scope logging this task added never incidentally leaks the one thing
+    // a NotificationMessage actually carries that the sender needs but logging never should: the
+    // recipient's identity or the payload content - see docs/background-jobs.md ("Logging").
+    [Fact]
+    public async Task ProcessBatchAsync_NeverLogsTheRecipientIdOrThePayload()
+    {
+        // RecipientUserId must be a real, already-seeded user (FK-enforced) - _userId is distinctive
+        // enough on its own (a fresh random Guid per test run) to prove it never leaks into a log line.
+        var itemId = Guid.NewGuid();
+        var distinctivePayload = $"{{\"marker\":\"{Guid.NewGuid():N}\"}}";
+
+        await using (var dbContext = CreateDbContext())
+        {
+            dbContext.NotificationOutboxItems.Add(new NotificationOutboxItem
+            {
+                Id = itemId,
+                TenantId = _tenantId,
+                NotificationType = "Booking.Confirmation",
+                RecipientUserId = _userId,
+                PayloadJson = distinctivePayload,
+                IdempotencyKey = $"test:{itemId:N}",
+                CreatedAtUtc = DateTimeOffset.UtcNow,
+                // A minute in the past, not a bare UtcNow - GetDueBatchAsync compares against the
+                // DATABASE's own SYSUTCDATETIME() at query time (see NotificationOutboxReader), not this
+                // process's clock, so a value "now" by the app's own clock can race against a server clock
+                // that is a few milliseconds behind under load. Same safe margin NotificationOutboxReaderTests
+                // already uses for exactly this reason.
+                AvailableAtUtc = DateTimeOffset.UtcNow.AddMinutes(-1),
+                Status = NotificationOutboxStatus.Pending,
+                AttemptCount = 0,
+            });
+            await dbContext.SaveChangesAsync();
+        }
+
+        var item = (await GetDueBatchAsync(50)).Single(candidate => candidate.Id == itemId);
+        var sender = new FakeNotificationSender();
+        sender.Enqueue(NotificationSendResult.Success());
+        var fakeLogger = new FakeLogger<NotificationOutboxProcessor>();
+        var scopeFactory = BuildScopeFactory(sender);
+        var processor = new NotificationOutboxProcessor(
+            scopeFactory, Options.Create(new BackgroundJobsOptions()), new FakeTimeProvider(DateTimeOffset.UtcNow), fakeLogger);
+
+        await processor.ProcessBatchAsync([item], CancellationToken.None);
+
+        foreach (var record in fakeLogger.Collector.GetSnapshot())
+        {
+            Assert.DoesNotContain(_userId.ToString(), record.Message);
+            Assert.DoesNotContain("marker", record.Message);
+            Assert.DoesNotContain(distinctivePayload, record.Message);
+        }
     }
 
     // --- Test infrastructure ---
