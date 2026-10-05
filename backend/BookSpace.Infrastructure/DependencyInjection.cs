@@ -59,6 +59,7 @@ public static class DependencyInjection
         // scope NotificationOutboxProcessor already creates, matching IEmailRecipientResolver's lifetime.
         services.AddScoped<IBookingReminderReader, BookingReminderReader>();
         services.AddScoped<IBookingReminderEligibilityChecker, BookingReminderEligibilityChecker>();
+        services.AddScoped<IBookingReminderMarker, BookingReminderMarker>();
         // Scoped, not singleton: it only ever holds IServiceScopeFactory itself (safe at any lifetime),
         // but letting it be Scoped avoids ever forcing a future INotificationSender implementation that
         // needs its own scoped dependencies (a scoped HttpClient, say) into a captive-dependency problem.

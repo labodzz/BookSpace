@@ -1313,16 +1313,62 @@ it was cancelled after a reminder was already enqueued, see "Cancellation race" 
 
 `booking:{bookingId}:reminder` - the same `booking:{bookingId}:{type}` format and the same
 `(TenantId, IdempotencyKey)` unique constraint every other booking notification already relies on
-(`BookingNotificationFactory.Reminder`). `ReminderProducer` deliberately does **not** try to pre-filter
-candidates that already have a reminder enqueued out of its own query - `NotificationOutboxItems` has no
-`BookingId` column to join on, only the composed `IdempotencyKey` string, and translating that
-string-comparison into a reliable SQL anti-join is exactly the kind of fragile, easy-to-get-subtly-wrong
-cross-type SQL translation this codebase avoids elsewhere too. Instead, every candidate within the
-lead-time window is resubmitted to `EnqueueManyAsync` on every poll until it leaves the window (by starting,
-or being cancelled); the ones already enqueued simply come back `AlreadyExists` - cheap, harmless, and
-exactly what the database constraint exists to make safe regardless of how many times it happens. The
-database constraint, never an `Any()`-then-insert check, remains the sole authority against a genuine
-concurrent/retried duplicate.
+(`BookingNotificationFactory.Reminder`). This constraint is, and remains, the sole, final authority against
+a duplicate outbox **row** ever existing - including under a genuinely concurrent/retried write race. Never
+replaced by anything below.
+
+### The `ReminderQueuedAtUtc` marker - a second, distinct mechanism for a second, distinct problem
+
+The unique constraint alone is not enough to make a backlog larger than one `BatchSize` actually drain -
+only to stop a duplicate *row*. The original version of this query re-selected the SAME oldest `BatchSize`
+`Confirmed` bookings on every single poll once they were already enqueued, because nothing about the query
+itself knew they had been handled - `EnqueueManyAsync` would faithfully report `AlreadyExists` for every one
+of them, poll after poll, while every booking *behind* them in the backlog starved forever (e.g. 100 due
+bookings, `BatchSize=50`: bookings 51-100 would never be reached, no matter how many polls ran).
+
+`Booking.ReminderQueuedAtUtc` (nullable `DateTimeOffset?`) closes this. It means **"a `Booking.Reminder`
+outbox item was successfully enqueued for this booking"** - nothing more. It specifically does **not** mean
+"the reminder was sent": it is set once, at enqueue time, and is never cleared or touched again regardless
+of what later happens to that outbox item - `Sent`, `Suppressed` (see "Cancellation race" below), or
+`DeadLettered` all leave it exactly as it was. A booking being cancelled after its reminder was already
+queued does not clear it either - there is no scenario in which a booking is meant to receive a *second*
+reminder, so there is nothing to reset.
+
+`IBookingReminderReader.GetDueBookingsAsync` now also requires `ReminderQueuedAtUtc IS NULL`, so an
+already-handled booking is excluded from the very next poll onward - the query makes room for the next
+booking in the backlog instead of the unique constraint merely absorbing the same duplicate attempt forever.
+
+**Atomic with the outbox row, not a separate write.** `IBookingReminderMarker.StageReminderQueued(bookingId,
+queuedAtUtc)` (Infrastructure: `BookingReminderMarker`) attaches a stub `Booking` (`Id` only) and marks
+exactly the `ReminderQueuedAtUtc` property `Modified` - no `SELECT` round trip, and safe specifically because
+`ReminderProducer`'s candidates come from `IBookingReminderReader`'s own `AsNoTracking()` projection, never a
+tracked entity, so there is no risk of colliding with an already-tracked instance of the same row elsewhere
+on the same `DbContext` (the same identity-map hazard
+[recurring-bookings-and-approvals.md](recurring-bookings-and-approvals.md) documents for a different
+handler). `ReminderProducer` stages this for **every** candidate in the batch, unconditionally, **before**
+calling `INotificationOutboxWriter.EnqueueManyAsync` - so that writer's own internal `SaveChangesAsync`
+commits every staged marker update and every new outbox row together, in exactly one database round trip,
+the same "stage first, enqueue once" pattern the booking-lifecycle-notification/cascade-atomicity work
+already established. Either the whole cycle's outbox items and markers land together, or (a failure injected
+right before commit) neither does - proven against real SQL Server by injecting a `SaveChangesInterceptor`
+failure and confirming, from a separate connection, that neither the outbox rows nor any marker exist
+afterward.
+
+**Legacy/duplicate recovery, "for free."** The marker is staged for every candidate regardless of whether
+its outbox row turns out to be newly created or already exists (`EnqueueOutcome.AlreadyExists`) - which is
+exactly what repairs a row from before this fix shipped, or from an earlier attempt that enqueued the row
+but crashed before persisting the marker: `EnqueueManyAsync`'s own duplicate-key recovery path (see
+"Notification outbox" above for exactly how it detaches the conflicting rows and retries with only the
+genuinely new ones) never detaches or clears the already-staged `Booking` marker updates, so whichever
+`SaveChangesAsync` call ultimately succeeds commits every staged marker alongside it. A booking can never
+end up with a real, durable reminder outbox row and a still-`null` marker.
+
+**Not a replacement for the unique constraint - a different guarantee, for a different failure mode.** The
+constraint's job is "never two rows for the same key, even under a race." The marker's job is "never
+re-select an already-handled row, so the backlog actually drains." Confirmed under real concurrency: two
+genuinely concurrent cycles racing the same backlog (synchronized so both finish reading before either
+writes) still leave exactly one outbox row per booking - the constraint remains what decides that - with the
+marker correctly set on every one of them regardless of which racer's write actually won.
 
 ### Database clock
 
@@ -1347,17 +1393,25 @@ every tenant in one call - this branch adds a new filtered, covering index:
 ```sql
 CREATE INDEX [IX_Bookings_StartUtc] ON [Bookings] ([StartUtc])
   INCLUDE ([TenantId], [UserId], [ResourceId], [EndUtc], [Quantity], [CreatedAtUtc])
-  WHERE [Status] = 'Confirmed'
+  WHERE [Status] = 'Confirmed' AND [ReminderQueuedAtUtc] IS NULL
 ```
 
-(migration `AddBookingReminderDueIndex`) - the same filtered-covering-index pattern `NotificationOutboxItems`'
-own due-batch index already uses, for the same reason. Verified against real SQL Server/LocalDB, not assumed:
-seeded ~5,000 `Bookings` rows (a realistic mix of statuses and `StartUtc` values, mostly outside the window or
-not `Confirmed`) and captured the actual execution plan for the generated query - `PhysicalOp="Index Seek"`
-against `Index="[IX_Bookings_StartUtc]"`, with a `SeekPredicates` node present (confirming a true seek, not a
-scan reported under the same XML element name), plus one cheap `Sort` step for the `CreatedAtUtc`/`Id`
-tie-break (the same trade-off `NotificationOutboxItems`' own index makes - only the primary due-column is
-part of the index key).
+(migration `AddBookingReminderDueIndex`, filter extended by `AddBookingReminderQueuedAtUtc` once the marker
+was introduced) - the same filtered-covering-index pattern `NotificationOutboxItems`' own due-batch index
+already uses, for the same reason. The filter names **both** conditions the query checks: SQL Server can
+only use a filtered index when the query's `WHERE` clause provably implies the index's own filter predicate,
+so a filter of `Status = 'Confirmed'` alone would no longer match once the query also checks
+`ReminderQueuedAtUtc IS NULL`.
+
+Verified against real SQL Server/LocalDB, not assumed, both before and after the marker was added: seeded
+~5,000 `Bookings` rows (a realistic mix of statuses and `StartUtc` values, mostly outside the window or not
+`Confirmed`), including a batch of `Confirmed`, in-window, but *already-marked* rows, and captured the actual
+execution plan for the generated query - `PhysicalOp="Index Seek"` against `Index="[IX_Bookings_StartUtc]"`,
+with `SeekPredicates` present (a true seek, not a scan reported under the same XML element name) and
+`ActualRows` at that seek matching only the genuinely unmarked candidates - proving the already-marked rows
+were excluded *by the index itself*, never fetched and discarded afterward - plus one cheap `Sort` step for
+the `CreatedAtUtc`/`Id` tie-break (the same trade-off `NotificationOutboxItems`' own index makes - only the
+primary due-column is part of the index key).
 
 ### Cancellation race
 
@@ -1387,6 +1441,11 @@ excludes it automatically, so it is never picked up again, and the cycle's summa
 attempted and failed; suppression means delivery was correctly never attempted at all, because sending would
 now be wrong, not because anything went wrong. Collapsing the two would hide that distinction from anyone
 reading the outbox table.
+
+`Booking.ReminderQueuedAtUtc` plays no part in this check and is never touched by it either way - it was
+already set the moment the reminder was enqueued (see "The `ReminderQueuedAtUtc` marker" above) and stays
+set whether the eventual outcome is `Sent` or `Suppressed`, since either way a reminder was already, and
+should only ever be, queued for that booking once.
 
 ### Relationship to `Email:Enabled`
 

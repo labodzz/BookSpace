@@ -173,6 +173,9 @@ namespace BookSpace.Infrastructure.Migrations
                     b.Property<int>("Quantity")
                         .HasColumnType("int");
 
+                    b.Property<DateTimeOffset?>("ReminderQueuedAtUtc")
+                        .HasColumnType("datetimeoffset");
+
                     b.Property<Guid>("ResourceId")
                         .HasColumnType("uniqueidentifier");
 
@@ -202,7 +205,7 @@ namespace BookSpace.Infrastructure.Migrations
                     b.HasIndex("SeriesId");
 
                     b.HasIndex("StartUtc")
-                        .HasFilter("[Status] = 'Confirmed'");
+                        .HasFilter("[Status] = 'Confirmed' AND [ReminderQueuedAtUtc] IS NULL");
 
                     SqlServerIndexBuilderExtensions.IncludeProperties(b.HasIndex("StartUtc"), new[] { "TenantId", "UserId", "ResourceId", "EndUtc", "Quantity", "CreatedAtUtc" });
 

@@ -119,6 +119,37 @@ public sealed class BookingReminderReaderTests : IAsyncLifetime
         Assert.Empty(result);
     }
 
+    // --- Already-enqueued exclusion (the starvation fix): a Confirmed, still-due booking whose reminder
+    // was already successfully enqueued must never be returned again - this is what makes room for the
+    // next booking in the backlog instead of the same oldest BatchSize rows occupying every future poll ---
+
+    [Fact]
+    public async Task GetDueBookingsAsync_WithAConfirmedDueBookingThatAlreadyHasAQueuedReminder_DoesNotReturnIt()
+    {
+        await SeedBookingAsync(
+            _tenantAId, _resourceAId, _userAId, startUtc: DateTimeOffset.UtcNow.AddMinutes(30), status: BookingStatus.Confirmed,
+            reminderQueuedAtUtc: DateTimeOffset.UtcNow.AddMinutes(-1));
+
+        var result = await GetDueBookingsAsync(leadTimeMinutes: 60);
+
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public async Task GetDueBookingsAsync_WithAMixOfAlreadyQueuedAndNotYetQueued_ReturnsOnlyTheNotYetQueuedOne()
+    {
+        await SeedBookingAsync(
+            _tenantAId, _resourceAId, _userAId, startUtc: DateTimeOffset.UtcNow.AddMinutes(10), status: BookingStatus.Confirmed,
+            reminderQueuedAtUtc: DateTimeOffset.UtcNow.AddMinutes(-1));
+        var notYetQueued = await SeedBookingAsync(
+            _tenantAId, _resourceAId, _userAId, startUtc: DateTimeOffset.UtcNow.AddMinutes(20), status: BookingStatus.Confirmed);
+
+        var result = await GetDueBookingsAsync(leadTimeMinutes: 60);
+
+        Assert.Single(result);
+        Assert.Equal(notYetQueued, result[0].BookingId);
+    }
+
     // --- G: bounded batch - never more than batchSize, and the excluded ones are the correct (latest-
     // starting) ones, not an arbitrary subset ---
 
@@ -252,6 +283,27 @@ public sealed class BookingReminderReaderTests : IAsyncLifetime
         Assert.Contains(capturedCommands, message => message.Contains("SELECT TOP(", StringComparison.Ordinal));
     }
 
+    // Proves the generated SQL actually contains the starvation-fix exclusion, not just that it behaves
+    // correctly in-process - see docs/background-jobs.md ("Reminder job - the ReminderQueuedAtUtc marker").
+    [Fact]
+    public async Task GetDueBookingsAsync_GeneratesASqlQueryThatChecksReminderQueuedAtUtcIsNull()
+    {
+        await SeedBookingAsync(_tenantAId, _resourceAId, _userAId, startUtc: DateTimeOffset.UtcNow.AddMinutes(10), status: BookingStatus.Confirmed);
+
+        var capturedCommands = new List<string>();
+        var options = new DbContextOptionsBuilder<BookSpaceDbContext>()
+            .UseSqlServer(_connectionString)
+            .LogTo(message => capturedCommands.Add(message), [DbLoggerCategory.Database.Command.Name], LogLevel.Information)
+            .Options;
+        await using var dbContext = new BookSpaceDbContext(options, new FixedCurrentUserContext());
+        var reader = new BookingReminderReader(dbContext, NullLogger<BookingReminderReader>.Instance);
+
+        await reader.GetDueBookingsAsync(TimeSpan.FromMinutes(60), 50, CancellationToken.None);
+
+        var commandText = capturedCommands.Single(message => message.Contains("SELECT TOP(", StringComparison.Ordinal));
+        Assert.Contains("[ReminderQueuedAtUtc] IS NULL", commandText, StringComparison.Ordinal);
+    }
+
     // Proves both range bounds (the "already past" lower bound and the "not too far in the future" upper
     // bound) are evaluated by the DATABASE's own clock, never materialized from this application
     // instance's clock first - see docs/background-jobs.md ("Reminder job - database clock"). A query
@@ -289,7 +341,8 @@ public sealed class BookingReminderReaderTests : IAsyncLifetime
         return await reader.GetDueBookingsAsync(TimeSpan.FromMinutes(leadTimeMinutes), batchSize, CancellationToken.None);
     }
 
-    private async Task<Guid> SeedBookingAsync(Guid tenantId, Guid resourceId, Guid userId, DateTimeOffset startUtc, BookingStatus status)
+    private async Task<Guid> SeedBookingAsync(
+        Guid tenantId, Guid resourceId, Guid userId, DateTimeOffset startUtc, BookingStatus status, DateTimeOffset? reminderQueuedAtUtc = null)
     {
         var id = Guid.NewGuid();
         await using var dbContext = CreateDbContext();
@@ -303,6 +356,7 @@ public sealed class BookingReminderReaderTests : IAsyncLifetime
             EndUtc = startUtc.AddHours(1),
             Quantity = 1,
             Status = status,
+            ReminderQueuedAtUtc = reminderQueuedAtUtc,
             CreatedAtUtc = DateTimeOffset.UtcNow,
         });
         await dbContext.SaveChangesAsync();

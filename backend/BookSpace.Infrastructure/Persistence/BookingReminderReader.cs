@@ -42,13 +42,19 @@ internal sealed class BookingReminderReader(BookSpaceDbContext dbContext, ILogge
         // See docs/background-jobs.md ("Reminder job - database clock") for how this was confirmed against
         // the actual generated SQL, not assumed.
         //
-        // No pre-filter against NotificationOutboxItems for a reminder already enqueued - see
-        // BookSpace.Application.BackgroundJobs.ReminderProducer's own doc comment for why that exclusion is
-        // deliberately left to EnqueueManyAsync's database constraint instead of attempted here.
+        // ReminderQueuedAtUtc IS NULL excludes every booking whose reminder was already successfully
+        // enqueued - see docs/background-jobs.md ("Reminder job - the ReminderQueuedAtUtc marker") for why
+        // this is required, not optional: the (TenantId, IdempotencyKey) unique constraint alone stops a
+        // SECOND outbox row from ever being created, but does nothing to stop an already-handled booking
+        // from being re-selected as "due" on every later poll - once a backlog's oldest BatchSize bookings
+        // are all already enqueued, they would otherwise occupy every future batch forever, starving every
+        // booking behind them. This is an index-backed, server-side exclusion (see IX_Bookings_StartUtc's
+        // own filter above), never an in-memory filter applied after Take(batchSize).
         var items = await dbContext.Bookings
             .IgnoreQueryFilters()
             .AsNoTracking()
             .Where(booking => booking.Status == BookingStatus.Confirmed
+                && booking.ReminderQueuedAtUtc == null
                 && booking.StartUtc > DateTimeOffset.UtcNow
                 && booking.StartUtc <= DateTimeOffset.UtcNow.AddMinutes(leadTimeMinutes))
             // Oldest-starting-first, with CreatedAtUtc then Id as stable tie-breakers - same reasoning as
