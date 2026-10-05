@@ -30,7 +30,7 @@ public sealed class SmtpNotificationSenderTests
     };
 
     private static (SmtpNotificationSender Sender, FakeSmtpTransportFactory TransportFactory, CapturingLogger<SmtpNotificationSender> Logger) CreateSender(
-        EmailOptions options, EmailRecipient? recipient = null, Func<ISmtpTransport>? transportCreator = null)
+        EmailOptions options, EmailRecipient? recipient = null, Func<ISmtpTransport>? transportCreator = null, FakeBookingReminderEligibilityChecker? reminderChecker = null)
     {
         var transportFactory = new FakeSmtpTransportFactory(transportCreator ?? (() => new FakeSmtpTransport()));
         var logger = new CapturingLogger<SmtpNotificationSender>();
@@ -38,6 +38,7 @@ public sealed class SmtpNotificationSenderTests
             Microsoft.Extensions.Options.Options.Create(options),
             new FakeEmailRecipientResolver(recipient ?? SampleRecipient),
             new BookingEmailTemplateRenderer(),
+            reminderChecker ?? new FakeBookingReminderEligibilityChecker(),
             transportFactory,
             logger);
         return (sender, transportFactory, logger);
@@ -115,6 +116,7 @@ public sealed class SmtpNotificationSenderTests
             Microsoft.Extensions.Options.Options.Create(disabledOptions),
             new FakeEmailRecipientResolver(SampleRecipient),
             new BookingEmailTemplateRenderer(),
+            new FakeBookingReminderEligibilityChecker(),
             new ThrowingSmtpTransportFactory(),
             new CapturingLogger<SmtpNotificationSender>());
 
@@ -130,6 +132,7 @@ public sealed class SmtpNotificationSenderTests
             Microsoft.Extensions.Options.Options.Create(EnabledOptions()),
             new FakeEmailRecipientResolver(null),
             new BookingEmailTemplateRenderer(),
+            new FakeBookingReminderEligibilityChecker(),
             new ThrowingSmtpTransportFactory(),
             new CapturingLogger<SmtpNotificationSender>());
 
@@ -145,6 +148,7 @@ public sealed class SmtpNotificationSenderTests
             Microsoft.Extensions.Options.Options.Create(EnabledOptions()),
             new FakeEmailRecipientResolver(SampleRecipient),
             new BookingEmailTemplateRenderer(),
+            new FakeBookingReminderEligibilityChecker(),
             new ThrowingSmtpTransportFactory(),
             new CapturingLogger<SmtpNotificationSender>());
 
@@ -160,6 +164,7 @@ public sealed class SmtpNotificationSenderTests
             Microsoft.Extensions.Options.Options.Create(EnabledOptions()),
             new FakeEmailRecipientResolver(SampleRecipient),
             new BookingEmailTemplateRenderer(),
+            new FakeBookingReminderEligibilityChecker(),
             new ThrowingSmtpTransportFactory(),
             new CapturingLogger<SmtpNotificationSender>());
 
@@ -232,6 +237,86 @@ public sealed class SmtpNotificationSenderTests
 
         var transport = (FakeSmtpTransport)transportFactory.CreatedTransports.Single();
         Assert.True(transport.Disposed);
+    }
+
+    // --- Reminder-only cancellation-race guard (docs/background-jobs.md, "Cancellation race for
+    // reminders") - the other three notification types never consult IBookingReminderEligibilityChecker
+    // at all (proven below), since each of them is only ever enqueued once its event already happened. ---
+
+    [Fact]
+    public async Task SendAsync_ForAReminder_ChecksEligibilityWithTheMessagesTenantIdAndThePayloadsBookingId()
+    {
+        var checker = new FakeBookingReminderEligibilityChecker(isEligible: true);
+        var (sender, _, _) = CreateSender(EnabledOptions(), reminderChecker: checker);
+        var message = new NotificationMessage(Guid.NewGuid(), Guid.NewGuid(), BookingNotificationTypes.Reminder, Guid.NewGuid(), JsonSerializer.Serialize(SamplePayload));
+
+        await sender.SendAsync(message, CancellationToken.None);
+
+        Assert.Equal(1, checker.CallCount);
+        Assert.Equal(message.TenantId, checker.LastTenantId);
+        Assert.Equal(SamplePayload.BookingId, checker.LastBookingId);
+    }
+
+    [Fact]
+    public async Task SendAsync_ForAReminderThatIsStillEligible_SendsNormally()
+    {
+        var checker = new FakeBookingReminderEligibilityChecker(isEligible: true);
+        var (sender, transportFactory, _) = CreateSender(EnabledOptions(), reminderChecker: checker);
+        var message = new NotificationMessage(Guid.NewGuid(), Guid.NewGuid(), BookingNotificationTypes.Reminder, Guid.NewGuid(), JsonSerializer.Serialize(SamplePayload));
+
+        var result = await sender.SendAsync(message, CancellationToken.None);
+
+        Assert.Equal(NotificationSendOutcome.Success, result.Outcome);
+        Assert.Single(transportFactory.CreatedTransports);
+    }
+
+    [Fact]
+    public async Task SendAsync_ForAReminderWhoseBookingIsNoLongerEligible_ReturnsSuppressedWithoutEverCreatingATransport()
+    {
+        var checker = new FakeBookingReminderEligibilityChecker(isEligible: false);
+        var sender = new SmtpNotificationSender(
+            Microsoft.Extensions.Options.Options.Create(EnabledOptions()),
+            new FakeEmailRecipientResolver(SampleRecipient),
+            new BookingEmailTemplateRenderer(),
+            checker,
+            new ThrowingSmtpTransportFactory(), // proves no transport is ever even requested
+            new CapturingLogger<SmtpNotificationSender>());
+        var message = new NotificationMessage(Guid.NewGuid(), Guid.NewGuid(), BookingNotificationTypes.Reminder, Guid.NewGuid(), JsonSerializer.Serialize(SamplePayload));
+
+        var result = await sender.SendAsync(message, CancellationToken.None);
+
+        Assert.Equal(NotificationSendOutcome.Suppressed, result.Outcome);
+        Assert.Equal(1, checker.CallCount);
+    }
+
+    [Fact]
+    public async Task SendAsync_ForANonReminderType_NeverConsultsTheReminderEligibilityChecker()
+    {
+        var checker = new FakeBookingReminderEligibilityChecker(isEligible: false); // would suppress a reminder - must be irrelevant here
+        var (sender, _, _) = CreateSender(EnabledOptions(), reminderChecker: checker);
+
+        var result = await sender.SendAsync(BuildMessage(notificationType: BookingNotificationTypes.Confirmation), CancellationToken.None);
+
+        Assert.Equal(NotificationSendOutcome.Success, result.Outcome);
+        Assert.Equal(0, checker.CallCount);
+    }
+
+    [Fact]
+    public async Task SendAsync_ForAReminderWithAMalformedPayload_ReturnsPermanentWithoutConsultingEligibility()
+    {
+        var checker = new FakeBookingReminderEligibilityChecker();
+        var sender = new SmtpNotificationSender(
+            Microsoft.Extensions.Options.Options.Create(EnabledOptions()),
+            new FakeEmailRecipientResolver(SampleRecipient),
+            new BookingEmailTemplateRenderer(),
+            checker,
+            new ThrowingSmtpTransportFactory(),
+            new CapturingLogger<SmtpNotificationSender>());
+
+        var result = await sender.SendAsync(BuildMessage(notificationType: BookingNotificationTypes.Reminder, payloadJson: "{not-valid"), CancellationToken.None);
+
+        Assert.Equal(NotificationSendOutcome.PermanentFailure, result.Outcome);
+        Assert.Equal(0, checker.CallCount); // template rendering already failed first - the payload never even reaches this check
     }
 
     [Fact]

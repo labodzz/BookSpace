@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net.Sockets;
+using System.Text.Json;
 using BookSpace.Application.Email;
 using BookSpace.Application.Notifications;
 using MailKit;
@@ -20,6 +21,7 @@ internal sealed class SmtpNotificationSender(
     IOptions<EmailOptions> options,
     IEmailRecipientResolver recipientResolver,
     IEmailTemplateRenderer templateRenderer,
+    IBookingReminderEligibilityChecker reminderEligibilityChecker,
     ISmtpTransportFactory transportFactory,
     ILogger<SmtpNotificationSender> logger) : INotificationSender
 {
@@ -58,6 +60,36 @@ internal sealed class SmtpNotificationSender(
                 "Notification email not sent: template rendering failed. OutboxItemId={OutboxItemId} NotificationType={NotificationType} Reason={Reason}",
                 message.OutboxItemId, message.NotificationType, exception.Message);
             return NotificationSendResult.Permanent($"Unable to render notification: {exception.Message}");
+        }
+
+        // The cancellation-race guard - see docs/background-jobs.md ("Cancellation race for reminders").
+        // Only Booking.Reminder needs this: Confirmation/Rejection/Cancellation are each enqueued only
+        // once the event they announce has ALREADY happened (a booking only ever becomes Confirmed/
+        // Rejected/Cancelled once, and that transition is exactly what triggers the enqueue - see
+        // BookingNotificationFactory's callers), so there is nothing further for those to race against. A
+        // reminder is different: it is enqueued for a FUTURE event, so the booking can legitimately change
+        // state (most importantly, get cancelled) in the window between enqueue and this exact moment,
+        // immediately before actually sending. This check must run here, this late - re-checking back when
+        // the reminder was first enqueued would not close the race, since the booking could still be
+        // cancelled afterward.
+        if (message.NotificationType == BookingNotificationTypes.Reminder)
+        {
+            var bookingId = ParseReminderBookingId(message.PayloadJson);
+            if (bookingId is null)
+            {
+                logger.LogInformation(
+                    "Notification email not sent: reminder payload is malformed. OutboxItemId={OutboxItemId}", message.OutboxItemId);
+                return NotificationSendResult.Permanent("Reminder payload is malformed.");
+            }
+
+            var stillEligible = await reminderEligibilityChecker.IsStillEligibleAsync(message.TenantId, bookingId.Value, cancellationToken);
+            if (!stillEligible)
+            {
+                logger.LogInformation(
+                    "Notification email suppressed: the booking is no longer Confirmed or has already started. OutboxItemId={OutboxItemId}",
+                    message.OutboxItemId);
+                return NotificationSendResult.Suppressed("The booking is no longer Confirmed or has already started.");
+            }
         }
 
         var mimeMessage = BuildMimeMessage(emailOptions, recipient, message.OutboxItemId, content);
@@ -108,6 +140,25 @@ internal sealed class SmtpNotificationSender(
         var bodyBuilder = new BodyBuilder { TextBody = content.PlainTextBody, HtmlBody = content.HtmlBody };
         mimeMessage.Body = bodyBuilder.ToMessageBody();
         return mimeMessage;
+    }
+
+    // A second parse of the same PayloadJson the template renderer already validated, into the exact same
+    // BookingNotificationPayload type/casing BookingEmailTemplateRenderer.ParsePayload uses - only
+    // BookingId is actually needed here, but deserializing the known record type (rather than hand-rolling
+    // a raw JsonDocument property lookup) guarantees this matches the serializer's own default casing
+    // exactly, with no risk of this check silently drifting from how the payload was actually written.
+    // Returns null for malformed JSON rather than throwing, since the caller must treat that as an
+    // ordinary Permanent outcome, exactly like EmailTemplateException from the renderer above.
+    private static Guid? ParseReminderBookingId(string payloadJson)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<BookingNotificationPayload>(payloadJson)?.BookingId;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static SecureSocketOptions MapSecurity(SmtpSecurity security) => security switch

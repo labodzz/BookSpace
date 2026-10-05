@@ -46,6 +46,20 @@ public sealed class Booking : ITenantOwned
     public Guid? CancelledByUserId { get; set; }
     public string? CancellationReason { get; set; }
     public DateTimeOffset CreatedAtUtc { get; set; }
+
+    // Set the moment a Booking.Reminder outbox item was successfully enqueued for this booking - NOT when
+    // (or whether) that reminder was actually sent. See docs/background-jobs.md ("Reminder job - the
+    // ReminderQueuedAtUtc marker") for the full design: this exists purely so BookingReminderReader's due
+    // query can exclude already-enqueued bookings server-side (an index-supported `IS NULL` check), instead
+    // of relying only on the (TenantId, IdempotencyKey) unique constraint to reject a re-submitted
+    // duplicate - a constraint alone stops a second row from being created, but does nothing to stop the
+    // SAME already-handled booking from being re-selected as a "due" candidate on every subsequent poll,
+    // starving every other booking behind it once the batch fills up with already-enqueued rows. Set in the
+    // SAME SaveChangesAsync call that creates the outbox row (see ReminderProducer/IBookingReminderMarker),
+    // so the two are never observably out of sync - either both land or neither does. Once set, it is never
+    // cleared: a later Sent/Suppressed/DeadLettered outcome for that reminder, or the booking itself later
+    // being cancelled, does not reset it and does not cause a second reminder to be enqueued.
+    public DateTimeOffset? ReminderQueuedAtUtc { get; set; }
 }
 
 // ApproverId is nullable and populated only at decision time, with whoever actually approved/rejected -

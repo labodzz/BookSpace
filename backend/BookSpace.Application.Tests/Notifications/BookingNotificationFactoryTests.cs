@@ -89,6 +89,77 @@ public sealed class BookingNotificationFactoryTests
         Assert.DoesNotContain("-", withoutBookingId); // no other GUID-shaped fragment remains
     }
 
+    // --- Reminder: builds from a DueBookingReminder projection, not a tracked Booking entity - see
+    // BookingNotificationFactory's own doc comment for why. ---
+
+    private static DueBookingReminder CreateReminderCandidate() => new(
+        BookingId: Guid.NewGuid(), TenantId: Guid.NewGuid(), UserId: Guid.NewGuid(), ResourceId: Guid.NewGuid(),
+        StartUtc: DateTimeOffset.UtcNow.AddHours(1), EndUtc: DateTimeOffset.UtcNow.AddHours(2), Quantity: 2);
+
+    [Fact]
+    public void Reminder_BuildsARequestWithTheCandidatesOwnTenantAndOwnerAsRecipient()
+    {
+        var candidate = CreateReminderCandidate();
+
+        var request = BookingNotificationFactory.Reminder(candidate);
+
+        Assert.Equal(candidate.TenantId, request.TenantId);
+        Assert.Equal(candidate.UserId, request.RecipientUserId);
+        Assert.Equal(BookingNotificationTypes.Reminder, request.NotificationType);
+    }
+
+    [Fact]
+    public void Reminder_UsesTheDocumentedIdempotencyKeyFormat()
+    {
+        var candidate = CreateReminderCandidate();
+
+        var request = BookingNotificationFactory.Reminder(candidate);
+
+        Assert.Equal($"booking:{candidate.BookingId}:reminder", request.IdempotencyKey);
+        Assert.True(request.IdempotencyKey.Length < NotificationOutboxItem.MaxIdempotencyKeyLength);
+    }
+
+    [Fact]
+    public void Reminder_CalledTwiceForTheSameBooking_ProducesTheIdenticalIdempotencyKey()
+    {
+        var candidate = CreateReminderCandidate();
+
+        var first = BookingNotificationFactory.Reminder(candidate);
+        var second = BookingNotificationFactory.Reminder(candidate);
+
+        Assert.Equal(first.IdempotencyKey, second.IdempotencyKey);
+    }
+
+    [Fact]
+    public void Reminder_KeyNeverCollidesWithTheSameBookingsOtherNotificationTypes()
+    {
+        var booking = CreateBooking();
+        var reminderCandidate = new DueBookingReminder(booking.Id, booking.TenantId, booking.UserId, booking.ResourceId, booking.StartUtc, booking.EndUtc, booking.Quantity);
+
+        var confirmation = BookingNotificationFactory.Confirmation(booking);
+        var reminder = BookingNotificationFactory.Reminder(reminderCandidate);
+
+        Assert.NotEqual(confirmation.IdempotencyKey, reminder.IdempotencyKey);
+    }
+
+    [Fact]
+    public void Reminder_PayloadContainsOnlyTheFieldsAFutureSenderNeedsAndNoSensitiveData()
+    {
+        var candidate = CreateReminderCandidate();
+
+        var request = BookingNotificationFactory.Reminder(candidate);
+        var payload = JsonSerializer.Deserialize<BookingNotificationPayload>(request.PayloadJson);
+
+        Assert.NotNull(payload);
+        Assert.Equal(candidate.BookingId, payload!.BookingId);
+        Assert.Equal(candidate.ResourceId, payload.ResourceId);
+        Assert.Equal(candidate.StartUtc, payload.StartUtc);
+        Assert.Equal(candidate.EndUtc, payload.EndUtc);
+        Assert.Equal(candidate.Quantity, payload.Quantity);
+        Assert.DoesNotContain("token", request.PayloadJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("password", request.PayloadJson, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public void Payload_ContainsOnlyTheFieldsAFutureSenderNeedsAndNoSensitiveData()
     {

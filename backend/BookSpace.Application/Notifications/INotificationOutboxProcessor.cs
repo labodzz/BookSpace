@@ -13,6 +13,12 @@ public enum NotificationOutboxItemOutcome
     // Status is now DeadLettered. Terminal: no future due-batch query will ever return this item again.
     DeadLettered,
 
+    // The sender deliberately chose not to send - Status is now Suppressed. Terminal, but distinct from
+    // DeadLettered: nothing went wrong, the event this notification was about was confirmed no longer
+    // true right before dispatch (see NotificationSendOutcome.Suppressed and docs/background-jobs.md,
+    // "Cancellation race for reminders").
+    Suppressed,
+
     // The item no longer existed when processing started (defensive - nothing in this codebase deletes
     // outbox rows today). Logged, not treated as an error.
     Skipped,

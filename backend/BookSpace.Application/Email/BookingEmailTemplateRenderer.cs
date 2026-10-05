@@ -15,11 +15,12 @@ public sealed class BookingEmailTemplateRenderer : IEmailTemplateRenderer
 {
     public EmailContent Render(string notificationType, string payloadJson, string recipientDisplayName)
     {
-        var (subject, statusWord) = notificationType switch
+        var (subject, introSentence) = notificationType switch
         {
-            BookingNotificationTypes.Confirmation => ("Your BookSpace booking is confirmed", "confirmed"),
-            BookingNotificationTypes.Rejection => ("Your BookSpace booking was not approved", "not approved"),
-            BookingNotificationTypes.Cancellation => ("Your BookSpace booking has been cancelled", "cancelled"),
+            BookingNotificationTypes.Confirmation => ("Your BookSpace booking is confirmed", "Your booking has been confirmed."),
+            BookingNotificationTypes.Rejection => ("Your BookSpace booking was not approved", "Your booking has been not approved."),
+            BookingNotificationTypes.Cancellation => ("Your BookSpace booking has been cancelled", "Your booking has been cancelled."),
+            BookingNotificationTypes.Reminder => ("Reminder: your BookSpace booking starts soon", "This is a reminder that your booking is starting soon."),
             _ => throw new EmailTemplateException($"Unrecognized notification type '{notificationType}'."),
         };
 
@@ -29,7 +30,7 @@ public sealed class BookingEmailTemplateRenderer : IEmailTemplateRenderer
 
         var plainTextBody =
             $"Hi {recipientDisplayName},\n\n" +
-            $"Your booking has been {statusWord}.\n\n" +
+            $"{introSentence}\n\n" +
             $"Booking ID: {payload.BookingId}\n" +
             $"Resource ID: {payload.ResourceId}\n" +
             $"Start: {startUtcText}\n" +
@@ -39,7 +40,7 @@ public sealed class BookingEmailTemplateRenderer : IEmailTemplateRenderer
 
         var htmlBody =
             $"<p>Hi {Encode(recipientDisplayName)},</p>" +
-            $"<p>Your booking has been <strong>{Encode(statusWord)}</strong>.</p>" +
+            $"<p>{Encode(introSentence)}</p>" +
             "<ul>" +
             $"<li>Booking ID: {Encode(payload.BookingId.ToString())}</li>" +
             $"<li>Resource ID: {Encode(payload.ResourceId.ToString())}</li>" +

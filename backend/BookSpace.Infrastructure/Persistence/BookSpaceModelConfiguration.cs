@@ -198,6 +198,22 @@ internal static class BookSpaceModelConfiguration
             entity.Property(booking => booking.CancellationReason).HasMaxLength(1000);
             // Primary lookup shape for availability/overlap checks: "what's booked on this resource in this window".
             entity.HasIndex(booking => new { booking.TenantId, booking.ResourceId, booking.StartUtc, booking.EndUtc });
+            // Supports BookingReminderReader's system-wide due query (WHERE Status = 'Confirmed' AND
+            // ReminderQueuedAtUtc IS NULL AND StartUtc in a future range ORDER BY StartUtc) - the index
+            // above starts with TenantId, so it cannot help a query that must scan every tenant in one
+            // call; this one starts directly with StartUtc and is filtered to exactly the reader's own
+            // predicate, the same filtered-covering-index pattern as NotificationOutboxItems' own
+            // due-batch index (see that entity's own index comment above), for exactly the same reason:
+            // empirically confirmed (docs/background-jobs.md, "Reminder job - index") that INCLUDE-ing
+            // every column the reader's projection needs turns this into an Index Seek instead of a
+            // Clustered Index Scan. The filter must name BOTH conditions the query itself checks - SQL
+            // Server can only use a filtered index when the query's WHERE clause provably implies the
+            // index's filter predicate, so a filter of "Status = 'Confirmed'" alone would no longer match
+            // once the query also checks ReminderQueuedAtUtc IS NULL.
+            entity.HasIndex(booking => booking.StartUtc)
+                .HasFilter("[Status] = 'Confirmed' AND [ReminderQueuedAtUtc] IS NULL")
+                .IncludeProperties(
+                    booking => new { booking.TenantId, booking.UserId, booking.ResourceId, booking.EndUtc, booking.Quantity, booking.CreatedAtUtc });
             entity.HasOne<Tenant>().WithMany().HasForeignKey(booking => booking.TenantId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne<Resource>().WithMany().HasForeignKey(booking => booking.ResourceId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne<User>().WithMany().HasForeignKey(booking => booking.UserId).OnDelete(DeleteBehavior.Restrict);

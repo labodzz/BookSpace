@@ -90,6 +90,12 @@ internal sealed class NotificationOutboxProcessor(
                 outcome = NotificationOutboxItemOutcome.DeadLettered;
                 break;
 
+            case NotificationSendOutcome.Suppressed:
+                entity.Status = NotificationOutboxStatus.Suppressed;
+                entity.LastError = SanitizeError(result.ErrorMessage);
+                outcome = NotificationOutboxItemOutcome.Suppressed;
+                break;
+
             case NotificationSendOutcome.TransientFailure:
                 entity.LastError = SanitizeError(result.ErrorMessage);
                 if (entity.AttemptCount >= options.Value.MaxNotificationAttempts)
@@ -220,6 +226,11 @@ internal sealed class NotificationOutboxProcessor(
             case NotificationOutboxItemOutcome.DeadLettered:
                 logger.LogError(
                     "Notification outbox item processed. OutboxItemId={OutboxItemId} TenantId={TenantId} NotificationType={NotificationType} AttemptCount={AttemptCount} Outcome=DeadLettered",
+                    item.Id, item.TenantId, item.NotificationType, attemptCount);
+                break;
+            case NotificationOutboxItemOutcome.Suppressed:
+                logger.LogInformation(
+                    "Notification outbox item processed. OutboxItemId={OutboxItemId} TenantId={TenantId} NotificationType={NotificationType} AttemptCount={AttemptCount} Outcome=Suppressed",
                     item.Id, item.TenantId, item.NotificationType, attemptCount);
                 break;
         }

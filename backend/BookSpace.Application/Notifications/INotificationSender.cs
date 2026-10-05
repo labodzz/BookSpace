@@ -21,6 +21,13 @@ public enum NotificationSendOutcome
     // Retrying is not expected to help (an invalid recipient, an unrecognized notification type, a
     // malformed payload, or the provider explicitly rejecting the request as unrecoverable).
     PermanentFailure,
+
+    // Deliberately never sent because, right before dispatch, the event this notification announces was
+    // confirmed to no longer be true (e.g. a reminder for a booking that was cancelled after the reminder
+    // was enqueued but before it was sent) - see docs/background-jobs.md ("Cancellation race for
+    // reminders"). Distinct from PermanentFailure: nothing failed, the decision not to send was correct.
+    // Terminal, same as PermanentFailure - never retried.
+    Suppressed,
 }
 
 // ErrorMessage is a short, sanitized summary a sender implementation constructs deliberately - never a
@@ -31,6 +38,7 @@ public sealed record NotificationSendResult(NotificationSendOutcome Outcome, str
     public static NotificationSendResult Success() => new(NotificationSendOutcome.Success);
     public static NotificationSendResult Transient(string errorMessage) => new(NotificationSendOutcome.TransientFailure, errorMessage);
     public static NotificationSendResult Permanent(string errorMessage) => new(NotificationSendOutcome.PermanentFailure, errorMessage);
+    public static NotificationSendResult Suppressed(string reason) => new(NotificationSendOutcome.Suppressed, reason);
 }
 
 // One notification delivery operation - see docs/background-jobs.md ("Per-item processing") for how

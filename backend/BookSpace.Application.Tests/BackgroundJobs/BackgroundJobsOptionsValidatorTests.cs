@@ -179,4 +179,67 @@ public sealed class BackgroundJobsOptionsValidatorTests
 
         Assert.True(result.Succeeded);
     }
+
+    // --- Reminder (nested BackgroundJobs:Reminder section) - disabled by default, so none of these
+    // fields are required until Reminder:Enabled is explicitly true ---
+
+    [Fact]
+    public void Validate_WithReminderDisabledAndEveryReminderFieldInvalid_StillSucceeds()
+    {
+        var result = _validator.Validate(
+            name: null,
+            new BackgroundJobsOptions { Reminder = new ReminderOptions { Enabled = false, LeadTimeMinutes = -1, BatchSize = -1 } });
+
+        Assert.True(result.Succeeded);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Validate_WithReminderEnabledAndAZeroOrNegativeLeadTime_Fails(int leadTimeMinutes)
+    {
+        var result = _validator.Validate(
+            name: null, new BackgroundJobsOptions { Reminder = new ReminderOptions { Enabled = true, LeadTimeMinutes = leadTimeMinutes } });
+
+        Assert.True(result.Failed);
+    }
+
+    [Fact]
+    public void Validate_WithReminderEnabledAndLeadTimeAboveTheAllowedMaximum_Fails()
+    {
+        var result = _validator.Validate(
+            name: null,
+            new BackgroundJobsOptions { Reminder = new ReminderOptions { Enabled = true, LeadTimeMinutes = ReminderOptions.MaxLeadTimeMinutes + 1 } });
+
+        Assert.True(result.Failed);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Validate_WithReminderEnabledAndAZeroOrNegativeBatchSize_Fails(int batchSize)
+    {
+        var result = _validator.Validate(
+            name: null, new BackgroundJobsOptions { Reminder = new ReminderOptions { Enabled = true, BatchSize = batchSize } });
+
+        Assert.True(result.Failed);
+    }
+
+    [Fact]
+    public void Validate_WithReminderEnabledAndBatchSizeAboveTheAllowedMaximum_Fails()
+    {
+        var result = _validator.Validate(
+            name: null,
+            new BackgroundJobsOptions { Reminder = new ReminderOptions { Enabled = true, BatchSize = ReminderOptions.MaxBatchSize + 1 } });
+
+        Assert.True(result.Failed);
+    }
+
+    [Fact]
+    public void Validate_WithReminderEnabledAndTheDefaultLeadTimeAndBatchSize_Succeeds()
+    {
+        var result = _validator.Validate(name: null, new BackgroundJobsOptions { Reminder = new ReminderOptions { Enabled = true } });
+
+        Assert.True(result.Succeeded);
+    }
 }

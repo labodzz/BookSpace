@@ -108,15 +108,28 @@ public sealed class NotificationOutboxReaderTests : IAsyncLifetime
         Assert.Empty(result);
     }
 
-    // NotificationOutboxStatus now has exactly three members: Pending, Sent, DeadLettered (see
-    // BookSpace.Domain.Enums.NotificationOutboxStatus). This test exists so that whenever a FOURTH
+    // Suppressed (added by the reminder job - see docs/background-jobs.md, "Cancellation race for
+    // reminders") is a terminal outcome exactly like DeadLettered - a suppressed reminder must never be
+    // due again either.
+    [Fact]
+    public async Task GetDueBatchAsync_WithASuppressedItem_DoesNotReturnIt()
+    {
+        await SeedItemAsync(_tenantAId, _userAId, availableAtUtc: DateTimeOffset.UtcNow.AddMinutes(-1), status: NotificationOutboxStatus.Suppressed);
+
+        var result = await GetDueBatchAsync(batchSize: 50);
+
+        Assert.Empty(result);
+    }
+
+    // NotificationOutboxStatus now has exactly four members: Pending, Sent, DeadLettered, Suppressed (see
+    // BookSpace.Domain.Enums.NotificationOutboxStatus). This test exists so that whenever a FIFTH
     // terminal/non-due status is ever added, it fails here as a reminder to also add the corresponding
     // "this new status is never due" coverage, rather than that gap going unnoticed - exactly the
-    // reminder this test's own predecessor was for DeadLettered.
+    // reminder this test's own predecessor was for DeadLettered, and that one was for Suppressed.
     [Fact]
     public void NotificationOutboxStatus_HasExactlyTheStatusesThisTestClassAccountsFor()
     {
-        Assert.Equal(["Pending", "Sent", "DeadLettered"], Enum.GetNames<NotificationOutboxStatus>());
+        Assert.Equal(["Pending", "Sent", "DeadLettered", "Suppressed"], Enum.GetNames<NotificationOutboxStatus>());
     }
 
     [Fact]
