@@ -60,6 +60,13 @@ public static class DependencyInjection
         services.AddScoped<IBookingReminderReader, BookingReminderReader>();
         services.AddScoped<IBookingReminderEligibilityChecker, BookingReminderEligibilityChecker>();
         services.AddScoped<IBookingReminderMarker, BookingReminderMarker>();
+
+        // Stale-approval job - see docs/background-jobs.md ("Stale-approval job"). IStaleApprovalReader is
+        // Scoped (needs the scoped BookSpaceDbContext, one call per cycle); IStaleApprovalProcessor is
+        // Scoped but - like NotificationOutboxProcessor - only ever holds IServiceScopeFactory itself, and
+        // creates its own fresh per-candidate scope internally.
+        services.AddScoped<IStaleApprovalReader, StaleApprovalReader>();
+        services.AddScoped<IStaleApprovalProcessor, StaleApprovalProcessor>();
         // Scoped, not singleton: it only ever holds IServiceScopeFactory itself (safe at any lifetime),
         // but letting it be Scoped avoids ever forcing a future INotificationSender implementation that
         // needs its own scoped dependencies (a scoped HttpClient, say) into a captive-dependency problem.

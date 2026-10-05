@@ -4,9 +4,11 @@ import { BookingStatus, CancelBookingResponse, CreateBookingResponse, CreateRecu
 // underlying number (System.Text.Json's default - no JsonStringEnumConverter is registered anywhere in
 // the pipeline). This array is the wire contract: index = the enum's underlying int, matching
 // BookSpace.Domain.Enums.BookingStatus exactly (Pending, Confirmed, Rejected, Cancelled, Completed,
-// NoShow). Every booking-shaped response is mapped through toBookingStatus at the service boundary so
-// the rest of the app can keep working with readable string statuses instead of magic numbers.
-const BOOKING_STATUS_BY_CODE: readonly BookingStatus[] = ['Pending', 'Confirmed', 'Rejected', 'Cancelled', 'Completed', 'NoShow'];
+// NoShow, Expired - Expired is index 6, since it was added as the LAST member of the C# enum
+// specifically so it never renumbers any existing status code). Every booking-shaped response is mapped
+// through toBookingStatus at the service boundary so the rest of the app can keep working with readable
+// string statuses instead of magic numbers.
+const BOOKING_STATUS_BY_CODE: readonly BookingStatus[] = ['Pending', 'Confirmed', 'Rejected', 'Cancelled', 'Completed', 'NoShow', 'Expired'];
 
 // The inverse mapping, for the one JSON-body enum the frontend SENDS: CreateRecurringSeriesRequest.Frequency.
 // Yearly (3) is deliberately absent - the API's own validator rejects it, and the recurring booking form

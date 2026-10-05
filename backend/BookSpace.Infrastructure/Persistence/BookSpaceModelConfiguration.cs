@@ -229,6 +229,15 @@ internal static class BookSpaceModelConfiguration
             entity.Property(request => request.Status).HasConversion<string>().HasMaxLength(20);
             entity.Property(request => request.DecisionNote).HasMaxLength(2000);
             entity.HasIndex(request => request.BookingId).IsUnique();
+            // Supports StaleApprovalReader's system-wide due query (WHERE Status = 'Pending' AND
+            // ExpiresAtUtc <= now ORDER BY RequestedAtUtc, Id) - the same filtered-covering-index pattern
+            // NotificationOutboxItems/Bookings already use for their own due queries, for the same reason:
+            // a filtered index key on the due-timestamp column, INCLUDE-ing exactly what the reader's
+            // projection (plus the join back to Bookings) needs, filtered to the one status that is ever
+            // "due" so the index shrinks as requests leave Pending instead of growing unbounded forever.
+            entity.HasIndex(request => request.ExpiresAtUtc)
+                .HasFilter("[Status] = 'Pending'")
+                .IncludeProperties(request => new { request.TenantId, request.BookingId, request.RequestedAtUtc });
             entity.HasOne<Tenant>().WithMany().HasForeignKey(request => request.TenantId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne<Booking>().WithMany().HasForeignKey(request => request.BookingId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne<User>().WithMany().HasForeignKey(request => request.ApproverId).OnDelete(DeleteBehavior.Restrict);

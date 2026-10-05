@@ -1,5 +1,7 @@
 // Mirrors BookSpace.Domain.Enums.BookingStatus exactly - do not add values the API doesn't have.
-export type BookingStatus = 'Pending' | 'Confirmed' | 'Rejected' | 'Cancelled' | 'Completed' | 'NoShow';
+// Expired (WP-8 stale-approval job): the system automatically expired the ApprovalRequest because nobody
+// approved/rejected it in time - distinct from Rejected (an approver's own decision).
+export type BookingStatus = 'Pending' | 'Confirmed' | 'Rejected' | 'Cancelled' | 'Completed' | 'NoShow' | 'Expired';
 
 // GetOwnBookingsResponseItem. CancelledByAdmin is server-derived: true only when a TenantAdmin/SysAdmin
 // cancelled someone else's booking, so the UI can tell "you cancelled this" apart from "this was

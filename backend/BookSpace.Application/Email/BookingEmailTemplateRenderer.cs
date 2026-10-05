@@ -15,6 +15,11 @@ public sealed class BookingEmailTemplateRenderer : IEmailTemplateRenderer
 {
     public EmailContent Render(string notificationType, string payloadJson, string recipientDisplayName)
     {
+        if (notificationType == BookingNotificationTypes.ApprovalExpired)
+        {
+            return RenderApprovalExpired(payloadJson, recipientDisplayName);
+        }
+
         var (subject, introSentence) = notificationType switch
         {
             BookingNotificationTypes.Confirmation => ("Your BookSpace booking is confirmed", "Your booking has been confirmed."),
@@ -53,6 +58,46 @@ public sealed class BookingEmailTemplateRenderer : IEmailTemplateRenderer
         return new EmailContent(subject, plainTextBody, htmlBody);
     }
 
+    // A separate render path, not another branch of the switch above: Booking.ApprovalExpired's payload
+    // (ApprovalExpiredNotificationPayload) carries one extra field (ApprovalRequestId) no other booking
+    // lifecycle notification needs - see BookingNotificationFactory's own doc comment for why that is its
+    // own record type rather than squeezed into BookingNotificationPayload.
+    private static EmailContent RenderApprovalExpired(string payloadJson, string recipientDisplayName)
+    {
+        var payload = ParseApprovalExpiredPayload(payloadJson);
+        var startUtcText = FormatUtc(payload.StartUtc);
+        var endUtcText = FormatUtc(payload.EndUtc);
+        const string subject = "Your BookSpace booking approval request expired";
+        const string introSentence =
+            "Nobody approved or rejected your booking request before the approval window closed, so it has automatically expired.";
+
+        var plainTextBody =
+            $"Hi {recipientDisplayName},\n\n" +
+            $"{introSentence}\n\n" +
+            $"Booking ID: {payload.BookingId}\n" +
+            $"Approval Request ID: {payload.ApprovalRequestId}\n" +
+            $"Resource ID: {payload.ResourceId}\n" +
+            $"Start: {startUtcText}\n" +
+            $"End: {endUtcText}\n" +
+            $"Quantity: {payload.Quantity}\n\n" +
+            "- BookSpace";
+
+        var htmlBody =
+            $"<p>Hi {Encode(recipientDisplayName)},</p>" +
+            $"<p>{Encode(introSentence)}</p>" +
+            "<ul>" +
+            $"<li>Booking ID: {Encode(payload.BookingId.ToString())}</li>" +
+            $"<li>Approval Request ID: {Encode(payload.ApprovalRequestId.ToString())}</li>" +
+            $"<li>Resource ID: {Encode(payload.ResourceId.ToString())}</li>" +
+            $"<li>Start: {Encode(startUtcText)}</li>" +
+            $"<li>End: {Encode(endUtcText)}</li>" +
+            $"<li>Quantity: {Encode(payload.Quantity.ToString())}</li>" +
+            "</ul>" +
+            "<p>- BookSpace</p>";
+
+        return new EmailContent(subject, plainTextBody, htmlBody);
+    }
+
     private static string FormatUtc(DateTimeOffset value) => value.UtcDateTime.ToString("yyyy-MM-dd HH:mm") + " UTC";
 
     private static string Encode(string value) => WebUtility.HtmlEncode(value);
@@ -63,6 +108,21 @@ public sealed class BookingEmailTemplateRenderer : IEmailTemplateRenderer
         try
         {
             payload = JsonSerializer.Deserialize<BookingNotificationPayload>(payloadJson);
+        }
+        catch (JsonException exception)
+        {
+            throw new EmailTemplateException($"Notification payload is not valid JSON: {exception.Message}");
+        }
+
+        return payload ?? throw new EmailTemplateException("Notification payload deserialized to null.");
+    }
+
+    private static ApprovalExpiredNotificationPayload ParseApprovalExpiredPayload(string payloadJson)
+    {
+        ApprovalExpiredNotificationPayload? payload;
+        try
+        {
+            payload = JsonSerializer.Deserialize<ApprovalExpiredNotificationPayload>(payloadJson);
         }
         catch (JsonException exception)
         {

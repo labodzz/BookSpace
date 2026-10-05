@@ -60,6 +60,9 @@ public sealed class BackgroundJobsOptions
 
     // See docs/background-jobs.md ("Reminder job") for the full design.
     public ReminderOptions Reminder { get; init; } = new();
+
+    // See docs/background-jobs.md ("Stale-approval job") for the full design.
+    public StaleApprovalOptions StaleApproval { get; init; } = new();
 }
 
 // Bound from "BackgroundJobs:Reminder" - a nested section of BackgroundJobsOptions, not a sibling
@@ -88,6 +91,27 @@ public sealed class ReminderOptions
     // How long before a Confirmed booking's StartUtc its reminder becomes due - see
     // docs/background-jobs.md ("Reminder job - business rule") for the exact due-window definition.
     public int LeadTimeMinutes { get; init; } = 60;
+
+    public int BatchSize { get; init; } = 50;
+}
+
+// Bound from "BackgroundJobs:StaleApproval" - a nested section, same reasoning as ReminderOptions.
+// Deliberately has NO "MaxPendingMinutes"-style cutoff setting: ApprovalRequest.ExpiresAtUtc is already
+// computed and persisted at creation time from Tenant.ApprovalExpiryHours (see
+// CreateBookingCommandRequest/CreateRecurringSeriesCommandRequest) - introducing a second, independent
+// global cutoff here would create two different, potentially disagreeing answers to "how long is too
+// long," one per-tenant and already live, one global and new. See docs/background-jobs.md ("Stale-approval
+// job - why there is no MaxPendingMinutes setting") for the full reasoning. Per-tenant stale-approval
+// timeout configurability already exists via Tenant.ApprovalExpiryHours - this job only decides whether,
+// and how many at a time, to act on it.
+public sealed class StaleApprovalOptions
+{
+    // Same reasoning as ReminderOptions.MaxBatchSize - its own cap because this bounds a genuinely
+    // different query (due ApprovalRequests) than BackgroundJobs:BatchSize (due notification-outbox rows).
+    public const int MaxBatchSize = 1000;
+
+    // Off by default, same reasoning as every other per-job Enabled flag in this subsystem.
+    public bool Enabled { get; init; }
 
     public int BatchSize { get; init; } = 50;
 }

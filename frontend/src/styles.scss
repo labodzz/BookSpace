@@ -343,6 +343,11 @@ a[href^='/'] {
   color: var(--color-text-muted);
 }
 
+.status-pill--expired {
+  background: var(--color-surface-alt);
+  color: var(--color-text-muted);
+}
+
 /* Loading / empty / error placeholder used by every major screen so the app never shows a blank pane
    while data is in flight, missing, or failed to load. */
 .state-panel {

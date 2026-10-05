@@ -1138,7 +1138,10 @@ is the piece that finally connects every earlier WP-8 branch into one running sy
 BackgroundJobsWorker (singleton, owns the poll loop)
   -> IJobLeaseCoordinator.TryAcquireAsync (skips this poll entirely if another instance already owns the lease)
   -> fresh IServiceScope, resolves IBackgroundJobCycle = NotificationOutboxJobCycle
-    -> IReminderProducer.ProduceDueRemindersAsync                                   (see "Reminder job" below - runs first, regardless of Email:Enabled)
+    -> IStaleApprovalProcessor.ProcessDueApprovalsAsync                            (see "Stale-approval job" below - runs first of all, regardless of Email:Enabled)
+      -> IStaleApprovalReader.GetDueApprovalsAsync(BackgroundJobs:StaleApproval:BatchSize)
+      -> per candidate: IResourceBookingLock.RunExclusiveAsync -> re-read -> expire -> INotificationOutboxWriter.EnqueueAsync
+    -> IReminderProducer.ProduceDueRemindersAsync                                   (see "Reminder job" below - runs second, regardless of Email:Enabled)
       -> IBookingReminderReader.GetDueBookingsAsync(BackgroundJobs:Reminder:LeadTimeMinutes/BatchSize)
       -> INotificationOutboxWriter.EnqueueManyAsync(one Booking.Reminder request per candidate)
     -> INotificationOutboxReader.GetDueBatchAsync(BackgroundJobsOptions.BatchSize)  (one bounded call, once - skipped entirely if Email:Enabled is false)
@@ -1468,6 +1471,8 @@ fields and the new `SuppressedCount`:
 
 ```
 Notification outbox cycle completed. JobName=notification-outbox CorrelationId=...
+StaleApprovalCandidateCount=2 StaleApprovalExpiredCount=1 StaleApprovalAlreadyCompletedCount=1
+StaleApprovalConflictCount=0 StaleApprovalFailedCount=0 StaleApprovalNotificationEnqueuedCount=1
 ReminderCandidateCount=4 ReminderEnqueuedCount=3 ReminderDuplicateCount=1
 RequestedBatchSize=50 PickedCount=3 SucceededCount=2 TransientFailureCount=1 PermanentFailureCount=0
 DeadLetterCount=0 SuppressedCount=0 UnexpectedFailureCount=0 ElapsedMilliseconds=842.3
@@ -1476,9 +1481,194 @@ DeadLetterCount=0 SuppressedCount=0 UnexpectedFailureCount=0 ElapsedMilliseconds
 Never logged: the recipient's email, `PayloadJson`, SMTP credentials - unchanged from every other piece of
 this subsystem.
 
+## Stale-approval job
+
+`StaleApprovalProcessor` (`BookSpace.Infrastructure.Persistence`) is the first step
+`NotificationOutboxJobCycle` runs every cycle - before the reminder producer and the existing outbox
+dispatch. It finds `Pending` `ApprovalRequest`s that nobody decided on before their own `ExpiresAtUtc`,
+and for each one: expires the `ApprovalRequest`, expires its `Booking` (releasing the resource capacity a
+`Pending`-awaiting-approval booking already holds), and enqueues a `Booking.ApprovalExpired` notification -
+all three atomically.
+
+### Expiration, not escalation
+
+The task this closes explicitly chose **expiration** over escalating to another approver: there is no
+defined escalation chain anywhere in this codebase today (who the request should go to next, after how
+long, is simply undecided), so building one would mean inventing a policy, not implementing one. The rule
+actually implemented: *an `ApprovalRequest` still `Pending` once its own `ExpiresAtUtc` has passed
+automatically expires.*
+
+### Why there is no `MaxPendingMinutes` setting
+
+Unlike the reminder job's `LeadTimeMinutes`, this job does **not** introduce a new global cutoff duration.
+`ApprovalRequest.ExpiresAtUtc` already exists and is already populated at creation time, for every single
+request, from the per-tenant `Tenant.ApprovalExpiryHours` column
+(`CreateBookingCommandRequest`/`CreateRecurringSeriesCommandRequest`: `ExpiresAtUtc =
+DateTimeOffset.UtcNow.AddHours(tenant.ApprovalExpiryHours)`) - a mechanism that predates this job entirely.
+Introducing a second, independent `BackgroundJobs:StaleApproval:MaxPendingMinutes` setting would create two
+different, potentially disagreeing answers to "how long is too long": a per-tenant one already live, and a
+new global one. This job simply reads the cutoff that already exists (`BackgroundJobs:StaleApproval` only
+configures `Enabled` and `BatchSize` - the orchestration knobs, not the business cutoff). Per-tenant
+stale-approval timeout configurability is therefore already solved, not a gap this job leaves open.
+
+### `BookingStatus.Expired` and `ApprovalStatus.Expired`
+
+Both enums gained an `Expired` member (stored as a string column, like every other status in this schema -
+no migration needed for the enums themselves). Deliberately **not** reusing `Rejected`: `Rejected` means an
+approver made a decision; `Expired` means nobody did. Collapsing the two (even with a reason string) would
+erase, for anyone reading the row later, whether a human ever looked at the request at all - the one
+distinction this task's own instructions explicitly required preserving. Like every other terminal
+`BookingStatus`, `Expired` is excluded from `BookingAvailabilityRepository.ActiveStatuses` (unchanged - only
+`Pending` and `Confirmed` ever count toward capacity), so the moment a booking becomes `Expired` its
+capacity is released, identically to `Rejected`/`Cancelled`.
+
+### Configuration
+
+```
+BackgroundJobs:
+  StaleApproval:
+    Enabled: false   # off by default, same reasoning as BackgroundJobs:Enabled/Email:Enabled/Reminder:Enabled
+    BatchSize: 50
+```
+
+Its own `BatchSize`, not a reuse of the top-level `BackgroundJobs:BatchSize` or `Reminder:BatchSize` - the
+same reasoning as `ReminderOptions.BatchSize`: this bounds a genuinely different query (due
+`ApprovalRequest`s) than either of the other two.
+
+### Due query and database UTC
+
+`StaleApprovalReader.GetDueApprovalsAsync` joins `ApprovalRequests` (`Status = Pending`, `ExpiresAtUtc <=
+now`) to `Bookings` (`Status = Pending`) on `BookingId` - `ApprovalRequest` has no navigation property to
+`Booking` (just a scalar FK), so this is an explicit, SQL-translatable `Join`, not a navigation. `now` is
+written as `DateTimeOffset.UtcNow` directly inline, never captured first - confirmed against the real
+generated SQL (LocalDB), which evaluates it via `SYSUTCDATETIME()` on the database side, the same reasoning
+as the notification due-batch query and the reminder reader. Ordering is `RequestedAtUtc` then `Id`
+(`ApprovalRequest` has no `CreatedAtUtc` column - `RequestedAtUtc` fills that role here), bounded by
+`Take(BatchSize)`.
+
+### Index and query plan
+
+`ApprovalRequests`' only pre-existing index (`BookingId`, unique) cannot help this query at all. Added:
+
+```sql
+CREATE INDEX [IX_ApprovalRequests_ExpiresAtUtc] ON [ApprovalRequests] ([ExpiresAtUtc])
+  INCLUDE ([TenantId], [BookingId], [RequestedAtUtc])
+  WHERE [Status] = 'Pending'
+```
+
+(migration `AddApprovalRequestExpiresAtUtcIndexAndStatuses`) - the same filtered-covering-index pattern used
+throughout this subsystem. Verified against real SQL Server/LocalDB: seeded ~5,000 `Bookings` with matching
+`ApprovalRequests` (a realistic mix of statuses, almost all either not `Pending` or not yet due) plus 5
+genuine due candidates, and captured the actual execution plan - `PhysicalOp="Index Seek"` against
+`Index="[IX_ApprovalRequests_ExpiresAtUtc]"` with `SeekPredicates` present, `ActualRows` at that seek
+matching only the 5 genuine candidates (never the full `Pending`-approval set first filtered down
+afterward), followed by a `Clustered Index Seek` into `Bookings` by `Id` (the join) - a `Predicate` there
+checks `Status = 'Pending'`, a cheap per-row check on an already-tiny candidate set, never a scan. No
+`Scan` operator appears anywhere in the plan.
+
+### Resource lock / concurrency: the approve/reject race
+
+`Booking` and `ApprovalRequest` have no `RowVersion` column (a pre-existing, deliberate decision - see
+`docs/optimistic-concurrency.md`); `ApproveBookingCommandHandler`/`RejectBookingCommandHandler` already rely
+entirely on `IResourceBookingLock` to serialize concurrent decisions for the same booking. `StaleApprovalProcessor`
+joins that same protection rather than inventing a second one: **the job lease only ever prevents two
+application instances from running the stale-approval step itself concurrently - it says nothing about an
+HTTP approve/reject call arriving at the same moment. `IResourceBookingLock` is what actually serializes the
+job against an HTTP request.**
+
+For each candidate: `IResourceBookingLock.RunExclusiveAsync(candidate.ResourceId, ...)` is acquired first,
+and only then are the real, current `ApprovalRequest`/`Booking` rows re-read (by `TenantId` + `Id`, the same
+narrow `IgnoreQueryFilters()` background-processing exception as `BookingReminderEligibilityChecker`) -
+mirroring `ApproveBookingCommandHandler`/`RejectBookingCommandHandler`'s own shape exactly. If either row is
+no longer `Pending` - an approve, reject, or (for the booking) a cancellation already won the race under the
+same lock - the candidate is simply skipped (`AlreadyCompleted`), never an error, never a double transition.
+Conversely, once the stale job's own lock-protected transition commits, `ApproveBookingCommandHandler`'s own
+re-read (also under the same lock, for the next caller) finds `Booking.Status != Pending` and throws its
+existing `ConflictException` - the HTTP caller gets a clear conflict, never a confusing "success" against an
+already-expired booking. **There is never a moment where a `Confirmed` `Booking` coexists with an `Expired`
+`ApprovalRequest` for the same row**, nor a race that enqueues both a confirmation and an expiration
+notification for the same decision - the lock makes the two outcomes mutually exclusive by construction,
+not by convention.
+
+No second `ExpiresAtUtc` re-check happens under the lock: unlike `Status` (which a racing decision can
+genuinely change), `ExpiresAtUtc` is a fixed value once written - time only moves forward, so a request
+already past it when the reader found it is still past it however long it took to acquire the lock.
+
+### Atomicity
+
+`StaleApprovalProcessor` stages the `ApprovalRequest`/`Booking` transitions, then calls
+`INotificationOutboxWriter.EnqueueAsync` as the LAST step inside the SAME `IResourceBookingLock`-opened
+transaction `ApproveBookingCommandHandler`/`RejectBookingCommandHandler` already use for their own decision
++ notification - `EnqueueAsync`'s own internal `SaveChangesAsync` commits all three changes together. A
+failure anywhere in that operation (an unexpected database error, say) is caught by the lock's own
+catch-all rollback - proven by injecting a `SaveChangesInterceptor` failure right before commit and
+confirming, from a separate connection, that neither the `ApprovalRequest` nor the `Booking` nor any outbox
+row exist afterward.
+
+### Per-candidate scope and failure isolation
+
+`StaleApprovalProcessor` mirrors `NotificationOutboxProcessor`'s shape exactly: it holds only
+`IServiceScopeFactory` and creates a fresh scope - and therefore a fresh `BookSpaceDbContext` - for every
+individual candidate, so one candidate's unexpected database error can never corrupt another's change
+tracker within the same batch. Three distinct, separately-counted outcomes for "this candidate did not
+expire," none of them an error:
+
+- **`AlreadyCompleted`** - the re-read under the lock found the row no longer `Pending` (the approve/reject
+  race above, going the other way).
+- **`Conflict`** - `IResourceBookingLock` itself reported a `ConflictException` (a SQL Server deadlock/
+  lock-timeout, the same classification it already uses for HTTP callers) - transient, retried on the next
+  poll.
+- **`Failed`** - a genuinely unexpected exception, logged and isolated. No separate retry/attempt-count
+  state was introduced for this job: the candidate is simply still `Pending` and still past its own
+  `ExpiresAtUtc` afterward, so the very next poll's due query finds it again - re-discovering a still-due
+  row already **is** the retry; a persisted attempt counter would protect against nothing the row's own
+  `Status` doesn't already guarantee.
+
+Cancellation (application shutdown or a lost job lease) always propagates immediately - never absorbed,
+never counted as `Failed` - stopping before the next candidate starts.
+
+### Idempotency
+
+`booking:{bookingId}:approvalexpired` - deliberately in the SAME `booking:{bookingId}:{type}` family every
+other booking notification already uses, not a separate `approval:{id}:expired` key: this notification is
+fundamentally about the booking (same recipient, same payload shape as the other three), so a different key
+family would be an inconsistency. The `(TenantId, IdempotencyKey)` unique constraint remains the sole
+authority against a duplicate outbox row; a job restart or a retried candidate is additionally protected by
+the resource lock re-check above, which stops a second expiration from ever being attempted once the first
+already committed.
+
+### Recurring bookings
+
+Every occurrence already has its own independent `ApprovalRequest` (`BookingId` is unique on that table).
+`ApproveBookingCommandHandler`'s `ApproveRemainingSeries` cascade is an explicit, caller-chosen opt-in - the
+stale-approval job has no caller to make that choice, so it does not attempt one either: each stale
+occurrence is found, locked, and expired completely independently. A still-within-its-window sibling
+occurrence in the same series is never touched by another occurrence's expiration.
+
+### Notification
+
+`Booking.ApprovalExpired`, addressed to the booking's owner (`Booking.UserId`), never the approver who
+failed to act - `ApprovalExpiredNotificationPayload` carries `ApprovalRequestId` (for traceability) alongside
+the same `BookingId`/`ResourceId`/`StartUtc`/`EndUtc`/`Quantity` every other booking notification's payload
+carries. Subject: "Your BookSpace booking approval request expired." Same UTC-labeled, HTML-escaped,
+deterministic rendering as every other template in `BookingEmailTemplateRenderer` - no new template engine.
+
+### Frontend compatibility
+
+Adding `BookingStatus.Expired` could not have "broken" the Angular approval queue/booking list display even
+without further changes - `statusLabel`/`statusPillClass` already compute generically from the status
+string, so an unrecognized value would just render as a plain, unstyled pill rather than crash. A minimal,
+compatible change was still made: the `BookingStatus` union type, a `status-pill--expired` style, and -
+critically - `booking.mappers.ts`'s `BOOKING_STATUS_BY_CODE` array, which maps the API's raw numeric enum
+code to its string status by array index. **This one actually would have been a real bug if left alone**:
+`Expired` is index 6 (added as the last C# enum member specifically so it never renumbers an existing
+status code), and without a matching 6th entry in that array, `toBookingStatus(6)` would have silently
+fallen back to `'Pending'` - showing an auto-expired booking as if it were still awaiting approval. Caught
+and fixed as part of this same change, with a regression test.
+
 ## What the earlier WP-8 branches did not implement
 
-No-show processing, stale-approval handling, an ICS feed, and any new booking business logic beyond
+No-show processing, an ICS feed, and any new booking business logic beyond
 enqueuing a notification at the point a lifecycle transition is already decided (or, for the reminder job,
 at the point one is approaching), all remain future WP-8 work. In particular: the notification outbox is
 infrastructure for *durable,

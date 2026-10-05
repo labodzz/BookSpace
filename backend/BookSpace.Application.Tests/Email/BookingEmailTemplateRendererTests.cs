@@ -164,4 +164,68 @@ public sealed class BookingEmailTemplateRendererTests
         Assert.Throws<EmailTemplateException>(() =>
             _renderer.Render("Booking.SomethingElse", PayloadJson(), "Ana Anic"));
     }
+
+    // --- ApprovalExpired: a separate payload shape (ApprovalExpiredNotificationPayload), so its own
+    // dedicated coverage rather than reusing SamplePayload/PayloadJson() above. ---
+
+    private static readonly ApprovalExpiredNotificationPayload SampleApprovalExpiredPayload = new(
+        ApprovalRequestId: Guid.Parse("33333333-3333-3333-3333-333333333333"),
+        BookingId: Guid.Parse("11111111-1111-1111-1111-111111111111"),
+        ResourceId: Guid.Parse("22222222-2222-2222-2222-222222222222"),
+        StartUtc: new DateTimeOffset(2026, 3, 1, 9, 0, 0, TimeSpan.Zero),
+        EndUtc: new DateTimeOffset(2026, 3, 1, 10, 0, 0, TimeSpan.Zero),
+        Quantity: 2);
+
+    private static string ApprovalExpiredPayloadJson() => JsonSerializer.Serialize(SampleApprovalExpiredPayload);
+
+    [Fact]
+    public void Render_ForApprovalExpired_ProducesTheDocumentedSubject()
+    {
+        var content = _renderer.Render(BookingNotificationTypes.ApprovalExpired, ApprovalExpiredPayloadJson(), "Ana Anic");
+
+        Assert.Equal("Your BookSpace booking approval request expired", content.Subject);
+    }
+
+    [Fact]
+    public void Render_ForApprovalExpired_IncludesBookingIdApprovalRequestIdResourceIdTimesAndQuantity()
+    {
+        var content = _renderer.Render(BookingNotificationTypes.ApprovalExpired, ApprovalExpiredPayloadJson(), "Ana Anic");
+
+        Assert.Contains(SampleApprovalExpiredPayload.BookingId.ToString(), content.PlainTextBody);
+        Assert.Contains(SampleApprovalExpiredPayload.ApprovalRequestId.ToString(), content.PlainTextBody);
+        Assert.Contains(SampleApprovalExpiredPayload.ResourceId.ToString(), content.PlainTextBody);
+        Assert.Contains("2026-03-01 09:00 UTC", content.PlainTextBody);
+        Assert.Contains("2026-03-01 10:00 UTC", content.PlainTextBody);
+        Assert.Contains("2", content.PlainTextBody);
+        Assert.Contains(SampleApprovalExpiredPayload.BookingId.ToString(), content.HtmlBody);
+        Assert.Contains(SampleApprovalExpiredPayload.ApprovalRequestId.ToString(), content.HtmlBody);
+    }
+
+    [Fact]
+    public void Render_ForApprovalExpired_HtmlEscapesTheRecipientDisplayName()
+    {
+        const string maliciousName = "<script>alert('x')</script>";
+
+        var content = _renderer.Render(BookingNotificationTypes.ApprovalExpired, ApprovalExpiredPayloadJson(), maliciousName);
+
+        Assert.DoesNotContain("<script>", content.HtmlBody);
+        Assert.Contains("&lt;script&gt;", content.HtmlBody);
+        Assert.Contains(maliciousName, content.PlainTextBody);
+    }
+
+    [Fact]
+    public void Render_ForApprovalExpired_IsDeterministic_SameInputsProduceIdenticalOutputOnEveryCall()
+    {
+        var first = _renderer.Render(BookingNotificationTypes.ApprovalExpired, ApprovalExpiredPayloadJson(), "Ana Anic");
+        var second = _renderer.Render(BookingNotificationTypes.ApprovalExpired, ApprovalExpiredPayloadJson(), "Ana Anic");
+
+        Assert.Equal(first, second);
+    }
+
+    [Fact]
+    public void Render_ForApprovalExpired_WithMalformedPayloadJson_ThrowsEmailTemplateException()
+    {
+        Assert.Throws<EmailTemplateException>(() =>
+            _renderer.Render(BookingNotificationTypes.ApprovalExpired, "{not-valid-json", "Ana Anic"));
+    }
 }

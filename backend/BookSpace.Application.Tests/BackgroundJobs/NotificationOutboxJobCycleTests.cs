@@ -371,6 +371,110 @@ public sealed class NotificationOutboxJobCycleTests
         Assert.False(processor.WasCalled);
     }
 
+    // --- Stale-approval processor: runs first (before the reminder producer and the dispatch reader),
+    // feeds the summary, is isolated from both, and its cancellation aborts the whole cycle before either
+    // of the other two steps ever starts ---
+
+    [Fact]
+    public async Task RunCycleAsync_CallsTheStaleApprovalProcessorBeforeTheReminderProducerAndTheDispatchReader()
+    {
+        var callOrder = new List<string>();
+        var processor = new FakeProcessor((_, _) => throw new InvalidOperationException("must not be called for an empty batch"));
+        var staleApprovalProcessor = new FakeStaleApprovalProcessor(_ =>
+        {
+            callOrder.Add("stale-approval");
+            return Task.FromResult(StaleApprovalCycleResult.Empty);
+        });
+        var reminderProducer = new FakeReminderProducer(_ =>
+        {
+            callOrder.Add("reminder");
+            return Task.FromResult(ReminderProducerResult.Empty);
+        });
+        var reader = new FakeReader([], onCalled: () => callOrder.Add("dispatch"));
+        var (cycle, _) = CreateCycle(reader, processor, batchSize: 50, reminderProducer: reminderProducer, staleApprovalProcessor: staleApprovalProcessor);
+
+        await cycle.RunCycleAsync(CancellationToken.None);
+
+        Assert.Equal(["stale-approval", "reminder", "dispatch"], callOrder);
+    }
+
+    [Fact]
+    public async Task RunCycleAsync_IncludesTheStaleApprovalProcessorsCountsInTheSummary()
+    {
+        var reader = new FakeReader([]);
+        var processor = new FakeProcessor((_, _) => throw new InvalidOperationException("must not be called for an empty batch"));
+        var staleApprovalProcessor = new FakeStaleApprovalProcessor(
+            _ => Task.FromResult(new StaleApprovalCycleResult(CandidateCount: 4, ExpiredCount: 2, AlreadyCompletedCount: 1, ConflictCount: 1, FailedCount: 0, NotificationEnqueuedCount: 2)));
+        var (cycle, fakeLogger) = CreateCycle(reader, processor, batchSize: 50, staleApprovalProcessor: staleApprovalProcessor);
+
+        await cycle.RunCycleAsync(CancellationToken.None);
+
+        var summary = GetSummaryRecord(fakeLogger);
+        AssertState(summary, "StaleApprovalCandidateCount", "4");
+        AssertState(summary, "StaleApprovalExpiredCount", "2");
+        AssertState(summary, "StaleApprovalAlreadyCompletedCount", "1");
+        AssertState(summary, "StaleApprovalConflictCount", "1");
+        AssertState(summary, "StaleApprovalFailedCount", "0");
+        AssertState(summary, "StaleApprovalNotificationEnqueuedCount", "2");
+    }
+
+    [Fact]
+    public async Task RunCycleAsync_RunsTheStaleApprovalProcessorEvenWhenEmailIsDisabled()
+    {
+        var reader = new FakeReader([MakeItem()]);
+        var processor = new FakeProcessor((_, _) => throw new InvalidOperationException("dispatch must not run when Email:Enabled is false"));
+        var staleApprovalProcessor = new FakeStaleApprovalProcessor(_ => Task.FromResult(new StaleApprovalCycleResult(1, 1, 0, 0, 0, 1)));
+        var (cycle, fakeLogger) = CreateCycle(reader, processor, batchSize: 50, emailEnabled: false, staleApprovalProcessor: staleApprovalProcessor);
+
+        await cycle.RunCycleAsync(CancellationToken.None);
+
+        Assert.Equal(1, staleApprovalProcessor.CallCount);
+        var summary = GetSummaryRecord(fakeLogger);
+        AssertState(summary, "StaleApprovalExpiredCount", "1");
+        AssertState(summary, "PickedCount", "0"); // dispatch itself still fully skipped
+    }
+
+    [Fact]
+    public async Task RunCycleAsync_WhenTheStaleApprovalProcessorFailsUnexpectedly_StillRunsTheReminderProducerAndDispatch()
+    {
+        var items = new[] { MakeItem() };
+        var reader = new FakeReader(items);
+        var processor = new FakeProcessor((batch, _) => Task.FromResult<IReadOnlyList<NotificationOutboxBatchItemResult>>(
+            [new NotificationOutboxBatchItemResult(batch[0].Id, NotificationOutboxItemOutcome.Sent)]));
+        var reminderProducer = new FakeReminderProducer(_ => Task.FromResult(new ReminderProducerResult(1, 1, 0)));
+        var staleApprovalProcessor = new FakeStaleApprovalProcessor(_ => throw new InvalidOperationException("stale-approval query exploded"));
+        var (cycle, fakeLogger) = CreateCycle(reader, processor, batchSize: 50, reminderProducer: reminderProducer, staleApprovalProcessor: staleApprovalProcessor);
+
+        await cycle.RunCycleAsync(CancellationToken.None); // must not throw - isolated from the rest of the cycle
+
+        Assert.True(processor.WasCalled);
+        var summary = GetSummaryRecord(fakeLogger);
+        AssertState(summary, "SucceededCount", "1");
+        AssertState(summary, "ReminderEnqueuedCount", "1");
+        Assert.Contains(fakeLogger.Collector.GetSnapshot(), record => record.Message.Contains("Stale-approval processor failed"));
+    }
+
+    [Fact]
+    public async Task RunCycleAsync_WhenTheStaleApprovalProcessorIsCancelled_PropagatesAndNeverRunsReminderOrDispatch()
+    {
+        var reader = new FakeReader([MakeItem()]);
+        var processor = new FakeProcessor((_, _) => throw new InvalidOperationException("dispatch must never start"));
+        var reminderProducer = new FakeReminderProducer(_ => throw new InvalidOperationException("reminder producer must never start"));
+        var staleApprovalProcessor = new FakeStaleApprovalProcessor(ct =>
+        {
+            ct.ThrowIfCancellationRequested();
+            throw new OperationCanceledException(ct);
+        });
+        var (cycle, _) = CreateCycle(reader, processor, batchSize: 50, reminderProducer: reminderProducer, staleApprovalProcessor: staleApprovalProcessor);
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cycle.RunCycleAsync(cts.Token));
+
+        Assert.Equal(0, reader.CallCount);
+        Assert.False(processor.WasCalled);
+    }
+
     // --- J: summary fields + duration ---
 
     [Fact]
@@ -401,10 +505,11 @@ public sealed class NotificationOutboxJobCycleTests
 
     private static (NotificationOutboxJobCycle Cycle, FakeLogger<NotificationOutboxJobCycle> Logger) CreateCycle(
         FakeReader reader, FakeProcessor processor, int batchSize, bool emailEnabled = true, TimeProvider? timeProvider = null,
-        FakeReminderProducer? reminderProducer = null)
+        FakeReminderProducer? reminderProducer = null, FakeStaleApprovalProcessor? staleApprovalProcessor = null)
     {
         var fakeLogger = new FakeLogger<NotificationOutboxJobCycle>();
         var cycle = new NotificationOutboxJobCycle(
+            staleApprovalProcessor ?? new FakeStaleApprovalProcessor(_ => Task.FromResult(StaleApprovalCycleResult.Empty)),
             reminderProducer ?? new FakeReminderProducer(_ => Task.FromResult(ReminderProducerResult.Empty)),
             reader,
             processor,
@@ -462,6 +567,17 @@ public sealed class NotificationOutboxJobCycleTests
             CallCount++;
             LastRequestedBatchSize = batchSize;
             return Task.FromResult(itemsToReturn);
+        }
+    }
+
+    private sealed class FakeStaleApprovalProcessor(Func<CancellationToken, Task<StaleApprovalCycleResult>> onProcess) : IStaleApprovalProcessor
+    {
+        public int CallCount { get; private set; }
+
+        public Task<StaleApprovalCycleResult> ProcessDueApprovalsAsync(CancellationToken cancellationToken)
+        {
+            CallCount++;
+            return onProcess(cancellationToken);
         }
     }
 
