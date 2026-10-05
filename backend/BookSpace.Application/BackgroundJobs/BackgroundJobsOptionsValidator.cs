@@ -105,6 +105,22 @@ public sealed class BackgroundJobsOptionsValidator : IValidateOptions<Background
             }
         }
 
+        // StaleApproval:Enabled=false (the default) needs none of these checked.
+        if (options.StaleApproval.Enabled)
+        {
+            if (options.StaleApproval.BatchSize <= 0)
+            {
+                return ValidateOptionsResult.Fail("BackgroundJobs:StaleApproval:BatchSize must be a positive number of items.");
+            }
+
+            if (options.StaleApproval.BatchSize > StaleApprovalOptions.MaxBatchSize)
+            {
+                return ValidateOptionsResult.Fail(
+                    $"BackgroundJobs:StaleApproval:BatchSize must not exceed {StaleApprovalOptions.MaxBatchSize} - "
+                    + "a misconfigured value should never let one poll pull an unbounded number of candidate approvals into memory.");
+            }
+        }
+
         return ValidateOptionsResult.Success;
     }
 }

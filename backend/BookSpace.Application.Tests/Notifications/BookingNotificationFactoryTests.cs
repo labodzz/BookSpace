@@ -179,4 +179,74 @@ public sealed class BookingNotificationFactoryTests
         Assert.DoesNotContain("token", request.PayloadJson, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("password", request.PayloadJson, StringComparison.OrdinalIgnoreCase);
     }
+
+    // --- ApprovalExpired: builds from a tracked Booking plus the ApprovalRequest id that just expired -
+    // see BookingNotificationFactory's own doc comment for why the idempotency key stays in the
+    // "booking:{bookingId}:{type}" family rather than an "approval:{id}:expired" key. ---
+
+    [Fact]
+    public void ApprovalExpired_BuildsARequestWithTheBookingsOwnTenantAndOwnerAsRecipient()
+    {
+        var booking = CreateBooking();
+
+        var request = BookingNotificationFactory.ApprovalExpired(booking, Guid.NewGuid());
+
+        Assert.Equal(booking.TenantId, request.TenantId);
+        Assert.Equal(booking.UserId, request.RecipientUserId);
+        Assert.Equal(BookingNotificationTypes.ApprovalExpired, request.NotificationType);
+    }
+
+    [Fact]
+    public void ApprovalExpired_UsesTheDocumentedIdempotencyKeyFormat()
+    {
+        var booking = CreateBooking();
+
+        var request = BookingNotificationFactory.ApprovalExpired(booking, Guid.NewGuid());
+
+        Assert.Equal($"booking:{booking.Id}:approvalexpired", request.IdempotencyKey);
+        Assert.True(request.IdempotencyKey.Length < NotificationOutboxItem.MaxIdempotencyKeyLength);
+    }
+
+    [Fact]
+    public void ApprovalExpired_CalledTwiceForTheSameBookingAndApprovalRequest_ProducesTheIdenticalIdempotencyKey()
+    {
+        var booking = CreateBooking();
+        var approvalRequestId = Guid.NewGuid();
+
+        var first = BookingNotificationFactory.ApprovalExpired(booking, approvalRequestId);
+        var second = BookingNotificationFactory.ApprovalExpired(booking, approvalRequestId);
+
+        Assert.Equal(first.IdempotencyKey, second.IdempotencyKey);
+    }
+
+    [Fact]
+    public void ApprovalExpired_KeyNeverCollidesWithTheSameBookingsOtherNotificationTypes()
+    {
+        var booking = CreateBooking();
+
+        var confirmation = BookingNotificationFactory.Confirmation(booking);
+        var approvalExpired = BookingNotificationFactory.ApprovalExpired(booking, Guid.NewGuid());
+
+        Assert.NotEqual(confirmation.IdempotencyKey, approvalExpired.IdempotencyKey);
+    }
+
+    [Fact]
+    public void ApprovalExpired_PayloadContainsOnlyTheFieldsAFutureSenderNeedsAndNoSensitiveData()
+    {
+        var booking = CreateBooking();
+        var approvalRequestId = Guid.NewGuid();
+
+        var request = BookingNotificationFactory.ApprovalExpired(booking, approvalRequestId);
+        var payload = JsonSerializer.Deserialize<ApprovalExpiredNotificationPayload>(request.PayloadJson);
+
+        Assert.NotNull(payload);
+        Assert.Equal(approvalRequestId, payload!.ApprovalRequestId);
+        Assert.Equal(booking.Id, payload.BookingId);
+        Assert.Equal(booking.ResourceId, payload.ResourceId);
+        Assert.Equal(booking.StartUtc, payload.StartUtc);
+        Assert.Equal(booking.EndUtc, payload.EndUtc);
+        Assert.Equal(booking.Quantity, payload.Quantity);
+        Assert.DoesNotContain("token", request.PayloadJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("password", request.PayloadJson, StringComparison.OrdinalIgnoreCase);
+    }
 }

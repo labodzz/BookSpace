@@ -12,6 +12,7 @@ public static class BookingNotificationTypes
     public const string Rejection = "Booking.Rejection";
     public const string Cancellation = "Booking.Cancellation";
     public const string Reminder = "Booking.Reminder";
+    public const string ApprovalExpired = "Booking.ApprovalExpired";
 }
 
 // Exactly what a future sender/template needs to render a booking lifecycle notification - booking id,
@@ -21,6 +22,13 @@ public static class BookingNotificationTypes
 // NotificationOutboxItem's own doc comment), no tokens, no secrets. Dates stay DateTimeOffset (UTC), the
 // same representation Booking itself already uses.
 public sealed record BookingNotificationPayload(Guid BookingId, Guid ResourceId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, int Quantity);
+
+// Booking.ApprovalExpired's own payload, not BookingNotificationPayload: it needs one extra field
+// (ApprovalRequestId, for traceability/audit - which specific approval request this notification is
+// about) that no other booking lifecycle notification needs. Same rule as BookingNotificationPayload on
+// what's deliberately absent: no recipient email, no token, no secret.
+public sealed record ApprovalExpiredNotificationPayload(
+    Guid ApprovalRequestId, Guid BookingId, Guid ResourceId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, int Quantity);
 
 // Builds the NotificationOutboxRequest for one booking lifecycle event, so every command handler that
 // enqueues one (confirmation on create or on approval, rejection, cancellation) computes the same
@@ -47,6 +55,24 @@ public static class BookingNotificationFactory
             booking.UserId,
             JsonSerializer.Serialize(payload),
             $"booking:{booking.BookingId}:reminder");
+    }
+
+    // Takes a tracked Booking (already re-read and transitioned to Expired under the resource lock by
+    // StaleApprovalProcessor) plus the ApprovalRequest id that just expired. Idempotency key deliberately
+    // stays in the SAME "booking:{bookingId}:{type}" family every other booking notification uses (see
+    // docs/background-jobs.md, "Stale-approval job - notification") rather than an "approval:{id}:expired"
+    // key - this notification is fundamentally about the booking (same recipient, same payload shape as
+    // the other three booking lifecycle notifications), so a separate key family would be an inconsistency,
+    // not a improvement.
+    public static NotificationOutboxRequest ApprovalExpired(Booking booking, Guid approvalRequestId)
+    {
+        var payload = new ApprovalExpiredNotificationPayload(approvalRequestId, booking.Id, booking.ResourceId, booking.StartUtc, booking.EndUtc, booking.Quantity);
+        return new NotificationOutboxRequest(
+            booking.TenantId,
+            BookingNotificationTypes.ApprovalExpired,
+            booking.UserId,
+            JsonSerializer.Serialize(payload),
+            $"booking:{booking.Id}:approvalexpired");
     }
 
     private static NotificationOutboxRequest Build(Booking booking, string notificationType, string idempotencyKeySuffix)

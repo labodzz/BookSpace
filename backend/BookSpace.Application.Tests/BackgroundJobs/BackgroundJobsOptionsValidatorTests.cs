@@ -242,4 +242,45 @@ public sealed class BackgroundJobsOptionsValidatorTests
 
         Assert.True(result.Succeeded);
     }
+
+    // --- StaleApproval (nested BackgroundJobs:StaleApproval section) - disabled by default, so none of
+    // these fields are required until StaleApproval:Enabled is explicitly true ---
+
+    [Fact]
+    public void Validate_WithStaleApprovalDisabledAndAnInvalidBatchSize_StillSucceeds()
+    {
+        var result = _validator.Validate(
+            name: null, new BackgroundJobsOptions { StaleApproval = new StaleApprovalOptions { Enabled = false, BatchSize = -1 } });
+
+        Assert.True(result.Succeeded);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Validate_WithStaleApprovalEnabledAndAZeroOrNegativeBatchSize_Fails(int batchSize)
+    {
+        var result = _validator.Validate(
+            name: null, new BackgroundJobsOptions { StaleApproval = new StaleApprovalOptions { Enabled = true, BatchSize = batchSize } });
+
+        Assert.True(result.Failed);
+    }
+
+    [Fact]
+    public void Validate_WithStaleApprovalEnabledAndBatchSizeAboveTheAllowedMaximum_Fails()
+    {
+        var result = _validator.Validate(
+            name: null,
+            new BackgroundJobsOptions { StaleApproval = new StaleApprovalOptions { Enabled = true, BatchSize = StaleApprovalOptions.MaxBatchSize + 1 } });
+
+        Assert.True(result.Failed);
+    }
+
+    [Fact]
+    public void Validate_WithStaleApprovalEnabledAndTheDefaultBatchSize_Succeeds()
+    {
+        var result = _validator.Validate(name: null, new BackgroundJobsOptions { StaleApproval = new StaleApprovalOptions { Enabled = true } });
+
+        Assert.True(result.Succeeded);
+    }
 }

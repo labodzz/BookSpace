@@ -62,6 +62,11 @@ namespace BookSpace.Infrastructure.Migrations
                     b.HasIndex("BookingId")
                         .IsUnique();
 
+                    b.HasIndex("ExpiresAtUtc")
+                        .HasFilter("[Status] = 'Pending'");
+
+                    SqlServerIndexBuilderExtensions.IncludeProperties(b.HasIndex("ExpiresAtUtc"), new[] { "TenantId", "BookingId", "RequestedAtUtc" });
+
                     b.HasIndex("TenantId");
 
                     b.ToTable("ApprovalRequests", null, t =>
