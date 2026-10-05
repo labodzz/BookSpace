@@ -11,6 +11,7 @@ public static class BookingNotificationTypes
     public const string Confirmation = "Booking.Confirmation";
     public const string Rejection = "Booking.Rejection";
     public const string Cancellation = "Booking.Cancellation";
+    public const string Reminder = "Booking.Reminder";
 }
 
 // Exactly what a future sender/template needs to render a booking lifecycle notification - booking id,
@@ -32,6 +33,21 @@ public static class BookingNotificationFactory
     public static NotificationOutboxRequest Rejection(Booking booking) => Build(booking, BookingNotificationTypes.Rejection, "rejection");
 
     public static NotificationOutboxRequest Cancellation(Booking booking) => Build(booking, BookingNotificationTypes.Cancellation, "cancellation");
+
+    // Takes a DueBookingReminder projection, not a tracked Booking entity: IBookingReminderReader's
+    // system-wide due query (see docs/background-jobs.md, "Reminder job") is a narrow, untracked
+    // Select(...), never a full entity load - this overload exists so the reminder producer never needs
+    // to load a full Booking just to build the same request shape the other three overloads build.
+    public static NotificationOutboxRequest Reminder(DueBookingReminder booking)
+    {
+        var payload = new BookingNotificationPayload(booking.BookingId, booking.ResourceId, booking.StartUtc, booking.EndUtc, booking.Quantity);
+        return new NotificationOutboxRequest(
+            booking.TenantId,
+            BookingNotificationTypes.Reminder,
+            booking.UserId,
+            JsonSerializer.Serialize(payload),
+            $"booking:{booking.BookingId}:reminder");
+    }
 
     private static NotificationOutboxRequest Build(Booking booking, string notificationType, string idempotencyKeySuffix)
     {

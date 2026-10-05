@@ -248,6 +248,39 @@ public sealed class NotificationOutboxProcessorTests : IAsyncLifetime
         Assert.Empty(await GetDueBatchAsync(50));
     }
 
+    // --- Suppressed (the reminder cancellation-race outcome - docs/background-jobs.md, "Cancellation
+    // race for reminders"): terminal immediately, never retried, distinct from DeadLettered ---
+
+    [Fact]
+    public async Task ProcessItemAsync_WithASuppressedResult_MarksTheItemSuppressedAndNeverRetries()
+    {
+        var item = await SeedItemAsync();
+        var sender = new FakeNotificationSender();
+        sender.Enqueue(NotificationSendResult.Suppressed("booking no longer confirmed"));
+        var (processor, _) = CreateProcessor(sender, maxAttempts: 5);
+
+        var outcome = await processor.ProcessItemAsync(item, CancellationToken.None);
+
+        Assert.Equal(NotificationOutboxItemOutcome.Suppressed, outcome);
+        var entity = await LoadEntityAsync(item.Id);
+        Assert.Equal(NotificationOutboxStatus.Suppressed, entity.Status);
+        Assert.Equal("booking no longer confirmed", entity.LastError);
+        Assert.Equal(1, entity.AttemptCount); // exactly one attempt - Suppressed never retries, same as Permanent
+    }
+
+    [Fact]
+    public async Task AfterSuppressing_TheItemIsNeverReturnedByTheDueBatchReader()
+    {
+        var item = await SeedItemAsync();
+        var sender = new FakeNotificationSender();
+        sender.Enqueue(NotificationSendResult.Suppressed("booking no longer confirmed"));
+        var (processor, _) = CreateProcessor(sender);
+
+        await processor.ProcessItemAsync(item, CancellationToken.None);
+
+        Assert.Empty(await GetDueBatchAsync(50));
+    }
+
     // --- 13/14/19: per-item isolation - one item's unexpected failure never aborts the batch or rolls
     // back an earlier item's already-committed success; each item uses its own independent DbContext ---
 

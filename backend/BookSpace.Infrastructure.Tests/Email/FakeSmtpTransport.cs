@@ -101,6 +101,24 @@ internal sealed class FakeEmailRecipientResolver(BookSpace.Application.Notificat
     }
 }
 
+// Defaults to "still eligible" (true) - only the dedicated reminder cancellation-race tests need to flip
+// this to false. Records the exact (tenantId, bookingId) pair it was called with, so a test can prove the
+// sender passed through the message's own TenantId and the payload's own BookingId, not something else.
+internal sealed class FakeBookingReminderEligibilityChecker(bool isEligible = true) : BookSpace.Application.Notifications.IBookingReminderEligibilityChecker
+{
+    public Guid? LastTenantId { get; private set; }
+    public Guid? LastBookingId { get; private set; }
+    public int CallCount { get; private set; }
+
+    public Task<bool> IsStillEligibleAsync(Guid tenantId, Guid bookingId, CancellationToken cancellationToken)
+    {
+        LastTenantId = tenantId;
+        LastBookingId = bookingId;
+        CallCount++;
+        return Task.FromResult(isEligible);
+    }
+}
+
 internal sealed class CapturingLogger<T> : Microsoft.Extensions.Logging.ILogger<T>
 {
     public List<string> Messages { get; } = [];

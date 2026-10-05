@@ -255,6 +255,122 @@ public sealed class NotificationOutboxJobCycleTests
         }
     }
 
+    // --- Suppressed (the reminder cancellation-race outcome) is tallied distinctly from both
+    // PermanentFailure/DeadLetter and from an ordinary success ---
+
+    [Fact]
+    public async Task RunCycleAsync_WithASuppressedItem_CountsItSeparatelyFromDeadLetteredAndSucceeded()
+    {
+        var items = new[] { MakeItem(), MakeItem() };
+        var reader = new FakeReader(items);
+        var processor = new FakeProcessor((batch, _) => Task.FromResult<IReadOnlyList<NotificationOutboxBatchItemResult>>(
+        [
+            new NotificationOutboxBatchItemResult(batch[0].Id, NotificationOutboxItemOutcome.Suppressed),
+            new NotificationOutboxBatchItemResult(batch[1].Id, NotificationOutboxItemOutcome.Sent),
+        ]));
+        var (cycle, fakeLogger) = CreateCycle(reader, processor, batchSize: 50);
+
+        await cycle.RunCycleAsync(CancellationToken.None);
+
+        var summary = GetSummaryRecord(fakeLogger);
+        AssertState(summary, "SuppressedCount", "1");
+        AssertState(summary, "SucceededCount", "1");
+        AssertState(summary, "DeadLetterCount", "0");
+    }
+
+    // --- Reminder producer: runs first, feeds the summary, is isolated from dispatch, and its
+    // cancellation aborts the whole cycle before dispatch ever starts ---
+
+    [Fact]
+    public async Task RunCycleAsync_CallsTheReminderProducerBeforeTheDispatchReader()
+    {
+        var callOrder = new List<string>();
+        var processor = new FakeProcessor((_, _) => throw new InvalidOperationException("must not be called for an empty batch"));
+        var reminderProducer = new FakeReminderProducer(_ =>
+        {
+            callOrder.Add("reminder");
+            return Task.FromResult(ReminderProducerResult.Empty);
+        });
+        var reader = new FakeReader([], onCalled: () => callOrder.Add("dispatch"));
+        var (cycle, _) = CreateCycle(reader, processor, batchSize: 50, reminderProducer: reminderProducer);
+
+        await cycle.RunCycleAsync(CancellationToken.None);
+
+        Assert.Equal(["reminder", "dispatch"], callOrder);
+    }
+
+    [Fact]
+    public async Task RunCycleAsync_IncludesTheReminderProducersCountsInTheSummary()
+    {
+        var reader = new FakeReader([]);
+        var processor = new FakeProcessor((_, _) => throw new InvalidOperationException("must not be called for an empty batch"));
+        var reminderProducer = new FakeReminderProducer(_ => Task.FromResult(new ReminderProducerResult(CandidateCount: 4, EnqueuedCount: 3, DuplicateCount: 1)));
+        var (cycle, fakeLogger) = CreateCycle(reader, processor, batchSize: 50, reminderProducer: reminderProducer);
+
+        await cycle.RunCycleAsync(CancellationToken.None);
+
+        var summary = GetSummaryRecord(fakeLogger);
+        AssertState(summary, "ReminderCandidateCount", "4");
+        AssertState(summary, "ReminderEnqueuedCount", "3");
+        AssertState(summary, "ReminderDuplicateCount", "1");
+    }
+
+    [Fact]
+    public async Task RunCycleAsync_RunsTheReminderProducerEvenWhenEmailIsDisabled()
+    {
+        var reader = new FakeReader([MakeItem()]);
+        var processor = new FakeProcessor((_, _) => throw new InvalidOperationException("dispatch must not run when Email:Enabled is false"));
+        var reminderProducer = new FakeReminderProducer(_ => Task.FromResult(new ReminderProducerResult(1, 1, 0)));
+        var (cycle, fakeLogger) = CreateCycle(reader, processor, batchSize: 50, emailEnabled: false, reminderProducer: reminderProducer);
+
+        await cycle.RunCycleAsync(CancellationToken.None);
+
+        // Producing a reminder (an outbox row) is independent of whether the email TRANSPORT is enabled -
+        // see docs/background-jobs.md ("Reminder job - relationship to Email:Enabled").
+        Assert.Equal(1, reminderProducer.CallCount);
+        var summary = GetSummaryRecord(fakeLogger);
+        AssertState(summary, "ReminderEnqueuedCount", "1");
+        AssertState(summary, "PickedCount", "0"); // dispatch itself still fully skipped
+    }
+
+    [Fact]
+    public async Task RunCycleAsync_WhenTheReminderProducerFailsUnexpectedly_StillDispatchesAlreadyDueItems()
+    {
+        var items = new[] { MakeItem() };
+        var reader = new FakeReader(items);
+        var processor = new FakeProcessor((batch, _) => Task.FromResult<IReadOnlyList<NotificationOutboxBatchItemResult>>(
+            [new NotificationOutboxBatchItemResult(batch[0].Id, NotificationOutboxItemOutcome.Sent)]));
+        var reminderProducer = new FakeReminderProducer(_ => throw new InvalidOperationException("reminder query exploded"));
+        var (cycle, fakeLogger) = CreateCycle(reader, processor, batchSize: 50, reminderProducer: reminderProducer);
+
+        await cycle.RunCycleAsync(CancellationToken.None); // must not throw - isolated from dispatch
+
+        Assert.True(processor.WasCalled);
+        var summary = GetSummaryRecord(fakeLogger);
+        AssertState(summary, "SucceededCount", "1");
+        Assert.Contains(fakeLogger.Collector.GetSnapshot(), record => record.Message.Contains("Reminder producer failed"));
+    }
+
+    [Fact]
+    public async Task RunCycleAsync_WhenTheReminderProducerIsCancelled_PropagatesAndNeverRunsDispatch()
+    {
+        var reader = new FakeReader([MakeItem()]);
+        var processor = new FakeProcessor((_, _) => throw new InvalidOperationException("dispatch must never start"));
+        var reminderProducer = new FakeReminderProducer(ct =>
+        {
+            ct.ThrowIfCancellationRequested();
+            throw new OperationCanceledException(ct);
+        });
+        var (cycle, _) = CreateCycle(reader, processor, batchSize: 50, reminderProducer: reminderProducer);
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cycle.RunCycleAsync(cts.Token));
+
+        Assert.Equal(0, reader.CallCount);
+        Assert.False(processor.WasCalled);
+    }
+
     // --- J: summary fields + duration ---
 
     [Fact]
@@ -284,10 +400,12 @@ public sealed class NotificationOutboxJobCycleTests
         Guid.NewGuid(), TenantId, "Booking.Confirmation", Guid.NewGuid(), "not-a-real-payload-marker", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, AttemptCount: 0);
 
     private static (NotificationOutboxJobCycle Cycle, FakeLogger<NotificationOutboxJobCycle> Logger) CreateCycle(
-        FakeReader reader, FakeProcessor processor, int batchSize, bool emailEnabled = true, TimeProvider? timeProvider = null)
+        FakeReader reader, FakeProcessor processor, int batchSize, bool emailEnabled = true, TimeProvider? timeProvider = null,
+        FakeReminderProducer? reminderProducer = null)
     {
         var fakeLogger = new FakeLogger<NotificationOutboxJobCycle>();
         var cycle = new NotificationOutboxJobCycle(
+            reminderProducer ?? new FakeReminderProducer(_ => Task.FromResult(ReminderProducerResult.Empty)),
             reader,
             processor,
             Options.Create(new BackgroundJobsOptions { BatchSize = batchSize }),
@@ -332,7 +450,7 @@ public sealed class NotificationOutboxJobCycleTests
         public string OwnerId => "fake-owner";
     }
 
-    private sealed class FakeReader(IReadOnlyList<DueNotificationOutboxItem> itemsToReturn) : INotificationOutboxReader
+    private sealed class FakeReader(IReadOnlyList<DueNotificationOutboxItem> itemsToReturn, Action? onCalled = null) : INotificationOutboxReader
     {
         public int CallCount { get; private set; }
         public int LastRequestedBatchSize { get; private set; }
@@ -340,9 +458,21 @@ public sealed class NotificationOutboxJobCycleTests
         public Task<IReadOnlyList<DueNotificationOutboxItem>> GetDueBatchAsync(int batchSize, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            onCalled?.Invoke();
             CallCount++;
             LastRequestedBatchSize = batchSize;
             return Task.FromResult(itemsToReturn);
+        }
+    }
+
+    private sealed class FakeReminderProducer(Func<CancellationToken, Task<ReminderProducerResult>> onProduce) : IReminderProducer
+    {
+        public int CallCount { get; private set; }
+
+        public Task<ReminderProducerResult> ProduceDueRemindersAsync(CancellationToken cancellationToken)
+        {
+            CallCount++;
+            return onProduce(cancellationToken);
         }
     }
 

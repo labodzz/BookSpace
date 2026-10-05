@@ -1138,9 +1138,12 @@ is the piece that finally connects every earlier WP-8 branch into one running sy
 BackgroundJobsWorker (singleton, owns the poll loop)
   -> IJobLeaseCoordinator.TryAcquireAsync (skips this poll entirely if another instance already owns the lease)
   -> fresh IServiceScope, resolves IBackgroundJobCycle = NotificationOutboxJobCycle
-    -> INotificationOutboxReader.GetDueBatchAsync(BackgroundJobsOptions.BatchSize)  (one bounded call, once)
+    -> IReminderProducer.ProduceDueRemindersAsync                                   (see "Reminder job" below - runs first, regardless of Email:Enabled)
+      -> IBookingReminderReader.GetDueBookingsAsync(BackgroundJobs:Reminder:LeadTimeMinutes/BatchSize)
+      -> INotificationOutboxWriter.EnqueueManyAsync(one Booking.Reminder request per candidate)
+    -> INotificationOutboxReader.GetDueBatchAsync(BackgroundJobsOptions.BatchSize)  (one bounded call, once - skipped entirely if Email:Enabled is false)
     -> INotificationOutboxProcessor.ProcessBatchAsync(batch)                        (per-item retry/backoff/dead-letter, unchanged)
-      -> INotificationSender.SendAsync (SmtpNotificationSender, per item)
+      -> INotificationSender.SendAsync (SmtpNotificationSender, per item - re-checks eligibility immediately before sending a Reminder, see below)
 ```
 
 ### What the cycle owns, and what it deliberately does not
@@ -1251,11 +1254,175 @@ Worth restating precisely now that all three actually exist in the running syste
   message but before this system recorded `Status=Sent`. Nothing in this cycle (or anywhere else in this
   branch) closes that gap - it is a property of at-least-once delivery, not a bug.
 
+## Reminder job
+
+`ReminderProducer` (`BookSpace.Application.BackgroundJobs`) is the first step `NotificationOutboxJobCycle`
+runs every cycle, before the existing outbox dispatch - see the flow diagram above. It finds `Confirmed`
+bookings whose start time is approaching and enqueues one `Booking.Reminder` notification-outbox item per
+booking, using the exact same `INotificationOutboxWriter.EnqueueManyAsync` the booking-lifecycle-notification
+branch already built - no new enqueue mechanism, no new retry/dispatch machinery.
+
+### Configuration
+
+```
+BackgroundJobs:
+  Reminder:
+    Enabled: false      # off by default, same reasoning as BackgroundJobs:Enabled/Email:Enabled
+    LeadTimeMinutes: 60
+    BatchSize: 50
+```
+
+A nested section of `BackgroundJobsOptions` (`ReminderOptions`), not a sibling top-level section - it only
+ever makes sense in the context of the one job it configures, and it is validated by the same
+`BackgroundJobsOptionsValidator`/`ValidateOnStart()` pipeline, gated the same way every other `Enabled`
+flag in this subsystem is: when `Reminder:Enabled` is `false` (the default), none of `LeadTimeMinutes`/
+`BatchSize` are validated at all, so an unconfigured deployment needs nothing further to start.
+
+**`BatchSize` is deliberately its own setting, not a reuse of the top-level `BackgroundJobs:BatchSize`**:
+the two bound genuinely different queries - how many *candidate bookings* the reminder producer reads per
+cycle, vs. how many *due notification-outbox rows* the dispatcher reads per cycle - that happen to share a
+reasonable numeric ceiling, not the same concern. Collapsing them would mean a future change to one query's
+realistic volume silently affects the other's.
+
+**Open design question, deliberately deferred, not overlooked**: `Tenant` has carried `ReminderLeadMinutes`
+(default 30) and `NoShowGraceMinutes` (default 15) columns, with `>= 0` check constraints, since the very
+first WP-1 migration - but neither has ever been read by any business logic until now. This branch
+intentionally uses the global `BackgroundJobs:Reminder:LeadTimeMinutes` setting above instead of the
+per-tenant `Tenant.ReminderLeadMinutes` column, confirmed as the right scope for *this* task - but a future
+WP-8 task should decide whether lead time (and eventually the no-show grace period) becomes a genuine
+per-tenant setting sourced from those existing columns instead of a single app-wide value. Nothing in this
+branch reads or writes either column.
+
+### Business rule
+
+A booking is a due reminder candidate when it is `Confirmed`, its `StartUtc` is still in the future, and
+`StartUtc` is no further away than `LeadTimeMinutes` - e.g. with `LeadTimeMinutes=60` and "now" at 14:00, a
+`Confirmed` booking starting at 14:45 is due; one starting at 16:00 is not yet, and becomes due on a later
+poll once it falls inside the window; one that has already started (`StartUtc <= now`) is never a reminder
+candidate, regardless of status - a reminder for a meeting that already began would not be a reminder.
+`Pending`/`Rejected`/`Cancelled`/`Completed`/`NoShow` bookings are never candidates at any `StartUtc`.
+
+**Recurring bookings**: every occurrence is already its own independent `Booking` row (see
+[recurring-bookings-and-approvals.md](recurring-bookings-and-approvals.md)), so this needed no special
+handling at all - each `Confirmed` occurrence becomes its own reminder candidate, with its own idempotency
+key, exactly like an ordinary one-off booking. There is no "one reminder for the whole series" concept, and
+a cancelled occurrence is simply never `Confirmed`, so it was never a candidate in the first place (or, if
+it was cancelled after a reminder was already enqueued, see "Cancellation race" below).
+
+### Idempotency
+
+`booking:{bookingId}:reminder` - the same `booking:{bookingId}:{type}` format and the same
+`(TenantId, IdempotencyKey)` unique constraint every other booking notification already relies on
+(`BookingNotificationFactory.Reminder`). `ReminderProducer` deliberately does **not** try to pre-filter
+candidates that already have a reminder enqueued out of its own query - `NotificationOutboxItems` has no
+`BookingId` column to join on, only the composed `IdempotencyKey` string, and translating that
+string-comparison into a reliable SQL anti-join is exactly the kind of fragile, easy-to-get-subtly-wrong
+cross-type SQL translation this codebase avoids elsewhere too. Instead, every candidate within the
+lead-time window is resubmitted to `EnqueueManyAsync` on every poll until it leaves the window (by starting,
+or being cancelled); the ones already enqueued simply come back `AlreadyExists` - cheap, harmless, and
+exactly what the database constraint exists to make safe regardless of how many times it happens. The
+database constraint, never an `Any()`-then-insert check, remains the sole authority against a genuine
+concurrent/retried duplicate.
+
+### Database clock
+
+Both bounds of the due-window comparison (`StartUtc > now` and `StartUtc <= now + LeadTimeMinutes`) are
+written as `DateTimeOffset.UtcNow`/`DateTimeOffset.UtcNow.AddMinutes(...)` directly inline in the LINQ query
+(`BookingReminderReader`), never captured into a local variable first - confirmed against the real generated
+SQL (LocalDB), which evaluates **both** bounds via `SYSUTCDATETIME()` (`SYSUTCDATETIME()` appears twice in
+the generated command: once for the lower bound, once inside the `DATEADD(minute, @leadTimeMinutes,
+SYSUTCDATETIME())` upper bound), never a literal instant captured by this application process. This matters
+even more here than for the existing notification due-batch query: several instances, each with a
+potentially slightly different system clock, must all agree on exactly which bookings are "upcoming," not
+just on what counts as "already past."
+
+### Bounded query and its index
+
+`BookingReminderReader.GetDueBookingsAsync` returns at most `BatchSize` candidates, ordered deterministically
+(`StartUtc`, then `CreatedAtUtc`, then `Id` as tie-breakers - a future reminder run can realistically produce
+several bookings sharing an identical `StartUtc`). `Bookings`' only pre-existing index
+(`TenantId, ResourceId, StartUtc, EndUtc`) starts with `TenantId`, so it cannot help a query that must scan
+every tenant in one call - this branch adds a new filtered, covering index:
+
+```sql
+CREATE INDEX [IX_Bookings_StartUtc] ON [Bookings] ([StartUtc])
+  INCLUDE ([TenantId], [UserId], [ResourceId], [EndUtc], [Quantity], [CreatedAtUtc])
+  WHERE [Status] = 'Confirmed'
+```
+
+(migration `AddBookingReminderDueIndex`) - the same filtered-covering-index pattern `NotificationOutboxItems`'
+own due-batch index already uses, for the same reason. Verified against real SQL Server/LocalDB, not assumed:
+seeded ~5,000 `Bookings` rows (a realistic mix of statuses and `StartUtc` values, mostly outside the window or
+not `Confirmed`) and captured the actual execution plan for the generated query - `PhysicalOp="Index Seek"`
+against `Index="[IX_Bookings_StartUtc]"`, with a `SeekPredicates` node present (confirming a true seek, not a
+scan reported under the same XML element name), plus one cheap `Sort` step for the `CreatedAtUtc`/`Id`
+tie-break (the same trade-off `NotificationOutboxItems`' own index makes - only the primary due-column is
+part of the index key).
+
+### Cancellation race
+
+A reminder is enqueued well before it is actually sent - the booking it describes can legitimately change
+state in that window, most importantly by being cancelled. Confirmation/Rejection/Cancellation notifications
+never have this problem (each is enqueued only once the event it announces has already happened), but a
+reminder announces a *future* event, so this is real: a booking can be read as `Confirmed` by
+`ReminderProducer`, then cancelled before the dispatcher ever picks up its already-enqueued reminder.
+
+The fix is in `SmtpNotificationSender`, not in the producer or the processor: immediately before actually
+building/sending a `Booking.Reminder` email (after template rendering has already validated the payload, but
+before any SMTP connection is opened), it calls the new `IBookingReminderEligibilityChecker.IsStillEligibleAsync(tenantId,
+bookingId, ...)` - a narrow, `AsNoTracking()`, `IgnoreQueryFilters()` re-read of that one booking's current
+`Status`/`StartUtc` (the same documented, narrow tenant-filter exception as `IEmailRecipientResolver`,
+requiring both `tenantId` and `bookingId` together so a cross-tenant combination can never resolve). If the
+booking is no longer `Confirmed`, or its `StartUtc` has since passed, the sender returns a new
+`NotificationSendOutcome.Suppressed` result **without ever opening an SMTP connection** - re-checking back
+when the reminder was first enqueued would not have closed this race, since the booking could still be
+cancelled afterward; this check has to run this late to actually close it.
+
+`NotificationOutboxProcessor` maps `Suppressed` to a new terminal `NotificationOutboxStatus.Suppressed` (and
+`NotificationOutboxItemOutcome.Suppressed`) - no migration needed (the column is a string, like
+`DeadLettered` before it), but the due-batch query's existing `WHERE Status = 'Pending'` filter already
+excludes it automatically, so it is never picked up again, and the cycle's summary counts it in its own
+`SuppressedCount` field, distinct from both `SucceededCount` and `DeadLetterCount`/`PermanentFailureCount`.
+**`Suppressed` is intentionally not the same thing as `DeadLettered`**: dead-lettering means delivery was
+attempted and failed; suppression means delivery was correctly never attempted at all, because sending would
+now be wrong, not because anything went wrong. Collapsing the two would hide that distinction from anyone
+reading the outbox table.
+
+### Relationship to `Email:Enabled`
+
+`ReminderProducer` runs regardless of `Email:Enabled` - producing a reminder (a row in the notification
+outbox) is a business-level decision independent of whether the email *transport* happens to be configured
+right now. If email sending is temporarily disabled, reminders still accumulate correctly in the outbox so
+they are ready the moment it is re-enabled; the existing cancellation-race check above already handles the
+case where a backlogged reminder's booking's `StartUtc` has since passed by then (it gets `Suppressed`, never
+silently sent late). The producer step is isolated from the dispatch step with its own `try`/`catch`: an
+unexpected exception while producing reminders is logged and the cycle still goes on to dispatch whatever
+notification items are already due (dispatching is a completely independent concern from producing new
+reminders), but cancellation (application shutdown or a lost job lease) always propagates immediately,
+aborting the whole cycle before dispatch ever runs - never absorbed, never silently continued past.
+
+### Logging
+
+The end-of-cycle summary line gained three fields sourced directly from `ReminderProducerResult` -
+`ReminderCandidateCount`, `ReminderEnqueuedCount`, `ReminderDuplicateCount` - alongside the existing dispatch
+fields and the new `SuppressedCount`:
+
+```
+Notification outbox cycle completed. JobName=notification-outbox CorrelationId=...
+ReminderCandidateCount=4 ReminderEnqueuedCount=3 ReminderDuplicateCount=1
+RequestedBatchSize=50 PickedCount=3 SucceededCount=2 TransientFailureCount=1 PermanentFailureCount=0
+DeadLetterCount=0 SuppressedCount=0 UnexpectedFailureCount=0 ElapsedMilliseconds=842.3
+```
+
+Never logged: the recipient's email, `PayloadJson`, SMTP credentials - unchanged from every other piece of
+this subsystem.
+
 ## What the earlier WP-8 branches did not implement
 
 No-show processing, stale-approval handling, an ICS feed, and any new booking business logic beyond
-enqueuing a notification at the point a lifecycle transition is already decided, all remain future WP-8
-work - unchanged by this branch. In particular: the notification outbox is infrastructure for *durable,
+enqueuing a notification at the point a lifecycle transition is already decided (or, for the reminder job,
+at the point one is approaching), all remain future WP-8 work. In particular: the notification outbox is
+infrastructure for *durable,
 deduplicated intent*, not for *guaranteed email delivery*; per-item processing adds *persisted retry/
 backoff/dead-letter bookkeeping*, still not *exactly-once delivery* of the external side effect itself; the
 booking-lifecycle-notification branch makes the booking state change and its notification enqueue(s) commit

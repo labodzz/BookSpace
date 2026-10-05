@@ -53,6 +53,12 @@ public static class DependencyInjection
         services.AddScoped<IJobLeaseStore, JobLeaseStore>();
         services.AddScoped<INotificationOutboxWriter, NotificationOutboxWriter>();
         services.AddScoped<INotificationOutboxReader, NotificationOutboxReader>();
+
+        // Reminder job - see docs/background-jobs.md ("Reminder job"). Both Scoped: both need the scoped
+        // BookSpaceDbContext, and IBookingReminderEligibilityChecker is resolved from the same per-item DI
+        // scope NotificationOutboxProcessor already creates, matching IEmailRecipientResolver's lifetime.
+        services.AddScoped<IBookingReminderReader, BookingReminderReader>();
+        services.AddScoped<IBookingReminderEligibilityChecker, BookingReminderEligibilityChecker>();
         // Scoped, not singleton: it only ever holds IServiceScopeFactory itself (safe at any lifetime),
         // but letting it be Scoped avoids ever forcing a future INotificationSender implementation that
         // needs its own scoped dependencies (a scoped HttpClient, say) into a captive-dependency problem.

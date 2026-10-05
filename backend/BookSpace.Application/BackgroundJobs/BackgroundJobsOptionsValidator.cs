@@ -77,6 +77,34 @@ public sealed class BackgroundJobsOptionsValidator : IValidateOptions<Background
                 $"BackgroundJobs:MaxRetryDelaySeconds must not exceed {BackgroundJobsOptions.MaxAllowedRetryDelaySeconds} seconds.");
         }
 
+        // Reminder:Enabled=false (the default) needs none of these checked - exactly the same "disabled
+        // needs no further configuration" shape as the top-level BackgroundJobs:Enabled/Email:Enabled.
+        if (options.Reminder.Enabled)
+        {
+            if (options.Reminder.LeadTimeMinutes <= 0)
+            {
+                return ValidateOptionsResult.Fail("BackgroundJobs:Reminder:LeadTimeMinutes must be a positive number of minutes.");
+            }
+
+            if (options.Reminder.LeadTimeMinutes > ReminderOptions.MaxLeadTimeMinutes)
+            {
+                return ValidateOptionsResult.Fail(
+                    $"BackgroundJobs:Reminder:LeadTimeMinutes must not exceed {ReminderOptions.MaxLeadTimeMinutes} minutes.");
+            }
+
+            if (options.Reminder.BatchSize <= 0)
+            {
+                return ValidateOptionsResult.Fail("BackgroundJobs:Reminder:BatchSize must be a positive number of items.");
+            }
+
+            if (options.Reminder.BatchSize > ReminderOptions.MaxBatchSize)
+            {
+                return ValidateOptionsResult.Fail(
+                    $"BackgroundJobs:Reminder:BatchSize must not exceed {ReminderOptions.MaxBatchSize} - "
+                    + "a misconfigured value should never let one poll pull an unbounded number of candidate bookings into memory.");
+            }
+        }
+
         return ValidateOptionsResult.Success;
     }
 }

@@ -57,4 +57,37 @@ public sealed class BackgroundJobsOptions
     // failed - without this, a long-failing item's next attempt could end up scheduled absurdly far in
     // the future.
     public int MaxRetryDelaySeconds { get; init; } = 3600;
+
+    // See docs/background-jobs.md ("Reminder job") for the full design.
+    public ReminderOptions Reminder { get; init; } = new();
+}
+
+// Bound from "BackgroundJobs:Reminder" - a nested section of BackgroundJobsOptions, not a sibling
+// top-level section, since it only ever makes sense in the context of the one hosted-service job it
+// configures.
+public sealed class ReminderOptions
+{
+    // Deliberately its own cap, not BackgroundJobsOptions.MaxBatchSize: the two settings bound genuinely
+    // different queries (how many Confirmed bookings the reminder producer reads as candidates per cycle,
+    // vs. how many due notification-outbox rows the dispatcher reads per cycle) that happen to share a
+    // reasonable numeric ceiling, not the same concern - see docs/background-jobs.md ("Reminder job -
+    // configuration") for why this was not collapsed into the shared BackgroundJobs:BatchSize.
+    public const int MaxBatchSize = 1000;
+
+    // A sanity ceiling, not a business rule: nothing about the reminder concept requires a cap this high,
+    // it exists only so a misconfigured value (an extra zero) cannot schedule reminders for bookings a
+    // week or more out, which would just mean the SAME confirmed bookings keep getting re-selected as
+    // "due" candidates every poll for days before they're ever actually near their start time.
+    public const int MaxLeadTimeMinutes = 10_080; // 7 days
+
+    // Off by default, same reasoning as BackgroundJobsOptions.Enabled/EmailOptions.Enabled: a feature this
+    // codebase has not shipped a reminder email template/flow for in every deployment should never start
+    // silently emailing people the moment this branch merges - an operator must explicitly opt in.
+    public bool Enabled { get; init; }
+
+    // How long before a Confirmed booking's StartUtc its reminder becomes due - see
+    // docs/background-jobs.md ("Reminder job - business rule") for the exact due-window definition.
+    public int LeadTimeMinutes { get; init; } = 60;
+
+    public int BatchSize { get; init; } = 50;
 }

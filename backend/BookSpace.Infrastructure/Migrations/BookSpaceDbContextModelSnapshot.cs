@@ -201,6 +201,11 @@ namespace BookSpace.Infrastructure.Migrations
 
                     b.HasIndex("SeriesId");
 
+                    b.HasIndex("StartUtc")
+                        .HasFilter("[Status] = 'Confirmed'");
+
+                    SqlServerIndexBuilderExtensions.IncludeProperties(b.HasIndex("StartUtc"), new[] { "TenantId", "UserId", "ResourceId", "EndUtc", "Quantity", "CreatedAtUtc" });
+
                     b.HasIndex("UserId");
 
                     b.HasIndex("TenantId", "ResourceId", "StartUtc", "EndUtc");

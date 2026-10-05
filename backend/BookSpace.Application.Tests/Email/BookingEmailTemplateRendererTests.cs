@@ -49,6 +49,48 @@ public sealed class BookingEmailTemplateRendererTests
     }
 
     [Fact]
+    public void Render_ForReminder_ProducesAReminderSubjectAndBody()
+    {
+        var content = _renderer.Render(BookingNotificationTypes.Reminder, PayloadJson(), "Ana Anic");
+
+        Assert.Equal("Reminder: your BookSpace booking starts soon", content.Subject);
+        Assert.Contains("starting soon", content.PlainTextBody);
+        Assert.Contains("starting soon", content.HtmlBody);
+    }
+
+    [Fact]
+    public void Render_ForReminder_IncludesBookingIdResourceIdTimesAndQuantity()
+    {
+        var content = _renderer.Render(BookingNotificationTypes.Reminder, PayloadJson(), "Ana Anic");
+
+        Assert.Contains(SamplePayload.BookingId.ToString(), content.PlainTextBody);
+        Assert.Contains(SamplePayload.ResourceId.ToString(), content.PlainTextBody);
+        Assert.Contains("2026-03-01 09:00 UTC", content.PlainTextBody);
+        Assert.Contains("2026-03-01 10:00 UTC", content.PlainTextBody);
+        Assert.Contains("2", content.PlainTextBody);
+    }
+
+    [Fact]
+    public void Render_ForReminder_HtmlEscapesTheRecipientDisplayName()
+    {
+        const string maliciousName = "<script>alert('x')</script>";
+
+        var content = _renderer.Render(BookingNotificationTypes.Reminder, PayloadJson(), maliciousName);
+
+        Assert.DoesNotContain("<script>", content.HtmlBody);
+        Assert.Contains("&lt;script&gt;", content.HtmlBody);
+    }
+
+    [Fact]
+    public void Render_ForReminder_IsDeterministic_SameInputsProduceIdenticalOutputOnEveryCall()
+    {
+        var first = _renderer.Render(BookingNotificationTypes.Reminder, PayloadJson(), "Ana Anic");
+        var second = _renderer.Render(BookingNotificationTypes.Reminder, PayloadJson(), "Ana Anic");
+
+        Assert.Equal(first, second);
+    }
+
+    [Fact]
     public void Render_PlainTextBody_IncludesBookingIdResourceIdQuantityAndNotHtmlMarkup()
     {
         var content = _renderer.Render(BookingNotificationTypes.Confirmation, PayloadJson(), "Ana Anic");

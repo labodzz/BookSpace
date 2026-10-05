@@ -22,6 +22,10 @@ public static class DependencyInjection
         services.AddScoped<IBackgroundJobCycle, NotificationOutboxJobCycle>();
         services.AddSingleton<IValidateOptions<BackgroundJobsOptions>, BackgroundJobsOptionsValidator>();
 
+        // Scoped to match IBookingReminderReader/INotificationOutboxWriter, which both need the scoped
+        // BookSpaceDbContext - see docs/background-jobs.md ("Reminder job").
+        services.AddScoped<IReminderProducer, ReminderProducer>();
+
         // Stateless - safe as a singleton. See docs/background-jobs.md ("Email templates").
         services.AddSingleton<IEmailTemplateRenderer, BookingEmailTemplateRenderer>();
         services.AddSingleton<IValidateOptions<EmailOptions>, EmailOptionsValidator>();
