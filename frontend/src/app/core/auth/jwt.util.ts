@@ -19,10 +19,14 @@ export function decodeAccessToken(accessToken: string): CurrentUser | null {
 
   const userId = payload['sub'];
   const email = payload['email'];
-  const tenantId = payload['tenant_id'];
-  if (typeof userId !== 'string' || typeof email !== 'string' || typeof tenantId !== 'string') {
+  if (typeof userId !== 'string' || typeof email !== 'string') {
     return null;
   }
+
+  // Absent entirely for a global SysAdmin (see JwtTokenGenerator) - never a claim this app can treat as
+  // required the way sub/email are.
+  const tenantIdClaim = payload['tenant_id'];
+  const tenantId = typeof tenantIdClaim === 'string' ? tenantIdClaim : null;
 
   const roleClaim = payload[ROLE_CLAIM_TYPE];
   const roles = Array.isArray(roleClaim)

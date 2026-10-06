@@ -59,6 +59,21 @@ describe('decodeAccessToken', () => {
     expect(decodeAccessToken(token)).toBeNull();
   });
 
+  it('decodes a global SysAdmin token with no tenant_id claim as tenantId: null, not as an invalid token', () => {
+    const token = tokenWithPayload({
+      sub: 'b1f2e3d4-0000-0000-0000-000000000001',
+      email: 'sysadmin@bookspace.test',
+      [ROLE_CLAIM_TYPE]: 'SysAdmin',
+    });
+
+    expect(decodeAccessToken(token)).toEqual({
+      userId: 'b1f2e3d4-0000-0000-0000-000000000001',
+      email: 'sysadmin@bookspace.test',
+      tenantId: null,
+      roles: ['SysAdmin'],
+    });
+  });
+
   // Pinned to a real access token captured from a live POST /auth/login response (dev-seeded
   // member@acme.test) - a regression test for the role claim's exact URI, which a hand-typed fixture
   // would happily "confirm" even after silently drifting from what the API actually issues.
