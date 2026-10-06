@@ -15,6 +15,7 @@ public sealed class BookSpaceDbContext(DbContextOptions<BookSpaceDbContext> opti
     public DbSet<User> Users => Set<User>();
     public DbSet<Invitation> Invitations => Set<Invitation>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+    public DbSet<CalendarSubscription> CalendarSubscriptions => Set<CalendarSubscription>();
     public DbSet<ResourceType> ResourceTypes => Set<ResourceType>();
     public DbSet<Resource> Resources => Set<Resource>();
     public DbSet<AvailabilityRule> AvailabilityRules => Set<AvailabilityRule>();

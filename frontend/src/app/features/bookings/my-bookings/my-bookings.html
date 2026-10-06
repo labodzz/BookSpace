@@ -7,6 +7,8 @@
     <a class="btn btn-primary" routerLink="/resources">Book a resource</a>
   </header>
 
+  <app-calendar-subscription-panel />
+
   @if (loading()) {
     <div class="card my-bookings__list" aria-busy="true">
       @for (i of [1, 2, 3, 4]; track i) {

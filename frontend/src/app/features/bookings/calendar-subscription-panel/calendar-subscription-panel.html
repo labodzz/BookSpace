@@ -1,0 +1,64 @@
+<section class="calendar-subscription card">
+  <div class="calendar-subscription__header">
+    <h2>Calendar subscription</h2>
+    <p class="calendar-subscription__subtitle">
+      Add your confirmed bookings to an external calendar app. The link is private - don't share it. Your calendar app
+      decides how often it refreshes; changes here may take a little while to show up there.
+    </p>
+  </div>
+
+  @if (loading()) {
+    <p class="calendar-subscription__status" aria-busy="true">Loading…</p>
+  } @else if (loadError()) {
+    <div class="calendar-subscription__status">
+      <p>Couldn't load your calendar subscription status.</p>
+      <button type="button" class="btn btn-secondary" (click)="retry()">Try again</button>
+    </div>
+  } @else {
+    @if (feedUrl(); as url) {
+      <div class="calendar-subscription__link">
+        <p class="calendar-subscription__warning">
+          Copy this link now - it won't be shown again. Add it to your calendar app as a <strong>subscription</strong>
+          (sometimes called "Add by URL" or a webcal/ICS feed), not a one-time import, so new and cancelled bookings
+          keep showing up automatically.
+        </p>
+        <div class="calendar-subscription__url-row">
+          <input class="calendar-subscription__url" type="text" readonly [value]="url" (focus)="$any($event.target).select()" />
+          <button type="button" class="btn btn-primary" (click)="copyFeedUrl()">{{ copied() ? 'Copied!' : 'Copy link' }}</button>
+        </div>
+      </div>
+    } @else if (hasActiveSubscription()) {
+      <p class="calendar-subscription__status">
+        You have an active calendar subscription (created {{ formattedCreatedAt() }}). The link itself is only ever
+        shown once, at creation time - if you've lost it, regenerate it below.
+      </p>
+    }
+
+    @if (actionError(); as error) {
+      <p class="calendar-subscription__error">{{ error }}</p>
+    }
+
+    <div class="calendar-subscription__actions">
+      @if (!hasActiveSubscription()) {
+        <button type="button" class="btn btn-primary" [disabled]="actionPending()" (click)="create()">
+          Create subscription link
+        </button>
+      } @else {
+        <button type="button" class="btn btn-secondary" [disabled]="actionPending()" (click)="regenerate()">
+          Regenerate link
+        </button>
+        @if (!confirmingRevoke()) {
+          <button type="button" class="btn btn-secondary" [disabled]="actionPending()" (click)="askToRevoke()">
+            Revoke
+          </button>
+        } @else {
+          <span class="calendar-subscription__confirm">
+            Revoke the subscription? Your calendar app will stop receiving updates.
+            <button type="button" class="btn btn-primary" [disabled]="actionPending()" (click)="confirmRevoke()">Yes, revoke</button>
+            <button type="button" class="btn btn-secondary" [disabled]="actionPending()" (click)="cancelRevoke()">Cancel</button>
+          </span>
+        }
+      }
+    </div>
+  }
+</section>

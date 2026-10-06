@@ -57,4 +57,8 @@ internal static class ErrorCodes
     public const string UserApproverAssignmentsExist = "User.ApproverAssignmentsExist";
     public const string RoleNotFound = "Role.NotFound";
     public const string InvitationInvalid = "Invitation.Invalid";
+
+    // Calendar subscription feed (WP-8). See docs/calendar-subscription-feed.md.
+    public const string CalendarSubscriptionAlreadyExists = "CalendarSubscription.AlreadyExists";
+    public const string CalendarSubscriptionNotFound = "CalendarSubscription.NotFound";
 }

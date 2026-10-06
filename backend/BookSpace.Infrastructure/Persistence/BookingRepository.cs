@@ -93,6 +93,56 @@ internal sealed class BookingRepository(BookSpaceDbContext dbContext) : IBooking
     public async Task AddAsync(Booking booking, CancellationToken cancellationToken) =>
         await dbContext.Bookings.AddAsync(booking, cancellationToken);
 
+    // The only statuses the ICS feed ever surfaces as an active event - see
+    // docs/calendar-subscription-feed.md ("Booking status mapping").
+    private static readonly BookingStatus[] FeedActiveStatuses = [BookingStatus.Confirmed, BookingStatus.Completed];
+
+    public async Task<IReadOnlyList<CalendarFeedBooking>> GetForCalendarFeedAsync(
+        Guid tenantId, Guid userId, DateTimeOffset windowStartUtc, DateTimeOffset windowEndUtc, CancellationToken cancellationToken)
+    {
+        // Explicitly bypasses the tenant query filter on BOTH sides of the join and re-applies tenantId
+        // itself - see the interface doc comment: the anonymous calendar-feed request has no
+        // ICurrentUserContext.TenantId to drive the ambient filter at all.
+        var candidateBookings = dbContext.Bookings.IgnoreQueryFilters()
+            .Where(booking => booking.TenantId == tenantId && booking.UserId == userId && FeedActiveStatuses.Contains(booking.Status));
+
+        // SQLite (fast integration tests only) cannot translate DateTimeOffset range comparisons, an
+        // ORDER BY on a DateTimeOffset column, or a Where/OrderBy applied AFTER projecting into a plain
+        // record (CalendarFeedBooking) - the same DateTimeOffset limitation GetOwnBookingsAsync above
+        // already works around, plus one more: both the window filter and the ordering must happen on the
+        // raw Booking column, before the join/projection, for SQL Server to translate them at all; on
+        // SQLite everything after the initial tenant/user/status filter falls back to an in-memory pass -
+        // one subscriber's own candidate set is never large enough for that to matter.
+        if (!dbContext.Database.IsSqlServer())
+        {
+            var allBookings = await candidateBookings.ToListAsync(cancellationToken);
+            var resourceIds = allBookings.Select(booking => booking.ResourceId).Distinct().ToList();
+            var resourceNamesById = await dbContext.Resources.IgnoreQueryFilters()
+                .Where(resource => resource.TenantId == tenantId && resourceIds.Contains(resource.Id))
+                .ToDictionaryAsync(resource => resource.Id, resource => resource.Name, cancellationToken);
+
+            return allBookings
+                .Where(booking => booking.StartUtc < windowEndUtc && booking.EndUtc > windowStartUtc)
+                .OrderBy(booking => booking.StartUtc)
+                .Select(booking => new CalendarFeedBooking(
+                    booking.Id, resourceNamesById.GetValueOrDefault(booking.ResourceId, string.Empty),
+                    booking.StartUtc, booking.EndUtc, booking.Quantity, booking.Status))
+                .ToList();
+        }
+
+        // SQL Server does the window filter, ordering, join, and final projection entirely in the
+        // database, bounded by the window so the feed never has to load a user's entire booking history.
+        return await candidateBookings
+            .Where(booking => booking.StartUtc < windowEndUtc && booking.EndUtc > windowStartUtc)
+            .OrderBy(booking => booking.StartUtc)
+            .Join(
+                dbContext.Resources.IgnoreQueryFilters().Where(resource => resource.TenantId == tenantId),
+                booking => booking.ResourceId,
+                resource => resource.Id,
+                (booking, resource) => new CalendarFeedBooking(booking.Id, resource.Name, booking.StartUtc, booking.EndUtc, booking.Quantity, booking.Status))
+            .ToListAsync(cancellationToken);
+    }
+
     public Task SaveChangesAsync(CancellationToken cancellationToken) =>
         dbContext.SaveChangesHandlingConflictsAsync(cancellationToken);
 }

@@ -228,6 +228,7 @@ Auth__Audience=BookSpace
 Auth__AccessTokenMinutes=15
 Auth__RefreshTokenDays=14
 Cors__AllowedOrigins__0=https://<your-container-app-fqdn>
+CalendarFeed__PublicBaseUrl=https://<your-container-app-fqdn>  # see docs/calendar-subscription-feed.md
 Bootstrap__Enabled=true                        # false after the first successful deploy
 Bootstrap__TenantName=...
 Bootstrap__DefaultTimeZoneId=...

@@ -6,6 +6,7 @@ import { ApiError, toApiError } from '../../../core/http/api-error';
 import { NotificationService } from '../../../core/notifications/notification.service';
 import { ResourceService } from '../../resources/resource.service';
 import { CalendarService } from '../../calendar/calendar.service';
+import { CalendarSubscriptionPanelComponent } from '../calendar-subscription-panel/calendar-subscription-panel';
 import { CancelBookingDialogComponent } from '../cancel-booking-dialog/cancel-booking-dialog';
 import { BookingService } from '../booking.service';
 import { OwnBooking } from '../booking.models';
@@ -17,7 +18,7 @@ const PAGE_SIZE = 10;
 
 @Component({
   selector: 'app-my-bookings',
-  imports: [RouterLink, CancelBookingDialogComponent, BookingRowComponent],
+  imports: [RouterLink, CalendarSubscriptionPanelComponent, CancelBookingDialogComponent, BookingRowComponent],
   templateUrl: './my-bookings.html',
   styleUrl: './my-bookings.scss',
 })
