@@ -1910,3 +1910,33 @@ atomically, including for every multi-occurrence cascade; and the real notificat
 adds now actually drives all of that automatically, end to end, once an application instance is configured
 with `BackgroundJobs:Enabled=true` and `Email:Enabled=true` - but still only with **at-least-once** delivery
 semantics overall (see "Three distinct guarantees, not one" just above).
+
+## Current status (post-WP-8-final-audit)
+
+The section above is accurate as a historical record of what had shipped as of the no-show-job branch, not
+a claim about where this file's own subject stands *today*. Two things it lists as outstanding have since
+been built, each in its own document rather than appended here:
+
+- **An ICS calendar-subscription feed** - a private, per-member subscribable `.ics` URL built from the
+  bookings this file's own cycle keeps consistent (Confirmed/Completed only; Cancelled/NoShow/Pending/
+  Rejected/Expired never appear in it). See [calendar-subscription-feed.md](calendar-subscription-feed.md)
+  for its own full design, security model, and test evidence - it reuses this subsystem's existing
+  booking-status model and its own token/subscription lifecycle, and adds no new background job of its own.
+- **Gmail OAuth remains genuinely not implemented** - the Gmail SMTP sender ("Gmail SMTP sender" above)
+  still authenticates via a Gmail App Password, not OAuth; this was explicitly out of scope for every
+  WP-8 branch through the final audit, not an oversight.
+
+Every other guarantee/limitation this file documents (the job lease's scope, the outbox's idempotency
+guarantee, at-least-once email delivery, per-tenant configuration) was re-verified against the current
+codebase and its full test suite during the WP-8 final audit and found accurate, not aspirational - see
+that audit's own final report for exactly what was (re-)checked and how.
+
+One genuine test-coverage gap was closed during that audit, not a bug fix: every piece of the chain
+"booking change -> outbox -> dispatch" already had its own thorough, independent test coverage (booking-
+lifecycle-notification handler tests, `NotificationOutboxProcessorTests` against real LocalDB with a fake
+sender, `SmtpNotificationSenderTests` against a fake SMTP transport), but no single test exercised the
+*entire* chain end to end against a REAL booking, a REAL enqueue, a REAL due-batch read, and the REAL
+`SmtpNotificationSender`/`EmailRecipientResolver` resolving the booking's actual owner from the database -
+only the final network leg (`ISmtpTransport`) faked. `BookingConfirmationEndToEndDispatchTests`
+(`BookSpace.Infrastructure.Tests`) now proves exactly that, confirming no subtle mismatch existed between
+the pieces' individually-tested assumptions.

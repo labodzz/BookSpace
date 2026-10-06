@@ -44,6 +44,14 @@ services:
       Auth__AccessTokenMinutes: "15"
       Auth__RefreshTokenDays: "14"
       Cors__AllowedOrigins__0: "http://localhost:8080"
+      # Required - see docs/calendar-subscription-feed.md ("Public base URL"). Matches the host port this
+      # container is published on (8080 - see the ports mapping below), the address reachable from THIS
+      # machine's own browser. A subscription link built from it only works for a calendar client running
+      # on this same machine (or one that can otherwise reach "localhost" on it, which an external/cloud
+      # calendar provider such as Google Calendar or Outlook.com never can) - a real deployment needs this
+      # set to that deployment's actual externally-reachable HTTPS origin instead (see
+      # docs/container-deployment.md, "Azure environment variables and secrets").
+      CalendarFeed__PublicBaseUrl: "http://localhost:8080"
       # Gmail SMTP sender - see docs/background-jobs.md ("Gmail SMTP sender"). Every value here has a
       # safe default (Email__Enabled defaults to "false") so an .env with none of these set still starts
       # the container with email sending disabled, exactly like running `dotnet run` locally with no
