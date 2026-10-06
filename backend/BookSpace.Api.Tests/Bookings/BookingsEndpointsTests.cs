@@ -375,6 +375,217 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
         Assert.Contains(afterBody!.BookableSlots, slot => slot.StartUtc <= start && slot.EndUtc >= start.AddHours(1) && slot.AvailableCapacity == 8);
     }
 
+    // Check-in's window is relative to real "now" (the handler calls DateTimeOffset.UtcNow directly, not an
+    // injectable clock - see CheckInBookingCommandHandler), so every check-in test creates its booking via
+    // the normal API (which requires StartUtc >= now) and then backdates StartUtc/EndUtc directly via the
+    // DbContext to land the booking at the exact instant relative to "now" the test needs - the same
+    // technique GetOwnBookings_WithEqualCreationTimestamps_OrdersDeterministicallyById already uses for
+    // CreatedAtUtc.
+    private async Task SetBookingStartUtcAsync(Guid bookingId, DateTimeOffset startUtc, DateTimeOffset endUtc)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<BookSpaceDbContext>();
+        var booking = await dbContext.Bookings.IgnoreQueryFilters().FirstAsync(b => b.Id == bookingId);
+        booking.StartUtc = startUtc;
+        booking.EndUtc = endUtc;
+        await dbContext.SaveChangesAsync();
+    }
+
+    [Fact]
+    public async Task CheckInBooking_AsOwner_WithinTheWindow_ReturnsOkWithCheckedInAtUtcSet()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+        var created = await CreateBookingAsync(client, TestDataSeeder.AcmeResourceId, AnchorPlusHours(200), AnchorPlusHours(201));
+        await SetBookingStartUtcAsync(created.Id, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(1));
+
+        var response = await client.PostAsJsonAsync($"/api/bookings/{created.Id}/check-in", new { });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<CheckInResponse>(JsonOptions);
+        Assert.False(body!.AlreadyCheckedIn);
+        Assert.True((DateTimeOffset.UtcNow - body.CheckedInAtUtc).Duration() < TimeSpan.FromMinutes(1));
+    }
+
+    [Fact]
+    public async Task CheckInBooking_CalledTwice_SecondCallReturnsOkWithAlreadyCheckedInTrueAndTheSameTimestamp()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+        var created = await CreateBookingAsync(client, TestDataSeeder.AcmeResourceId, AnchorPlusHours(202), AnchorPlusHours(203));
+        await SetBookingStartUtcAsync(created.Id, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(1));
+
+        var first = await client.PostAsJsonAsync($"/api/bookings/{created.Id}/check-in", new { });
+        var firstBody = await first.Content.ReadFromJsonAsync<CheckInResponse>(JsonOptions);
+        var second = await client.PostAsJsonAsync($"/api/bookings/{created.Id}/check-in", new { });
+        var secondBody = await second.Content.ReadFromJsonAsync<CheckInResponse>(JsonOptions);
+
+        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+        Assert.True(secondBody!.AlreadyCheckedIn);
+        Assert.Equal(firstBody!.CheckedInAtUtc, secondBody.CheckedInAtUtc);
+    }
+
+    [Fact]
+    public async Task CheckInBooking_BeforeTheWindowOpens_ReturnsConflictWithCheckInNotAllowedErrorCode()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+        var created = await CreateBookingAsync(client, TestDataSeeder.AcmeResourceId, AnchorPlusHours(204), AnchorPlusHours(205));
+        // Starts 2 hours from now - the window only opens 15 minutes before start.
+        await SetBookingStartUtcAsync(created.Id, DateTimeOffset.UtcNow.AddHours(2), DateTimeOffset.UtcNow.AddHours(3));
+
+        var response = await client.PostAsJsonAsync($"/api/bookings/{created.Id}/check-in", new { });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal("Booking.CheckInNotAllowed", await ReadErrorCodeAsync(response));
+    }
+
+    [Fact]
+    public async Task CheckInBooking_AfterTheGracePeriodCloses_ReturnsConflictWithCheckInNotAllowedErrorCode()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+        var created = await CreateBookingAsync(client, TestDataSeeder.AcmeResourceId, AnchorPlusHours(206), AnchorPlusHours(207));
+        // Started 2 hours ago - the default grace period (NoShowGraceMinutes) closes the window well before that.
+        await SetBookingStartUtcAsync(created.Id, DateTimeOffset.UtcNow.AddHours(-2), DateTimeOffset.UtcNow.AddHours(-1));
+
+        var response = await client.PostAsJsonAsync($"/api/bookings/{created.Id}/check-in", new { });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal("Booking.CheckInNotAllowed", await ReadErrorCodeAsync(response));
+    }
+
+    [Fact]
+    public async Task CheckInBooking_OnAPendingBooking_ReturnsConflictWithCheckInNotAllowedErrorCode()
+    {
+        // A fresh Pending booking on the approval-required resource, left without an explicit decision.
+        using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+        var pendingResponse = await memberClient.PostAsJsonAsync("/api/bookings", new
+        {
+            resourceId = TestDataSeeder.AcmeApprovalRequiredResourceId, startUtc = AnchorPlusHours(208), endUtc = AnchorPlusHours(209), quantity = 1,
+        });
+        pendingResponse.EnsureSuccessStatusCode();
+        var pending = await pendingResponse.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
+        Assert.Equal(BookingStatus.Pending, pending!.Status);
+        await SetBookingStartUtcAsync(pending.Id, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(1));
+
+        var checkInResponse = await memberClient.PostAsJsonAsync($"/api/bookings/{pending.Id}/check-in", new { });
+
+        Assert.Equal(HttpStatusCode.Conflict, checkInResponse.StatusCode);
+        Assert.Equal("Booking.CheckInNotAllowed", await ReadErrorCodeAsync(checkInResponse));
+    }
+
+    [Fact]
+    public async Task CheckInBooking_BelongingToAnotherUser_ReturnsNotFound()
+    {
+        using var ownerClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+        // A plain Acme Member with no admin/approver privilege and no assignment to this resource.
+        using var otherClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeUnassignedApproverEmail);
+        var created = await CreateBookingAsync(ownerClient, TestDataSeeder.AcmeResourceId, AnchorPlusHours(210), AnchorPlusHours(211));
+        await SetBookingStartUtcAsync(created.Id, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(1));
+
+        var response = await otherClient.PostAsJsonAsync($"/api/bookings/{created.Id}/check-in", new { });
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task CheckInBooking_BelongingToAnotherTenant_ReturnsNotFound()
+    {
+        using var ownerClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+        using var globexClient = await AuthenticatedClientAsync(TestDataSeeder.GlobexMemberEmail);
+        var created = await CreateBookingAsync(ownerClient, TestDataSeeder.AcmeResourceId, AnchorPlusHours(212), AnchorPlusHours(213));
+        await SetBookingStartUtcAsync(created.Id, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(1));
+
+        var response = await globexClient.PostAsJsonAsync($"/api/bookings/{created.Id}/check-in", new { });
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task CheckInBooking_UnknownBookingId_ReturnsNotFound()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+
+        var response = await client.PostAsJsonAsync($"/api/bookings/{Guid.NewGuid()}/check-in", new { });
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task CheckInBooking_ByAnApproverAssignedToTheResource_ReturnsOk()
+    {
+        using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+        using var approverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
+        var pendingResponse = await memberClient.PostAsJsonAsync("/api/bookings", new
+        {
+            resourceId = TestDataSeeder.AcmeApprovalRequiredResourceId, startUtc = AnchorPlusHours(214), endUtc = AnchorPlusHours(215), quantity = 1,
+        });
+        pendingResponse.EnsureSuccessStatusCode();
+        var pending = await pendingResponse.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
+        var approveResponse = await approverClient.PostAsJsonAsync($"/api/bookings/{pending!.Id}/approve", new { decisionNote = (string?)null });
+        approveResponse.EnsureSuccessStatusCode();
+        await SetBookingStartUtcAsync(pending.Id, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(1));
+
+        var checkInResponse = await approverClient.PostAsJsonAsync($"/api/bookings/{pending.Id}/check-in", new { });
+
+        Assert.Equal(HttpStatusCode.OK, checkInResponse.StatusCode);
+        var body = await checkInResponse.Content.ReadFromJsonAsync<CheckInResponse>(JsonOptions);
+        Assert.False(body!.AlreadyCheckedIn);
+    }
+
+    [Fact]
+    public async Task CheckInBooking_ByAnApproverNotAssignedToTheResource_ReturnsNotFound()
+    {
+        using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+        using var unassignedApproverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeUnassignedApproverEmail);
+        var pendingResponse = await memberClient.PostAsJsonAsync("/api/bookings", new
+        {
+            resourceId = TestDataSeeder.AcmeApprovalRequiredResourceId, startUtc = AnchorPlusHours(216), endUtc = AnchorPlusHours(217), quantity = 1,
+        });
+        pendingResponse.EnsureSuccessStatusCode();
+        var pending = await pendingResponse.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
+        using var approverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
+        var approveResponse = await approverClient.PostAsJsonAsync($"/api/bookings/{pending!.Id}/approve", new { decisionNote = (string?)null });
+        approveResponse.EnsureSuccessStatusCode();
+        await SetBookingStartUtcAsync(pending.Id, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(1));
+
+        var checkInResponse = await unassignedApproverClient.PostAsJsonAsync($"/api/bookings/{pending.Id}/check-in", new { });
+
+        Assert.Equal(HttpStatusCode.NotFound, checkInResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task CheckInBooking_ByTenantAdmin_ForAnotherMembersBooking_ReturnsOk()
+    {
+        using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+        using var adminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
+        var created = await CreateBookingAsync(memberClient, TestDataSeeder.AcmeResourceId, AnchorPlusHours(218), AnchorPlusHours(219));
+        await SetBookingStartUtcAsync(created.Id, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(1));
+
+        var response = await adminClient.PostAsJsonAsync($"/api/bookings/{created.Id}/check-in", new { });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    // CancelBookingCommandHandler now shares IResourceBookingLock with check-in (see
+    // docs/bookings-and-concurrency.md, "Booking check-in - the check-in/cancel race") specifically so an
+    // already-checked-in booking can never be silently cancelled out from under its own recorded attendance.
+    [Fact]
+    public async Task CancelBooking_AfterCheckIn_ReturnsConflictWithAlreadyCheckedInErrorCode()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+        var created = await CreateBookingAsync(client, TestDataSeeder.AcmeResourceId, AnchorPlusHours(220), AnchorPlusHours(221));
+        await SetBookingStartUtcAsync(created.Id, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(1));
+        var checkInResponse = await client.PostAsJsonAsync($"/api/bookings/{created.Id}/check-in", new { });
+        checkInResponse.EnsureSuccessStatusCode();
+
+        var cancelResponse = await client.DeleteAsync($"/api/bookings/{created.Id}");
+
+        Assert.Equal(HttpStatusCode.Conflict, cancelResponse.StatusCode);
+        Assert.Equal("Booking.AlreadyCheckedIn", await ReadErrorCodeAsync(cancelResponse));
+    }
+
+    private sealed record CheckInResponse(
+        Guid Id, Guid ResourceId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, int Quantity, BookingStatus Status,
+        DateTimeOffset CheckedInAtUtc, bool AlreadyCheckedIn);
+
     private async Task<BookingResponse> CreateBookingAsync(HttpClient client, Guid resourceId, DateTimeOffset start, DateTimeOffset end, int quantity = 1)
     {
         var response = await client.PostAsJsonAsync("/api/bookings", new { resourceId, startUtc = start, endUtc = end, quantity });

@@ -1,4 +1,4 @@
-import { BookingStatus, CancelBookingResponse, CreateBookingResponse, CreateRecurringSeriesResponse, OwnBooking, RecurrenceFrequency, RecurringSeriesOccurrence } from './booking.models';
+import { BookingStatus, CancelBookingResponse, CheckInBookingResponse, CreateBookingResponse, CreateRecurringSeriesResponse, OwnBooking, RecurrenceFrequency, RecurringSeriesOccurrence } from './booking.models';
 
 // Confirmed live against the running API: BookSpace serializes every enum in a JSON body as its raw
 // underlying number (System.Text.Json's default - no JsonStringEnumConverter is registered anywhere in
@@ -44,6 +44,14 @@ export interface CancelBookingResponseWire extends Omit<CancelBookingResponse, '
 }
 
 export function mapCancelBookingResponse(wire: CancelBookingResponseWire): CancelBookingResponse {
+  return { ...wire, status: toBookingStatus(wire.status) };
+}
+
+export interface CheckInBookingResponseWire extends Omit<CheckInBookingResponse, 'status'> {
+  status: number;
+}
+
+export function mapCheckInBookingResponse(wire: CheckInBookingResponseWire): CheckInBookingResponse {
   return { ...wire, status: toBookingStatus(wire.status) };
 }
 

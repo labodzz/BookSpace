@@ -23,6 +23,9 @@ function bookingsPage(count: number, startIndex: number, seriesId: string | null
     cancellationReason: null,
     seriesId,
     timeZoneId: 'UTC',
+    checkedInAtUtc: null,
+    checkInWindowOpensAtUtc: '2026-09-02T09:45:00Z',
+    checkInWindowClosesAtUtc: '2026-09-02T10:15:00Z',
   }));
 }
 

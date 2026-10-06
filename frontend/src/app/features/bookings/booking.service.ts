@@ -6,6 +6,7 @@ import { SKIP_GLOBAL_ERROR_TOAST } from '../../core/http/api-error';
 import { PagedResult } from '../../core/http/paged-result';
 import {
   CancelBookingResponse,
+  CheckInBookingResponse,
   CreateBookingRequest,
   CreateBookingResponse,
   CreateRecurringSeriesRequest,
@@ -15,10 +16,12 @@ import {
 } from './booking.models';
 import {
   CancelBookingResponseWire,
+  CheckInBookingResponseWire,
   CreateBookingResponseWire,
   CreateRecurringSeriesResponseWire,
   OwnBookingWire,
   mapCancelBookingResponse,
+  mapCheckInBookingResponse,
   mapCreateBookingResponse,
   mapCreateRecurringSeriesResponse,
   mapOwnBooking,
@@ -144,5 +147,14 @@ export class BookingService {
     return this.http
       .delete<CancelBookingResponseWire>(`${environment.apiUrl}/bookings/${id}`, { params })
       .pipe(map(mapCancelBookingResponse));
+  }
+
+  // Skips the global error toast - My Bookings shows a more specific inline message for a check-in
+  // failure (too early, too late, or the booking changed state in the meantime) than a generic toast would.
+  checkInBooking(id: string): Observable<CheckInBookingResponse> {
+    const context = new HttpContext().set(SKIP_GLOBAL_ERROR_TOAST, true);
+    return this.http
+      .post<CheckInBookingResponseWire>(`${environment.apiUrl}/bookings/${id}/check-in`, {}, { context })
+      .pipe(map(mapCheckInBookingResponse));
   }
 }

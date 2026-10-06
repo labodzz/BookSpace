@@ -40,6 +40,8 @@ internal static class ErrorCodes
     public const string BookingNoApproverConfigured = "Booking.NoApproverConfigured";
     public const string BookingApprovalNotAllowed = "Booking.ApprovalNotAllowed";
     public const string BookingApprovalForbidden = "Booking.ApprovalForbidden";
+    public const string BookingCheckInNotAllowed = "Booking.CheckInNotAllowed";
+    public const string BookingAlreadyCheckedIn = "Booking.AlreadyCheckedIn";
 
     public const string RecurringSeriesNotFound = "RecurringSeries.NotFound";
     public const string RecurringSeriesNoValidOccurrences = "RecurringSeries.NoValidOccurrences";

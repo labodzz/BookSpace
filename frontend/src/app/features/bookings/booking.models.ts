@@ -5,7 +5,9 @@ export type BookingStatus = 'Pending' | 'Confirmed' | 'Rejected' | 'Cancelled' |
 
 // GetOwnBookingsResponseItem. CancelledByAdmin is server-derived: true only when a TenantAdmin/SysAdmin
 // cancelled someone else's booking, so the UI can tell "you cancelled this" apart from "this was
-// administratively cancelled" without needing to know the current user's own id.
+// administratively cancelled" without needing to know the current user's own id. checkedInAtUtc is null
+// until checked in. checkInWindowOpensAtUtc/ClosesAtUtc are always present (computed server-side from the
+// caller's own tenant settings) regardless of status, so the UI never special-cases a missing field.
 export interface OwnBooking {
   id: string;
   resourceId: string;
@@ -20,6 +22,9 @@ export interface OwnBooking {
   // The resource's own IANA zone (as of now, not a snapshot from booking time) - lets the UI show this
   // booking's local time at the resource alongside the viewer's own local time.
   timeZoneId: string;
+  checkedInAtUtc: string | null;
+  checkInWindowOpensAtUtc: string;
+  checkInWindowClosesAtUtc: string;
 }
 
 // getOwnBookingsInRange's result: `truncated` is true when the safety page cap was hit while the
@@ -55,6 +60,19 @@ export interface CancelBookingResponse {
   quantity: number;
   status: BookingStatus;
   cascadedOccurrenceIds: string[];
+}
+
+// alreadyCheckedIn is true when this call confirmed an EXISTING check-in rather than performing a new
+// one - checkedInAtUtc is then the ORIGINAL instant, never the time of this call.
+export interface CheckInBookingResponse {
+  id: string;
+  resourceId: string;
+  startUtc: string;
+  endUtc: string;
+  quantity: number;
+  status: BookingStatus;
+  checkedInAtUtc: string;
+  alreadyCheckedIn: boolean;
 }
 
 // Mirrors BookSpace.Domain.Enums.RecurrenceFrequency, minus Yearly - the API's own validator rejects

@@ -36,10 +36,21 @@ public sealed class CancelBookingCommandRequestValidator : AbstractValidator<Can
     }
 }
 
-// Cancellation never needs IResourceBookingLock: removing an active booking can only reduce summed
-// demand, which can never turn a valid capacity state into an invalid one, so an ordinary load-mutate-
-// save is sufficient - see docs/bookings-and-concurrency.md.
+// Cancellation alone can only ever reduce summed demand, which can never turn a valid capacity state into
+// an invalid one - that invariant still needs no lock. But Cancel is no longer the only operation that can
+// mutate a Confirmed booking: CheckInBookingCommandHandler sets CheckedInAtUtc under IResourceBookingLock,
+// and a future no-show job will transition Confirmed -> NoShow under the same lock (see
+// docs/background-jobs.md). Without Cancel ALSO sharing that lock, a check-in and a cancel racing on the
+// SAME booking could both read Confirmed before either commits and both "succeed" - a cancelled booking
+// that also ends up bearing a CheckedInAtUtc value, or a checked-in booking silently cancelled out from
+// under its own just-recorded attendance. Sharing the resource-scoped lock closes this exactly like it
+// already closes Approve-vs-Reject and Check-in-vs-Check-in: whichever request's RunExclusiveAsync
+// acquisition wins commits first, and the loser's fresh re-read (inside its OWN lock acquisition, which
+// cannot even begin until the winner's transaction fully commits) sees the current, authoritative state -
+// never a half-updated one. See docs/bookings-and-concurrency.md ("Booking check-in - the check-in/cancel
+// race") for the full before/after analysis and the two race-order outcomes this closes.
 public sealed class CancelBookingCommandHandler(
+    IResourceBookingLock resourceBookingLock,
     IBookingRepository bookingRepository, ICurrentUserContext currentUserContext, INotificationOutboxWriter notificationOutboxWriter)
     : IRequestHandler<CancelBookingCommandRequest, CancelBookingResponse>
 {
@@ -47,6 +58,24 @@ public sealed class CancelBookingCommandHandler(
 
     public async Task<CancelBookingResponse> Handle(CancelBookingCommandRequest request, CancellationToken cancellationToken)
     {
+        // A projection, not a tracked load - see ApproveBookingCommandHandler/IBookingRepository for why:
+        // the fresh re-read below (the first tracked load, taken after the lock is held) would otherwise
+        // silently hit this same DbContext's identity map and return stale data. Every occurrence of a
+        // recurring series shares the SAME ResourceId as its series (set once at series-creation time and
+        // never mutated afterward - see CreateRecurringSeriesCommandHandler), so locking the PRIMARY
+        // booking's resource is sufficient for the whole CancelRemainingSeries cascade below; there is no
+        // multi-resource lock-ordering concern to solve here, the same assumption
+        // ApproveBookingCommandHandler's own ApproveRemainingSeries cascade already relies on.
+        var resourceId = await bookingRepository.FindResourceIdAsync(request.Id, cancellationToken)
+            ?? throw new NotFoundException($"Booking {request.Id} was not found.", ErrorCodes.BookingNotFound);
+
+        return await resourceBookingLock.RunExclusiveAsync(resourceId, ct => CancelUnderLockAsync(request, ct), cancellationToken);
+    }
+
+    private async Task<CancelBookingResponse> CancelUnderLockAsync(CancelBookingCommandRequest request, CancellationToken cancellationToken)
+    {
+        // The first (and only) tracked load of this Booking on this DbContext - genuinely fresh, taken
+        // after the lock is held. Never trust the pre-lock projection above for anything but the resource id.
         var booking = await bookingRepository.FindByIdAsync(request.Id, cancellationToken);
 
         // Not-found, "belongs to a different user", and "a different user who isn't a TenantAdmin/
@@ -65,6 +94,20 @@ public sealed class CancelBookingCommandHandler(
 
         if (booking.Status != BookingStatus.Cancelled)
         {
+            // A checked-in booking is never retroactively cancelled through this ordinary member/admin
+            // cancel path - thrown BEFORE any mutation, so a booking that loses this check is left in
+            // exactly the state it was already in (no partial write to roll back). This is NOT a
+            // widened admin bypass: TenantAdmin/SysAdmin's bypass above only ever widens WHO may act (the
+            // ownership check), never WHICH states are eligible to cancel - CancellableStatuses right below
+            // already applies unconditionally to every caller including admins, and this rule follows that
+            // identical, pre-existing precedent rather than inventing a new one. CheckedInAtUtc is never
+            // cleared or overwritten by Cancel in any code path.
+            if (booking.CheckedInAtUtc is not null)
+            {
+                throw new ConflictException(
+                    $"Booking {booking.Id} has already been checked in and cannot be cancelled.", ErrorCodes.BookingAlreadyCheckedIn);
+            }
+
             if (!CancellableStatuses.Contains(booking.Status))
             {
                 throw new ConflictException(
@@ -80,16 +123,21 @@ public sealed class CancelBookingCommandHandler(
             // enqueue below.
             var cancelledBookings = new List<Booking> { booking };
 
-            // Every OTHER occurrence in the same series that starts at or after this one, and is still
-            // in a cancellable status - never occurrences that already ran their course (Completed/
-            // NoShow), were already Rejected, or predate this one. A booking with no SeriesId (a one-off
-            // booking) has nothing to cascade into, regardless of the flag.
+            // Every OTHER occurrence in the same series that starts at or after this one, is still in a
+            // cancellable status, and has NOT been checked into - never occurrences that already ran their
+            // course (Completed/NoShow), were already Rejected, predate this one, or were already checked
+            // in (same "never retroactively cancel a checked-in occurrence" rule as the primary target
+            // above, just silently excluded from the cascade exactly like an already-Cancelled/Rejected/
+            // Completed sibling already is, rather than aborting the whole batch - there is no scenario
+            // where this loop throws partway through, so no partial-cascade state can ever result). A
+            // booking with no SeriesId (a one-off booking) has nothing to cascade into, regardless of the flag.
             if (request.CancelRemainingSeries && booking.SeriesId is { } seriesId)
             {
                 var seriesOccurrences = await bookingRepository.GetBySeriesIdAsync(seriesId, cancellationToken);
                 foreach (var occurrence in seriesOccurrences)
                 {
-                    if (occurrence.Id == booking.Id || occurrence.StartUtc < booking.StartUtc || !CancellableStatuses.Contains(occurrence.Status))
+                    if (occurrence.Id == booking.Id || occurrence.StartUtc < booking.StartUtc ||
+                        !CancellableStatuses.Contains(occurrence.Status) || occurrence.CheckedInAtUtc is not null)
                     {
                         continue;
                     }
@@ -103,9 +151,9 @@ public sealed class CancelBookingCommandHandler(
             // EnqueueManyAsync performs exactly ONE SaveChangesAsync covering the primary AND every
             // cascaded sibling's Cancelled mutation (all staged above) together with every cancellation
             // outbox row - either the whole cancellation and all its notifications land, or none of it
-            // does. There is no separate bookingRepository.SaveChangesAsync call here: this cancel handler
-            // has no IResourceBookingLock wrapping it (see the class comment), so this single call is the
-            // operation's only write.
+            // does. This is the SAME transaction IResourceBookingLock opened above (no separate
+            // bookingRepository.SaveChangesAsync call, and no nested transaction here) - a failure here
+            // rolls back through the lock's own catch-all rollback, exactly like Approve/Reject/Check-in.
             await notificationOutboxWriter.EnqueueManyAsync(
                 cancelledBookings.Select(BookingNotificationFactory.Cancellation).ToList(), cancellationToken);
         }

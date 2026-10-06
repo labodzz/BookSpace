@@ -27,6 +27,9 @@ function busyDayBookings(count: number): OwnBookingWire[] {
     cancellationReason: null,
     seriesId: null,
     timeZoneId: 'UTC',
+    checkedInAtUtc: null,
+    checkInWindowOpensAtUtc: today.plus({ hours: i % 20 }).toUTC().toISO()!,
+    checkInWindowClosesAtUtc: today.plus({ hours: (i % 20) + 1 }).toUTC().toISO()!,
   }));
 }
 

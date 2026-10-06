@@ -15,6 +15,9 @@ function wireBooking(overrides: Partial<OwnBooking> = {}): OwnBooking {
     cancellationReason: null,
     seriesId: null,
     timeZoneId: 'UTC',
+    checkedInAtUtc: null,
+    checkInWindowOpensAtUtc: '2026-12-20T09:45:00Z',
+    checkInWindowClosesAtUtc: '2026-12-20T10:15:00Z',
     ...overrides,
   };
 }
@@ -78,6 +81,86 @@ describe('BookingRowComponent', () => {
 
     expect(root().textContent).toContain('Cancelled');
     expect(root().textContent).toContain('Plans changed');
+  });
+
+  // Matched by class, not label text - the label itself changes to "Checking in…" while submitting.
+  function checkInButton(): HTMLButtonElement | undefined {
+    return (root().querySelector('.booking-row__end .btn-primary') as HTMLButtonElement | null) ?? undefined;
+  }
+
+  describe('check-in', () => {
+    afterEach(() => vi.useRealTimers());
+
+    it('shows an enabled Check-in button for a Confirmed booking within its check-in window', () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-12-20T09:50:00Z')); // between opens (09:45) and closes (10:15)
+      configure({ booking: wireBooking() });
+
+      const button = checkInButton();
+      expect(button).toBeDefined();
+      expect(button!.disabled).toBe(false);
+    });
+
+    it('disables the Check-in button before the check-in window opens', () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-12-20T09:00:00Z')); // before opens (09:45)
+      configure({ booking: wireBooking() });
+
+      expect(checkInButton()!.disabled).toBe(true);
+    });
+
+    it('disables the Check-in button after the check-in window closes', () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-12-20T10:30:00Z')); // after closes (10:15)
+      configure({ booking: wireBooking() });
+
+      expect(checkInButton()!.disabled).toBe(true);
+    });
+
+    it('does not show a Check-in button for a booking that is not Confirmed', () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-12-20T09:50:00Z'));
+      configure({ booking: wireBooking({ status: 'Pending' }) });
+
+      expect(checkInButton()).toBeUndefined();
+    });
+
+    it('shows the checked-in time instead of a button once already checked in', () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-12-20T09:50:00Z'));
+      configure({ booking: wireBooking({ checkedInAtUtc: '2026-12-20T09:46:00Z' }) });
+
+      expect(checkInButton()).toBeUndefined();
+      expect(root().textContent).toContain('Checked in');
+    });
+
+    it('emits checkInRequested with the booking when the Check-in button is clicked', () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-12-20T09:50:00Z'));
+      const booking = wireBooking();
+      configure({ booking });
+
+      let emitted: OwnBooking | undefined;
+      fixture.componentInstance.checkInRequested.subscribe((b) => (emitted = b));
+      checkInButton()!.click();
+
+      expect(emitted).toEqual(booking);
+    });
+
+    it('disables the Check-in button and shows a loading label while a check-in request is in flight', () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-12-20T09:50:00Z'));
+      TestBed.configureTestingModule({ imports: [BookingRowComponent] });
+      fixture = TestBed.createComponent(BookingRowComponent);
+      fixture.componentRef.setInput('booking', wireBooking());
+      fixture.componentRef.setInput('resourceName', 'Falcon Room');
+      fixture.componentRef.setInput('checkInSubmitting', true);
+      fixture.detectChanges();
+
+      const button = checkInButton()!;
+      expect(button.disabled).toBe(true);
+      expect(button.textContent).toContain('Checking in');
+    });
   });
 
   // Required scenario 5: this row must show the resource's own local time as primary, with the viewer's

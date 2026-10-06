@@ -32,7 +32,16 @@
     <div class="card my-bookings__list">
       @for (entry of entries(); track entryKey(entry)) {
         @if (entry.kind === 'single') {
-          <app-booking-row [booking]="entry.booking" [resourceName]="resourceNameFor(entry.booking.resourceId)" (cancelRequested)="openCancelDialog($event)" />
+          <app-booking-row
+            [booking]="entry.booking"
+            [resourceName]="resourceNameFor(entry.booking.resourceId)"
+            [checkInSubmitting]="checkInSubmittingId() === entry.booking.id"
+            (cancelRequested)="openCancelDialog($event)"
+            (checkInRequested)="checkIn($event)"
+          />
+          @if (checkInErrorFor(entry.booking.id); as checkInError) {
+            <p class="my-bookings__checkin-error">{{ checkInError }}</p>
+          }
         } @else {
           <div class="booking-row-series">
             <button
@@ -55,7 +64,17 @@
             @if (isExpanded(entry.seriesId)) {
               <div class="booking-row-series__occurrences" [id]="'series-' + entry.seriesId">
                 @for (occurrence of occurrencesFor(entry); track occurrence.id) {
-                  <app-booking-row [booking]="occurrence" [resourceName]="resourceNameFor(entry.resourceId)" [compact]="true" (cancelRequested)="openCancelDialog($event)" />
+                  <app-booking-row
+                    [booking]="occurrence"
+                    [resourceName]="resourceNameFor(entry.resourceId)"
+                    [compact]="true"
+                    [checkInSubmitting]="checkInSubmittingId() === occurrence.id"
+                    (cancelRequested)="openCancelDialog($event)"
+                    (checkInRequested)="checkIn($event)"
+                  />
+                  @if (checkInErrorFor(occurrence.id); as checkInError) {
+                    <p class="my-bookings__checkin-error">{{ checkInError }}</p>
+                  }
                 }
               </div>
             }

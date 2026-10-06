@@ -1668,7 +1668,9 @@ and fixed as part of this same change, with a regression test.
 
 ## What the earlier WP-8 branches did not implement
 
-No-show processing, an ICS feed, and any new booking business logic beyond
+No-show processing (the background job itself - its prerequisite, `Booking.CheckedInAtUtc` and the
+check-in endpoint, now exist; see `docs/bookings-and-concurrency.md`, "Booking check-in"), an ICS feed, and
+any new booking business logic beyond
 enqueuing a notification at the point a lifecycle transition is already decided (or, for the reminder job,
 at the point one is approaching), all remain future WP-8 work. In particular: the notification outbox is
 infrastructure for *durable,

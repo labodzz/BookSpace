@@ -131,6 +131,12 @@ proves the boundary: requesting exactly the remaining capacity succeeds, not jus
   no destructive-overwrite scenario that optimistic concurrency would need to guard against - adding one
   speculatively would violate this codebase's own stated policy against adding `RowVersion` "just in
   case" (see [optimistic-concurrency.md](optimistic-concurrency.md)).
+- `CancelBookingCommandHandler` now acquires `IResourceBookingLock` too - not for this section's own
+  capacity invariant (unchanged), but to coordinate with `CheckInBookingCommandHandler` and a future
+  no-show job, both of which mutate the same booking outside of Cancel's control. A booking that has
+  already been checked in (`CheckedInAtUtc is not null`) can no longer be cancelled through this handler at
+  all - a new conflict, `Booking.AlreadyCheckedIn` (409), with no admin override. See §12 ("Booking
+  check-in - the check-in/cancel race, now closed") for the full design and real-LocalDB proof.
 
 ## 7. The concurrency strategy (the hard problem)
 
@@ -378,3 +384,266 @@ per-date conflicts (including `NonexistentLocalTime`) are only known once the se
 and checks them. This feature does not attempt to preview a whole series' availability up front; doing
 so would require either a new backend endpoint or many per-occurrence availability calls, neither of
 which this work packet builds.
+
+## 12. Booking check-in
+
+`CheckInBookingCommandHandler` (`POST /api/bookings/{id}/check-in`) lets a `Confirmed` booking's owner (or
+an authorized approver/admin - see below) record that they actually showed up, by setting
+`Booking.CheckedInAtUtc` - a nullable `DateTimeOffset?` column that has existed on `Booking` since
+`InitialCreate`, reserved for exactly this. **This is the signal a future no-show job will use to decide
+which `Confirmed` bookings to expire** (see `docs/background-jobs.md`, "What the earlier WP-8 branches did
+not implement") - `CheckedInAtUtc IS NULL` past the check-in window will mean "nobody showed up." That job
+is **not** implemented by this change: no `BackgroundService`, no automatic `BookingStatus.NoShow`
+transition, no no-show email, no reminder-with-check-in-link, no QR/NFC/geolocation, no ICS feed. Check-in
+does **not** change `BookingStatus` - a checked-in booking stays `Confirmed`, exactly like it was before
+check-in; `CheckedInAtUtc` is purely an additional marker, the same pattern `ReminderQueuedAtUtc` already
+established for "an orthogonal fact about this booking, not a state transition."
+
+### Why check-in is useful even though it isn't proof of physical presence
+
+Anyone with access to the booking (the owner, or an authorized approver/admin - see below) can call this
+endpoint from anywhere; nothing here verifies the caller is physically at the resource. This is a
+deliberate, documented limitation, not an oversight - QR/NFC/geolocation-based verification is explicitly
+out of this task's scope. Check-in is a **self-reported attendance signal**, valuable because the
+alternative (no signal at all) means the future no-show job could only ever guess from `StartUtc` alone,
+with no way to distinguish "showed up and used it" from "forgot and left it empty" - the exact gap this
+column exists to close.
+
+### The check-in window
+
+Opens `Tenant.CheckInLeadMinutes` (default 15) minutes before `Booking.StartUtc`; closes
+`Tenant.NoShowGraceMinutes` (default 15, pre-existing) minutes after `Booking.StartUtc`. **Both boundaries
+are inclusive** (`CheckInEligibilityChecker.Evaluate`): `nowUtc == opensAtUtc` is already open,
+`nowUtc == closesAtUtc` is not yet closed - proven exactly at both boundaries by
+`CheckInEligibilityCheckerTests.Evaluate_ExactlyAtWindowOpen_IsEligible`/`..._ExactlyAtWindowClose_IsEligible`,
+with the adjacent one-second-outside instant proven to fail
+(`..._OneSecondBeforeWindowOpens_IsTooEarly`/`..._OneSecondAfterWindowCloses_IsTooLate`).
+
+`NoShowGraceMinutes` (already on `Tenant`, previously unused by any handler) is reused as-is for the
+closing edge - introducing a second, independent "how late is too late" setting would create two different
+answers to the same question once the no-show job is actually built. `CheckInLeadMinutes` is new, added
+directly on `Tenant` (not nested in `BackgroundJobsOptions`) because it is per-tenant, live, user-facing
+booking policy - the same architectural category `ReminderLeadMinutes`/`NoShowGraceMinutes`/
+`ApprovalExpiryHours` already occupy, not a background-job orchestration knob. Migration
+`AddTenantCheckInLeadMinutesAndBookingCheckInIndex` backfills every pre-existing tenant to the documented
+default (15) via an explicit SQL `DEFAULT` constraint - without it, every tenant that existed before this
+migration would have silently gotten 0 (no lead time at all) instead of the intended default.
+
+`CheckInEligibilityChecker.Evaluate` is a small, pure, static function taking `nowUtc` as an explicit
+parameter (same shape as `BookingEligibilityChecker`) rather than reading `DateTimeOffset.UtcNow` itself -
+this is what makes the exact-boundary tests above possible without any clock abstraction or timing-sensitive
+waits. The command handler itself still calls `DateTimeOffset.UtcNow` directly (no `TimeProvider`
+injection) - confirmed as the authoritative pattern for a request-scoped command handler by inspecting
+every other Bookings handler (`RejectBookingCommandRequest.cs`, `CancelBookingCommandRequest.cs`): none of
+them inject `TimeProvider` either; that abstraction is reserved for the background-job subsystem
+(`StaleApprovalProcessor`, `ReminderProducer`, ...), which genuinely needs it for deterministic cycle
+testing in a way a single HTTP request does not.
+
+### Who may check in which booking
+
+| Caller | Allowed when |
+|---|---|
+| The booking's own owner (`Booking.UserId`) | Always (subject to status/window) |
+| `ResourceApprover` for `Booking.ResourceId` | Always, for ANY booking on that resource - this is a resource-level grant (the same `ResourceApprover` table `ApprovalAuthorization` already reads), independent of whether that specific booking ever needed approval |
+| `TenantAdmin` / `SysAdmin` | Any booking in their own tenant (enforced automatically by the global query filter) |
+| Anyone else | Never - `Booking.NotFound` (404) |
+
+The route (`[HttpPost("{id:guid}/check-in")]`) is plain `[Authorize]`, **not** role-gated the way
+approve/reject are (`[Authorize(Roles = "Approver,TenantAdmin,SysAdmin")]`) - a route-level role gate would
+block a plain `Member` from checking in their own booking, which is the primary use case. All three
+authorization branches are checked inside `CheckInBookingCommandHandler.CanCheckInAsync`.
+
+**Not-owner, not-admin, and not-an-assigned-approver all return the same 404**, never a 403 - the same
+"don't leak existence via a different error shape" philosophy `CancelBookingCommandHandler` already applies
+to a non-owner's cancel attempt. This differs from `ApprovalAuthorization`'s own forbidden check (a 409 for
+an unassigned `Approver`), deliberately: an `Approver` who already sees a booking in their pending-approval
+queue "already knows" it exists, so a 409 there is more honest than a fake 404; check-in has no such queue
+naming a specific booking to a would-be approver, so there's nothing to be more honest about - a plain 404
+is the right, narrower default here.
+
+### Concurrency
+
+`Booking` still has no `RowVersion` column (unchanged - see [optimistic-concurrency.md](optimistic-concurrency.md)).
+Check-in uses `IResourceBookingLock` - not because it affects capacity (it doesn't; `CheckedInAtUtc` isn't
+read by `BookingAvailabilityRepository` at all), but for the identical reason `RejectBookingCommandHandler`
+already does: without a shared serialization point, two concurrent check-in requests for the SAME booking
+could both read `CheckedInAtUtc == null` and both write it, the second silently overwriting the first with
+a different instant - directly violating the idempotency requirement that a repeated check-in must never
+change the original timestamp. `CheckInBookingCommandHandler` follows the exact same shape as
+Approve/Reject: a pre-lock `FindResourceIdAsync` projection (never tracked), then the first and only
+tracked `FindByIdAsync` load taken *after* the lock is held - never trusting the pre-lock state.
+
+Proven against real SQL Server (LocalDB, not SQLite - see `CheckInConcurrencyTests`,
+`TwoConcurrentCheckInRequestsForTheSameBooking_ExactlyOneWritesAndTheOtherReportsAlreadyCheckedInWithTheSameInstant`):
+two genuinely concurrent requests for the same booking always produce exactly one write and one
+`AlreadyCheckedIn` response reporting the **same** instant the write produced - never two different
+timestamps, never two rows, never a lost update. The same lock protects a future no-show job's eventual
+`Confirmed -> NoShow` transition too, **provided** that job acquires the identical
+`IResourceBookingLock` before mutating `Booking.Status` - exactly as `StaleApprovalProcessor` already does
+against Approve/Reject (see `docs/background-jobs.md`, "Stale-approval job").
+
+### The check-in/cancel race - now closed
+
+An earlier version of this document accepted a check-in racing with `CancelBookingCommandHandler` as an
+open, pre-existing gap, reasoning that Cancel never needed `IResourceBookingLock` for its own capacity
+invariant. That reasoning is no longer sufficient: once `CheckInBookingCommandHandler` started setting
+`CheckedInAtUtc` under the lock, Cancel became a SECOND concurrent writer of the same booking that did not
+share that lock - two concurrent requests could both read `Confirmed` before either committed and both
+"succeed", leaving a booking either `Cancelled` while also bearing a `CheckedInAtUtc` value, or silently
+cancelled out from under its own just-recorded attendance. `CancelBookingCommandHandler` now acquires the
+SAME `IResourceBookingLock` too - **not** because cancellation affects capacity (it still doesn't; this is
+unchanged from §6/§7 above), but purely to coordinate with check-in, and with a future no-show job's
+eventual `Confirmed -> NoShow` transition, both of which mutate the same row outside of Cancel's own
+control. `CancelBookingCommandHandler.Handle` now follows the identical pre-lock-projection / fresh-
+tracked-reload shape every other lock-using handler in this file already uses (Create, Approve, Reject,
+Check-in): `FindResourceIdAsync` before the lock, `FindByIdAsync` as the first tracked load after it.
+
+**Why locking the primary booking's resource is sufficient for `CancelRemainingSeries`.** Every occurrence
+of one `RecurringSeries` carries the same `ResourceId` as the series itself, assigned once by
+`CreateRecurringSeriesCommandHandler` at occurrence-generation time and never mutated by any handler
+afterward - confirmed by inspecting every write path to `Booking.ResourceId` in this codebase, there is
+none outside that one creation point. So a cascade can never need a second resource's lock; this is the
+exact same assumption `ApproveBookingCommandHandler`'s own `ApproveRemainingSeries` cascade already relies
+on (one `RunExclusiveAsync` call covers the primary and every cascaded sibling).
+
+**Rule 1 - cancel wins the lock.** The booking becomes `Cancelled`; `CheckedInAtUtc` stays `null`. A
+check-in attempt after that re-reads the booking inside ITS OWN lock acquisition (which could not even
+begin until cancel's transaction fully committed), sees `Status != Confirmed`, and is refused with the
+already-existing `Booking.CheckInNotAllowed` conflict (`CheckInEligibilityChecker`'s `NotConfirmed` case) -
+no new rule was needed on the check-in side for this ordering, only the shared lock itself.
+
+**Rule 2 - check-in wins the lock.** `CheckedInAtUtc` is set; the booking stays `Confirmed`. A plain
+member's subsequent cancel attempt is refused with a new conflict, `Booking.AlreadyCheckedIn` (409) -
+**no admin override exists for this rule**, confirmed directly from `CancelBookingCommandHandler`'s own
+code: the `TenantAdmin`/`SysAdmin` bypass only ever widens WHO may act (the ownership check), never WHICH
+states are eligible to cancel - the pre-existing `CancellableStatuses` check already applies unconditionally
+to every caller including admins (a `TenantAdmin` could never cancel a `Completed` booking either), and the
+new `CheckedInAtUtc is not null` check follows that identical, already-established precedent rather than
+inventing a new one. `CheckedInAtUtc` is never cleared or overwritten by any Cancel code path - a
+checked-in booking's attendance record is permanent once set.
+
+**Recurring cascade, atomic boundary.** A `CancelRemainingSeries` cascade's per-sibling loop treats an
+already-checked-in sibling exactly like it already treats an already-`Cancelled`/`Rejected`/`Completed`
+sibling: silently excluded from the cascade (never retroactively cancelled), never a thrown exception. The
+PRIMARY target's own `CheckedInAtUtc is not null` check (the only place this rule can actually throw) runs
+**before any mutation at all** - so there is no scenario where the loop cancels some siblings, then
+"discovers" a problem and aborts, leaving an arbitrary partial state; the whole operation's one atomic
+boundary remains exactly what it always was: `INotificationOutboxWriter.EnqueueManyAsync`'s single
+`SaveChangesAsync`, now running inside `IResourceBookingLock`'s transaction instead of a bare one. Every
+occurrence this call actually cancels, and every one of their cancellation outbox rows, commit together or
+none of it does - proven unchanged by `NotificationOutboxCascadeAtomicityTests` (still green after this
+change) and newly by `CheckInVsCancelConcurrencyTests.CheckInOnASiblingOccurrence_RacingWithCancelRemainingSeries_NeverProducesAnInconsistentCascade`.
+
+**Proven against real SQL Server (LocalDB, not SQLite) by `CheckInVsCancelConcurrencyTests`**: both
+documented orderings run deterministically (sequential calls, each exercising the real lock/transaction
+machinery) and confirm the exact rule each one claims; a genuinely concurrent race
+(`ConcurrentCheckInAndCancel_NeverProduceAContradictoryFinalState`, a shared `SemaphoreSlim` start gate)
+confirms the booking always ends in exactly one of the two valid states, never a hybrid, regardless of which
+request the lock happens to let through first; two concurrent plain cancels on the same booking still
+produce exactly one cancellation outbox row; and a `SaveChangesAsync` failure injected into check-in still
+leaves neither `Status` nor `CheckedInAtUtc` persisted (Cancel's own equivalent booking-status+outbox
+rollback proof already existed and remains green).
+
+**The future no-show job must use this same lock too.** Its eventual `Confirmed -> NoShow` transition is a
+THIRD concurrent writer of the same field set - omitting `IResourceBookingLock` there would reopen the
+identical class of race this change just closed, between no-show processing and check-in/cancel.
+
+### Idempotency
+
+Calling check-in again after a successful check-in is a no-op: `CheckInEligibilityChecker.Evaluate` checks
+`CheckedInAtUtc is not null` **first**, before status or window - the response reports
+`AlreadyCheckedIn: true` with the **original** `CheckedInAtUtc`, never a new one, and never re-validates
+the window. This means confirming an existing check-in can never fail just because the window has since
+closed - proven by `CheckInBookingCommandHandlerTests.Handle_AlreadyCheckedIn_SucceedsEvenIfTheWindowHasSinceClosed`.
+
+### Response shape and frontend behavior
+
+`CheckInBookingResponse` carries `CheckedInAtUtc` (always set in the response, never null - either just-now
+or the original instant) and `AlreadyCheckedIn` (whether this call performed a new check-in or confirmed an
+existing one), alongside the same `Id/ResourceId/StartUtc/EndUtc/Quantity/Status` shape every other booking
+action response already uses.
+
+On My Bookings, `BookingRowComponent` shows a `Check in` button whenever a booking is `Confirmed` and not
+yet checked in (`canCheckInBooking`, mirroring `CheckInEligibilityChecker`'s window logic client-side,
+computed from `GetOwnBookingsResponseItem`'s new `CheckInWindowOpensAtUtc`/`ClosesAtUtc` fields - server-
+computed from the caller's own tenant settings, never hardcoded minutes on the client) - **disabled**
+outside the window, **always visible** within it so the rule ("Check-in window: HH:mm–HH:mm...") is
+discoverable before it's actionable. A submitting row disables its own button only (`checkInSubmitting`
+input, keyed by booking id) so multiple rows never interfere, and a failed attempt (booking cancelled/
+expired/window closed since the page loaded) shows the server's own message inline, next to that row -
+the same `rowErrors`-style pattern the approval queue already uses for its own per-row decision failures.
+`CheckedInAtUtc` is stored and transmitted as UTC throughout; the frontend formats it (and the window
+boundaries) in the viewer's own local time via the existing `toLocalDateTime` helper, never raw UTC.
+
+**Approver/TenantAdmin check-in has no dedicated UI yet** - this task adds the backend authorization and
+tests for it (see the table above), but there is no staff-facing screen today where an approver would find
+a Confirmed booking to check in on someone else's behalf (the approval queue only lists `Pending`
+bookings). Documented here as the next UI task, not built speculatively ahead of a concrete design.
+
+### Index for the future no-show job
+
+No existing index covers `Status`/`CheckedInAtUtc` together. Added (migration
+`AddTenantCheckInLeadMinutesAndBookingCheckInIndex`), mirroring the reminder index's own filtered-covering
+shape exactly:
+
+```sql
+CREATE INDEX [IX_Bookings_StartUtc_NoShowCandidate] ON [Bookings] ([StartUtc])
+  INCLUDE ([TenantId], [UserId], [ResourceId], [EndUtc], [Quantity], [CreatedAtUtc])
+  WHERE [Status] = 'Confirmed' AND [CheckedInAtUtc] IS NULL
+```
+
+An explicit `HasDatabaseName` (passed directly to `HasIndex`, not attached afterward via
+`.HasDatabaseName()`) was required: EF Core keys an index builder by its property list alone, so a second
+`HasIndex(booking => booking.StartUtc)` without an explicit name at the call site silently collapsed into
+the *same* index object as the existing reminder index (`IX_Bookings_StartUtc`) - the first scaffolded
+migration would have **dropped the reminder index** and replaced it with this one, caught before it shipped
+by inspecting the generated migration and model snapshot.
+
+**What was actually verified, honestly reported**: the index's filter predicate (`Status='Confirmed' AND
+CheckedInAtUtc IS NULL`) was confirmed exactly selective as intended - a direct `COUNT(*)` against a seeded
+~204,000-row `Bookings` table matched only the 5 genuine candidates. Forcing the index
+(`WITH (INDEX(IX_Bookings_StartUtc_NoShowCandidate))`) produces a valid plan (`Index Scan` + `Nested Loops`
++ `Clustered Index Seek`) at an estimated subtree cost roughly 900x lower than the plan SQL Server chose
+without the hint (`0.0086` vs `7.86`). However, **the LocalDB instance used for this verification did not
+naturally choose the filtered index for this query shape without the hint** - and, reproduced as a control,
+neither did it naturally choose the pre-existing, already-shipped reminder index (`IX_Bookings_StartUtc`)
+for the equivalent reminder-shaped query, under the same session, with `UPDATE STATISTICS ... WITH
+FULLSCAN`, `OPTION (RECOMPILE)`, and a cleared plan cache all ruled out as explanations. This reads as an
+environment-specific optimizer behavior in this LocalDB installation, not a defect introduced by this
+index - but it is reported exactly as observed rather than overstated as "Index Seek confirmed," consistent
+with this project's standard for query-plan evidence. The index is kept because it is correctly defined,
+highly selective, and demonstrably much cheaper when used; a real SQL Server deployment (or a future
+re-verification once the no-show job's actual query shape exists) should be re-checked before relying on
+this index's natural selection in production.
+
+### Tests
+
+`CheckInEligibilityCheckerTests` (pure, no mocks): both window boundaries inclusive, one second outside
+each boundary, every non-`Confirmed` status, already-checked-in short-circuiting the window, per-tenant
+`CheckInLeadMinutes`/`NoShowGraceMinutes` actually respected (not hardcoded). `CheckInBookingCommandHandlerTests`
+(mocked repositories, `PassThroughResourceBookingLock`): owner success, unknown booking, another member's
+booking, assigned/unassigned approver, `TenantAdmin`/`SysAdmin` bypass, idempotent repeat, already-checked-in
+surviving a closed window, every non-`Confirmed` status, too-early, too-late, cross-tenant. `CheckInConcurrencyTests`
+(real LocalDB): two genuinely concurrent check-ins on one booking, assigned-vs-unassigned approver against
+real data. `BookingsEndpointsTests` (SQLite, full HTTP + auth pipeline): success, repeat-is-idempotent,
+too-early, too-late, `Pending` booking, another user's booking (404), another tenant's booking (404),
+unknown id (404), assigned approver (200), unassigned approver (404), `TenantAdmin` for another member's
+booking (200), and cancelling an already-checked-in booking (409, `Booking.AlreadyCheckedIn`). Frontend:
+`canCheckInBooking` boundary tests (both edges inclusive, one second outside each, non-`Confirmed`,
+already-checked-in), `BookingRowComponent` button visibility/enabled/loading-state/emit tests (fake timers
+for deterministic window-relative "now"), `mapCheckInBookingResponse` mapping.
+
+`CancelBookingCommandHandlerTests` (mocked repositories, `PassThroughResourceBookingLock`, extended for the
+check-in/cancel race): already-checked-in primary target refused with `Booking.AlreadyCheckedIn` (including
+for `TenantAdmin`/`SysAdmin`, proving no override), a checked-in sibling silently excluded from a
+`CancelRemainingSeries` cascade without aborting the rest, cancellation-token propagation. Every pre-existing
+Cancel test still passes - extended only to also stub the new pre-lock `FindResourceIdAsync` projection.
+`CheckInVsCancelConcurrencyTests` (real LocalDB, the authoritative proof for this fix): cancel-wins and
+check-in-wins run deterministically to their documented final states; a genuinely concurrent race
+(`SemaphoreSlim` start gate) proves no contradictory final state regardless of which request the lock lets
+through first; two concurrent plain cancels still produce exactly one outbox row; check-in racing a
+`CancelRemainingSeries` cascade on a sibling occurrence produces no partial/inconsistent cascade; a
+`SaveChangesAsync` failure during check-in leaves neither `Status` nor `CheckedInAtUtc` persisted; an
+already-cancelled token propagates as `OperationCanceledException`, never a business conflict.
+`NotificationOutboxCascadeAtomicityTests`'s existing Cancel-cascade atomicity tests were updated only to
+construct the handler with the new lock argument and remain green.

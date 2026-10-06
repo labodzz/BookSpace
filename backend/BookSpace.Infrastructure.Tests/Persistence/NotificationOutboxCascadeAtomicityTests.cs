@@ -147,7 +147,7 @@ public sealed class NotificationOutboxCascadeAtomicityTests : IAsyncLifetime
         }
     }
 
-    // Test category 4 (simulated failure, no IResourceBookingLock wrapping this handler - see
+    // Test category 4 (simulated failure, now inside IResourceBookingLock's own transaction - see
     // CancelBookingCommandRequest's own class comment): a failure injected at the exact point
     // SaveChangesAsync would run must leave NEITHER the cascaded booking mutations NOR any outbox item
     // persisted - proven by reading back from a completely separate DbContext/connection afterward, never
@@ -175,10 +175,10 @@ public sealed class NotificationOutboxCascadeAtomicityTests : IAsyncLifetime
             .CountAsync(i => i.IdempotencyKey == $"booking:{primary}:cancellation" || i.IdempotencyKey == $"booking:{sibling}:cancellation"));
     }
 
-    // Same failure-injection proof for a handler that DOES run inside IResourceBookingLock's explicit
+    // Same failure-injection proof for another handler that runs inside IResourceBookingLock's explicit
     // transaction (BeginTransactionAsync/CommitAsync) - the lock's own catch-all rollback must discard the
-    // staged series/bookings exactly as cleanly as the no-transaction Cancel case above does via plain
-    // SaveChangesAsync failure.
+    // staged series/bookings exactly as cleanly as the Cancel case above does, which now shares the
+    // identical lock/transaction mechanism.
     [Fact]
     public async Task CreateRecurringSeriesCommandHandler_WhenSaveChangesFailsBeforeCommit_PersistsNeitherTheSeriesNorAnyOutboxItem()
     {
@@ -252,6 +252,7 @@ public sealed class NotificationOutboxCascadeAtomicityTests : IAsyncLifetime
         new NotificationOutboxWriter(dbContext, NullLogger<NotificationOutboxWriter>.Instance));
 
     private CancelBookingCommandHandler CreateCancelHandler(BookSpaceDbContext dbContext) => new(
+        new ResourceBookingLock(dbContext, NullLogger<ResourceBookingLock>.Instance),
         new BookingRepository(dbContext),
         new FixedCurrentUserContext(_tenantId, _ownerId),
         new NotificationOutboxWriter(dbContext, NullLogger<NotificationOutboxWriter>.Instance));

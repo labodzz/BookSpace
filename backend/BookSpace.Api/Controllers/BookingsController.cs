@@ -9,10 +9,14 @@ namespace BookSpace.Api.Controllers;
 // Every booking/series action is plain [Authorize] - any authenticated tenant member creates/views/
 // cancels their OWN bookings and recurring series. Ownership itself is enforced inside each handler
 // (server-derived UserId on create, an explicit owner check on view/cancel), not gated by role at the
-// route. Two actions widen that in-handler check instead of gating the route: cancel additionally lets a
-// TenantAdmin/SysAdmin cancel someone ELSE's booking (see docs/open-questions.md), and approve/reject
-// (below) are gated to Approver/TenantAdmin/SysAdmin at the route, with a further in-handler check that a
-// plain Approver is actually assigned to the specific resource (see ApprovalAuthorization).
+// route. Three actions widen that in-handler check instead of gating the route: cancel additionally lets a
+// TenantAdmin/SysAdmin cancel someone ELSE's booking (see docs/open-questions.md), check-in additionally
+// lets a ResourceApprover check in a booking on a resource they're actually assigned to (or a
+// TenantAdmin/SysAdmin check in anything in their tenant) - see CheckInBookingCommandHandler.CanCheckInAsync
+// - deliberately NOT route-gated the way approve/reject are, since a plain Member must still be able to
+// check in their OWN booking, and approve/reject (below) are gated to Approver/TenantAdmin/SysAdmin at the
+// route, with a further in-handler check that a plain Approver is actually assigned to the specific
+// resource (see ApprovalAuthorization).
 [ApiController]
 [Route("api/bookings")]
 [Authorize]
@@ -46,6 +50,13 @@ public sealed class BookingsController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> CancelBooking(
         Guid id, bool cancelRemainingSeries = false, string? reason = null, CancellationToken cancellationToken = default) =>
         Ok(await mediator.Send(new CancelBookingCommandRequest(id, cancelRemainingSeries, reason), cancellationToken));
+
+    // See CheckInBookingCommandHandler for exactly who may check in which booking and the full
+    // window/concurrency reasoning. No role gate at the route - a plain Member must still be able to check
+    // in their OWN booking, which [Authorize(Roles = "Approver,TenantAdmin,SysAdmin")] would block.
+    [HttpPost("{id:guid}/check-in")]
+    public async Task<IActionResult> CheckInBooking(Guid id, CancellationToken cancellationToken) =>
+        Ok(await mediator.Send(new CheckInBookingCommandRequest(id), cancellationToken));
 
     [HttpPost("series")]
     public async Task<IActionResult> CreateRecurringSeries(CreateRecurringSeriesRequest request, CancellationToken cancellationToken)

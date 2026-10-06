@@ -13,16 +13,32 @@ public sealed class GetOwnBookingsQueryHandlerTests
 {
     private readonly Mock<IBookingRepository> _bookingRepository = new();
     private readonly Mock<IResourceRepository> _resourceRepository = new();
+    private readonly Mock<ITenantRepository> _tenantRepository = new();
     private readonly Mock<ICurrentUserContext> _currentUserContext = new();
 
     private static readonly Guid UserId = Guid.NewGuid();
+    private static readonly Guid TenantId = Guid.NewGuid();
 
-    private GetOwnBookingsQueryHandler CreateSut() => new(_bookingRepository.Object, _resourceRepository.Object, _currentUserContext.Object);
+    // TenantId/the tenant lookup are wired here (not per-test) since every test shares the same caller's
+    // tenant and none of them care about a non-default CheckInLeadMinutes/NoShowGraceMinutes - the one test
+    // that does (Handle_MapsCheckInFields_FromTheCallersTenantSettings) overrides the tenant explicitly.
+    private GetOwnBookingsQueryHandler CreateSut()
+    {
+        _currentUserContext.SetupGet(c => c.TenantId).Returns(TenantId);
+        _tenantRepository.Setup(r => r.FindByIdAsync(TenantId, It.IsAny<CancellationToken>())).ReturnsAsync(CreateTenant());
+        return new GetOwnBookingsQueryHandler(_bookingRepository.Object, _resourceRepository.Object, _tenantRepository.Object, _currentUserContext.Object);
+    }
 
     private static Resource CreateResource(Guid id, string timeZoneId) => new()
     {
         Id = id, TenantId = Guid.NewGuid(), ResourceTypeId = Guid.NewGuid(), Name = "Falcon Room",
         Capacity = 4, Status = ResourceStatus.Active, TimeZoneId = timeZoneId,
+    };
+
+    private static Tenant CreateTenant(int checkInLeadMinutes = 15, int noShowGraceMinutes = 15) => new()
+    {
+        Id = TenantId, Name = "Test Tenant", DefaultTimeZoneId = "UTC", CreatedAtUtc = DateTimeOffset.UtcNow,
+        CheckInLeadMinutes = checkInLeadMinutes, NoShowGraceMinutes = noShowGraceMinutes,
     };
 
     [Fact]
@@ -244,5 +260,33 @@ public sealed class GetOwnBookingsQueryHandlerTests
         var item = Assert.Single(result.Items);
         Assert.Equal(startUtc, item.StartUtc);
         Assert.Equal(endUtc, item.EndUtc);
+    }
+
+    [Fact]
+    public async Task Handle_MapsCheckInFields_FromTheCallersTenantSettings()
+    {
+        var startUtc = DateTimeOffset.Parse("2026-07-15T08:00:00Z");
+        var checkedInAtUtc = startUtc.AddMinutes(-5);
+        var booking = new Booking
+        {
+            Id = Guid.NewGuid(), TenantId = TenantId, ResourceId = Guid.NewGuid(), UserId = UserId,
+            StartUtc = startUtc, EndUtc = startUtc.AddHours(1), Quantity = 1, Status = BookingStatus.Confirmed,
+            CreatedAtUtc = DateTimeOffset.UtcNow, CheckedInAtUtc = checkedInAtUtc,
+        };
+        _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
+        _bookingRepository
+            .Setup(r => r.GetOwnBookingsAsync(UserId, null, null, null, 1, 20, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedResult<Booking>([booking], 1, 20, 1));
+        var sut = CreateSut();
+        // Overrides CreateSut()'s default tenant with non-default lead/grace minutes, so the window
+        // boundaries below can only be right if they're genuinely computed from THIS tenant's settings.
+        _tenantRepository.Setup(r => r.FindByIdAsync(TenantId, It.IsAny<CancellationToken>())).ReturnsAsync(CreateTenant(checkInLeadMinutes: 20, noShowGraceMinutes: 10));
+
+        var result = await sut.Handle(new GetOwnBookingsQueryRequest(), CancellationToken.None);
+
+        var item = Assert.Single(result.Items);
+        Assert.Equal(checkedInAtUtc, item.CheckedInAtUtc);
+        Assert.Equal(startUtc.AddMinutes(-20), item.CheckInWindowOpensAtUtc);
+        Assert.Equal(startUtc.AddMinutes(10), item.CheckInWindowClosesAtUtc);
     }
 }

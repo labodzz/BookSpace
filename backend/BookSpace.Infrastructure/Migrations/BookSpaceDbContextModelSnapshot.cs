@@ -218,6 +218,11 @@ namespace BookSpace.Infrastructure.Migrations
 
                     b.HasIndex("TenantId", "ResourceId", "StartUtc", "EndUtc");
 
+                    b.HasIndex(new[] { "StartUtc" }, "IX_Bookings_StartUtc_NoShowCandidate")
+                        .HasFilter("[Status] = 'Confirmed' AND [CheckedInAtUtc] IS NULL");
+
+                    SqlServerIndexBuilderExtensions.IncludeProperties(b.HasIndex(new[] { "StartUtc" }, "IX_Bookings_StartUtc_NoShowCandidate"), new[] { "TenantId", "UserId", "ResourceId", "EndUtc", "Quantity", "CreatedAtUtc" });
+
                     b.ToTable("Bookings", null, t =>
                         {
                             t.HasCheckConstraint("CK_Bookings_Quantity", "[Quantity] > 0");
@@ -617,6 +622,11 @@ namespace BookSpace.Infrastructure.Migrations
                     b.Property<int>("ApprovalExpiryHours")
                         .HasColumnType("int");
 
+                    b.Property<int>("CheckInLeadMinutes")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(15);
+
                     b.Property<DateTimeOffset>("CreatedAtUtc")
                         .HasColumnType("datetimeoffset");
 
@@ -649,6 +659,8 @@ namespace BookSpace.Infrastructure.Migrations
                     b.ToTable("Tenants", null, t =>
                         {
                             t.HasCheckConstraint("CK_Tenants_ApprovalExpiryHours", "[ApprovalExpiryHours] > 0");
+
+                            t.HasCheckConstraint("CK_Tenants_CheckInLeadMinutes", "[CheckInLeadMinutes] >= 0");
 
                             t.HasCheckConstraint("CK_Tenants_NoShowGraceMinutes", "[NoShowGraceMinutes] >= 0");
 
