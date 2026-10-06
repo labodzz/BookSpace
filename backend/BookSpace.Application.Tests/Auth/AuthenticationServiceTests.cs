@@ -15,6 +15,7 @@ public sealed class AuthenticationServiceTests
     private readonly Mock<IUserRepository> _userRepository = new();
     private readonly Mock<IRefreshTokenRepository> _refreshTokenRepository = new();
     private readonly Mock<IInvitationRepository> _invitationRepository = new();
+    private readonly Mock<BookSpace.Application.Bookings.ITenantRepository> _tenantRepository = new();
     private readonly Mock<IPasswordHasher> _passwordHasher = new();
     private readonly Mock<IJwtTokenGenerator> _jwtTokenGenerator = new();
     private readonly AuthOptions _authOptions = new()
@@ -26,23 +27,57 @@ public sealed class AuthenticationServiceTests
         RefreshTokenDays = 14,
     };
 
+    // Every existing test's tenant user belongs to a perfectly ordinary, Active tenant unless a test
+    // overrides this setup for a specific tenantId - so every test written before tenant-status checking
+    // existed keeps passing unmodified, and only the new tests below need to set up a Suspended/Deleted
+    // tenant explicitly.
+    public AuthenticationServiceTests()
+    {
+        _tenantRepository.Setup(r => r.FindByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid id, CancellationToken _) => CreateTenant(id, TenantStatus.Active));
+    }
+
     private AuthenticationService CreateSut() => new(
         _userRepository.Object,
         _refreshTokenRepository.Object,
         _invitationRepository.Object,
+        _tenantRepository.Object,
         _passwordHasher.Object,
         _jwtTokenGenerator.Object,
         Options.Create(_authOptions),
         NullLogger<AuthenticationService>.Instance);
 
-    private static User CreateUser(Guid? id = null, UserStatus status = UserStatus.Active) => new()
+    private static User CreateUser(Guid? id = null, UserStatus status = UserStatus.Active, Guid? tenantId = null) => new()
     {
         Id = id ?? Guid.NewGuid(),
-        TenantId = Guid.NewGuid(),
+        TenantId = tenantId ?? Guid.NewGuid(),
         FirstName = "Test",
         LastName = "User",
         Email = "test.user@bookspace.test",
         PasswordHash = "stored-hash",
+        Status = status,
+        CreatedAtUtc = DateTimeOffset.UtcNow,
+    };
+
+    // The global platform admin - TenantId null, never subject to any tenant's status (there is no
+    // tenant to check - see AuthenticationService.IsUsableAsync).
+    private static User CreateGlobalSysAdmin(Guid? id = null) => new()
+    {
+        Id = id ?? Guid.NewGuid(),
+        TenantId = null,
+        FirstName = "Sys",
+        LastName = "Admin",
+        Email = "sysadmin@bookspace.test",
+        PasswordHash = "stored-hash",
+        Status = UserStatus.Active,
+        CreatedAtUtc = DateTimeOffset.UtcNow,
+    };
+
+    private static Tenant CreateTenant(Guid? id = null, TenantStatus status = TenantStatus.Active) => new()
+    {
+        Id = id ?? Guid.NewGuid(),
+        Name = "Test Tenant",
+        DefaultTimeZoneId = "UTC",
         Status = status,
         CreatedAtUtc = DateTimeOffset.UtcNow,
     };
@@ -602,5 +637,129 @@ public sealed class AuthenticationServiceTests
 
         Assert.False(result.Succeeded);
         Assert.Equal("Invitation.Invalid", result.ErrorCode);
+    }
+
+    // --- Tenant lifecycle (SysAdmin/tenant-separation): Suspended/Deleted tenants block login/refresh/
+    // acceptance, and the global SysAdmin (no TenantId) is never subject to any tenant's status at all. ---
+
+    [Theory]
+    [InlineData(TenantStatus.Suspended)]
+    [InlineData(TenantStatus.Deleted)]
+    public async Task LoginAsync_ForATenantUserWhoseTenantIsNotActive_ReturnsFailureWithoutEverCallingVerify(TenantStatus tenantStatus)
+    {
+        var tenantId = Guid.NewGuid();
+        var user = CreateUser(tenantId: tenantId);
+        _userRepository.Setup(r => r.FindByEmailAsync(user.Email, It.IsAny<CancellationToken>())).ReturnsAsync(user);
+        _tenantRepository.Setup(r => r.FindByIdAsync(tenantId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(CreateTenant(tenantId, tenantStatus));
+
+        var sut = CreateSut();
+        var result = await sut.LoginAsync(user.Email, "their-genuinely-correct-password", CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("Auth.InvalidCredentials", result.ErrorCode);
+        _passwordHasher.Verify(h => h.Verify(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        _refreshTokenRepository.Verify(r => r.AddAsync(It.IsAny<RefreshToken>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task LoginAsync_ForTheGlobalSysAdmin_SucceedsWithoutEverQueryingAnyTenant()
+    {
+        var sysAdmin = CreateGlobalSysAdmin();
+        _userRepository.Setup(r => r.FindByEmailAsync(sysAdmin.Email, It.IsAny<CancellationToken>())).ReturnsAsync(sysAdmin);
+        _passwordHasher.Setup(h => h.Verify(sysAdmin.PasswordHash, "correct-password")).Returns(true);
+        _userRepository.Setup(r => r.GetRolesAsync(sysAdmin.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<string>)["SysAdmin"]);
+        _jwtTokenGenerator.Setup(g => g.GenerateAccessToken(sysAdmin, It.IsAny<IReadOnlyCollection<string>>()))
+            .Returns(new AccessToken("access-token", DateTimeOffset.UtcNow.AddMinutes(15)));
+
+        var sut = CreateSut();
+        var result = await sut.LoginAsync(sysAdmin.Email, "correct-password", CancellationToken.None);
+
+        Assert.True(result.Succeeded);
+        Assert.NotNull(result.Tokens);
+        _tenantRepository.Verify(r => r.FindByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData(TenantStatus.Suspended)]
+    [InlineData(TenantStatus.Deleted)]
+    public async Task RefreshAsync_ForATenantUserWhoseTenantIsNotActive_ReturnsFailure(TenantStatus tenantStatus)
+    {
+        var tenantId = Guid.NewGuid();
+        var user = CreateUser(tenantId: tenantId);
+        var existingToken = new RefreshToken
+        {
+            Id = Guid.NewGuid(),
+            UserId = user.Id,
+            FamilyId = Guid.NewGuid(),
+            TokenHash = "existing-hash",
+            CreatedAtUtc = DateTimeOffset.UtcNow.AddDays(-1),
+            ExpiresAtUtc = DateTimeOffset.UtcNow.AddDays(13),
+        };
+        _refreshTokenRepository.Setup(r => r.FindByTokenHashAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(existingToken);
+        _userRepository.Setup(r => r.FindByIdForAuthenticationAsync(user.Id, It.IsAny<CancellationToken>())).ReturnsAsync(user);
+        _tenantRepository.Setup(r => r.FindByIdAsync(tenantId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(CreateTenant(tenantId, tenantStatus));
+
+        var sut = CreateSut();
+        var result = await sut.RefreshAsync("raw-refresh-token", CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.False(result.ReuseDetected);
+        Assert.Null(result.Tokens);
+        _refreshTokenRepository.Verify(r => r.AddAsync(It.IsAny<RefreshToken>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task RefreshAsync_ForTheGlobalSysAdmin_SucceedsWithoutEverQueryingAnyTenant()
+    {
+        var sysAdmin = CreateGlobalSysAdmin();
+        var existingToken = new RefreshToken
+        {
+            Id = Guid.NewGuid(),
+            UserId = sysAdmin.Id,
+            FamilyId = Guid.NewGuid(),
+            TokenHash = "existing-hash",
+            CreatedAtUtc = DateTimeOffset.UtcNow.AddDays(-1),
+            ExpiresAtUtc = DateTimeOffset.UtcNow.AddDays(13),
+        };
+        _refreshTokenRepository.Setup(r => r.FindByTokenHashAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(existingToken);
+        _userRepository.Setup(r => r.FindByIdForAuthenticationAsync(sysAdmin.Id, It.IsAny<CancellationToken>())).ReturnsAsync(sysAdmin);
+        _userRepository.Setup(r => r.GetRolesAsync(sysAdmin.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<string>)["SysAdmin"]);
+        _jwtTokenGenerator.Setup(g => g.GenerateAccessToken(sysAdmin, It.IsAny<IReadOnlyCollection<string>>()))
+            .Returns(new AccessToken("new-access-token", DateTimeOffset.UtcNow.AddMinutes(15)));
+
+        var sut = CreateSut();
+        var result = await sut.RefreshAsync("raw-refresh-token", CancellationToken.None);
+
+        Assert.True(result.Succeeded);
+        Assert.NotNull(result.Tokens);
+        _tenantRepository.Verify(r => r.FindByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData(TenantStatus.Suspended)]
+    [InlineData(TenantStatus.Deleted)]
+    public async Task AcceptInvitationAsync_WhenTheTenantIsNotActive_ReturnsTheIdenticalGenericFailure(TenantStatus tenantStatus)
+    {
+        var tenantId = Guid.NewGuid();
+        var user = CreateUser(status: UserStatus.Invited, tenantId: tenantId);
+        var invitation = CreateInvitation(user.Id);
+        _invitationRepository.Setup(r => r.FindByTokenHashForAcceptanceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(invitation);
+        _userRepository.Setup(r => r.FindByIdForAuthenticationAsync(user.Id, It.IsAny<CancellationToken>())).ReturnsAsync(user);
+        _tenantRepository.Setup(r => r.FindByIdAsync(tenantId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(CreateTenant(tenantId, tenantStatus));
+
+        var sut = CreateSut();
+        var result = await sut.AcceptInvitationAsync("stale-tenant-token", "a-New-Passw0rd!", CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("Invitation.Invalid", result.ErrorCode);
+        _invitationRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 }

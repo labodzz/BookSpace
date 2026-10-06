@@ -29,10 +29,10 @@ public static class TestDataSeeder
     public static readonly Guid AcmeMemberUserId = Guid.NewGuid();
     public const string AcmeMemberEmail = "member@acme.integration-test";
 
-    // Both roles exist in the domain (Roles table / [Authorize(Roles = "TenantAdmin,SysAdmin")]
-    // everywhere in ResourcesController) but had no seeded user anywhere in this codebase - not in
-    // TestDataSeeder, not even in the Development-only seeder - so neither role's authorization path
-    // was ever actually exercised by a real login before these two were added.
+    // Approver exists in the domain (Roles table / [Authorize(Roles = "Approver,TenantAdmin")]
+    // everywhere in BookingsController) but had no seeded user anywhere in this codebase - not in
+    // TestDataSeeder, not even in the Development-only seeder - so its authorization path was never
+    // actually exercised by a real login before this one was added.
     public static readonly Guid AcmeApproverUserId = Guid.NewGuid();
     public const string AcmeApproverEmail = "approver@acme.integration-test";
 
@@ -43,8 +43,11 @@ public static class TestDataSeeder
     public static readonly Guid AcmeUnassignedApproverUserId = Guid.NewGuid();
     public const string AcmeUnassignedApproverEmail = "unassigned-approver@acme.integration-test";
 
-    public static readonly Guid AcmeSysAdminUserId = Guid.NewGuid();
-    public const string AcmeSysAdminEmail = "sysadmin@acme.integration-test";
+    // TenantId = null (see the seed below) - a true global platform admin, never a member of Acme or any
+    // other tenant. Named/emailed without "acme" deliberately, unlike every other seeded user here, so a
+    // call site can't mistake it for a tenant-scoped account.
+    public static readonly Guid GlobalSysAdminUserId = Guid.NewGuid();
+    public const string GlobalSysAdminEmail = "sysadmin@bookspace.integration-test";
 
     public static readonly Guid ResourceTypeId = Guid.NewGuid();
     public static readonly Guid GlobexResourceTypeId = Guid.NewGuid();
@@ -110,7 +113,7 @@ public static class TestDataSeeder
             new User { Id = AcmeMemberUserId, TenantId = AcmeTenantId, FirstName = "Acme", LastName = "Member", Email = AcmeMemberEmail, PasswordHash = passwordHash, CreatedAtUtc = now },
             new User { Id = AcmeApproverUserId, TenantId = AcmeTenantId, FirstName = "Acme", LastName = "Approver", Email = AcmeApproverEmail, PasswordHash = passwordHash, CreatedAtUtc = now },
             new User { Id = AcmeUnassignedApproverUserId, TenantId = AcmeTenantId, FirstName = "Acme", LastName = "UnassignedApprover", Email = AcmeUnassignedApproverEmail, PasswordHash = passwordHash, CreatedAtUtc = now },
-            new User { Id = AcmeSysAdminUserId, TenantId = AcmeTenantId, FirstName = "Acme", LastName = "SysAdmin", Email = AcmeSysAdminEmail, PasswordHash = passwordHash, CreatedAtUtc = now },
+            new User { Id = GlobalSysAdminUserId, TenantId = null, FirstName = "Global", LastName = "SysAdmin", Email = GlobalSysAdminEmail, PasswordHash = passwordHash, CreatedAtUtc = now },
             new User { Id = GlobexMemberUserId, TenantId = GlobexTenantId, FirstName = "Globex", LastName = "Member", Email = GlobexMemberEmail, PasswordHash = passwordHash, CreatedAtUtc = now },
             new User { Id = GlobexAdminUserId, TenantId = GlobexTenantId, FirstName = "Globex", LastName = "Admin", Email = GlobexAdminEmail, PasswordHash = passwordHash, CreatedAtUtc = now });
 
@@ -119,7 +122,7 @@ public static class TestDataSeeder
             new UserRole { Id = Guid.NewGuid(), UserId = AcmeMemberUserId, RoleId = memberRole.Id },
             new UserRole { Id = Guid.NewGuid(), UserId = AcmeApproverUserId, RoleId = approverRole.Id },
             new UserRole { Id = Guid.NewGuid(), UserId = AcmeUnassignedApproverUserId, RoleId = approverRole.Id },
-            new UserRole { Id = Guid.NewGuid(), UserId = AcmeSysAdminUserId, RoleId = sysAdminRole.Id },
+            new UserRole { Id = Guid.NewGuid(), UserId = GlobalSysAdminUserId, RoleId = sysAdminRole.Id },
             new UserRole { Id = Guid.NewGuid(), UserId = GlobexMemberUserId, RoleId = memberRole.Id },
             new UserRole { Id = Guid.NewGuid(), UserId = GlobexAdminUserId, RoleId = tenantAdminRole.Id });
 

@@ -44,7 +44,9 @@ public sealed class CalendarSubscriptionsEndpointsTests : IClassFixture<CustomWe
     [Fact]
     public async Task Create_ThenGetStatus_ReportsAnActiveSubscriptionWithoutExposingTheTokenOrUrl()
     {
-        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+        // Not the global SysAdmin - it has no TenantId and calendar subscriptions require tenant
+        // membership (see CreateCalendarSubscriptionCommandHandler) - covered separately below.
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         await client.PostAsync("/api/calendar-subscriptions", content: null);
 
         var statusResponse = await client.GetAsync("/api/calendar-subscriptions");
@@ -67,6 +69,19 @@ public sealed class CalendarSubscriptionsEndpointsTests : IClassFixture<CustomWe
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         Assert.Equal("CalendarSubscription.AlreadyExists", await ReadErrorCodeAsync(response));
+    }
+
+    // The global SysAdmin has no TenantId and can never have bookings to export - see
+    // CreateCalendarSubscriptionCommandHandler.
+    [Fact]
+    public async Task Create_AsTheGlobalSysAdmin_ReturnsConflict()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.GlobalSysAdminEmail);
+
+        var response = await client.PostAsync("/api/calendar-subscriptions", content: null);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal("CalendarSubscription.RequiresTenantMembership", await ReadErrorCodeAsync(response));
     }
 
     [Fact]

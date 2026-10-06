@@ -15,12 +15,14 @@ describe('ShellComponent', () => {
   let httpTesting: HttpTestingController;
   let logout: ReturnType<typeof vi.fn>;
 
-  // hasAnyRole defaults to always-true (every role-gated nav link renders, isApprover is true) so a
-  // test only needs to override what it actually cares about - hasAnyRole for role-gating coverage,
-  // currentUser for signed-in/signed-out footer coverage. Both defaults match what each side of this
-  // file's history already assumed on its own.
+  // hasAnyRole defaults to true for every role EXCEPT SysAdmin (every tenant-business nav link renders,
+  // isApprover is true, isSysAdmin is false) so a test only needs to override what it actually cares
+  // about - hasAnyRole for role-gating coverage, currentUser for signed-in/signed-out footer coverage.
+  // Defaulting isSysAdmin to false (not true) matters: shell.html hides the entire tenant-business nav
+  // block whenever isSysAdmin is true, so a bare "every role is true" default would hide every link the
+  // generic draggable-link tests below need to find.
   function configure(options: { hasAnyRole?: (...roles: string[]) => boolean; currentUser?: { email: string } | null } = {}): void {
-    const { hasAnyRole = () => true, currentUser = null } = options;
+    const { hasAnyRole = (...roles: string[]) => !roles.includes('SysAdmin'), currentUser = null } = options;
     logout = vi.fn();
     TestBed.configureTestingModule({
       imports: [ShellComponent],
@@ -65,8 +67,8 @@ describe('ShellComponent', () => {
     expect(root().querySelector('.shell-nav__badge')).toBeNull();
   });
 
-  it('shows the "Resource types" nav link, guarded by the same route as "Users", for a TenantAdmin or SysAdmin', () => {
-    configure({ hasAnyRole: (...roles) => roles.includes('SysAdmin') });
+  it('shows the "Resource types" nav link, guarded by the same route as "Users", for a TenantAdmin', () => {
+    configure({ hasAnyRole: (...roles) => roles.includes('TenantAdmin') });
     flushPendingApprovals();
     fixture.detectChanges();
 
@@ -74,9 +76,27 @@ describe('ShellComponent', () => {
     expect(link?.getAttribute('href')).toBe('/resource-types');
   });
 
+  // The global SysAdmin sees platform tenant-lifecycle nav instead of any tenant-business nav - see
+  // shell.html's own isSysAdmin-gated block. isApprover is also false for it (hasAnyRole('Approver',
+  // 'TenantAdmin') never includes 'SysAdmin'), so no pending-approvals request fires at all - nothing to
+  // flush here, unlike the TenantAdmin case above.
+  it('shows "Tenants"/"New tenant" instead of any tenant-business nav link for the global SysAdmin', () => {
+    configure({ hasAnyRole: (...roles) => roles.includes('SysAdmin') });
+    fixture.detectChanges();
+
+    const linkTexts = [...root().querySelectorAll('a')].map((a) => a.textContent?.trim());
+    expect(linkTexts).toContain('Tenants');
+    expect(linkTexts).toContain('New tenant');
+    expect(linkTexts).not.toContain('Resource types');
+    expect(linkTexts).not.toContain('Users');
+    expect(linkTexts).not.toContain('Resources');
+    expect(linkTexts).not.toContain('My bookings');
+    expect(linkTexts).not.toContain('Calendar');
+  });
+
   it('does not show the "Resource types" nav link for a plain Member', () => {
     // hasAnyRole() => false also means isApprover is false, so shell.ts never issues the
-    // pending-approvals request at all here - nothing to flush, unlike the SysAdmin case above.
+    // pending-approvals request at all here - nothing to flush, unlike the TenantAdmin case above.
     configure({ hasAnyRole: () => false });
     fixture.detectChanges();
 
@@ -94,7 +114,7 @@ describe('ShellComponent', () => {
   // itself - see the dedicated dragstart test below for what IS and isn't proven here.
   describe('sidebar links are not draggable (fix for the native-drag freeze)', () => {
     it('marks every sidebar nav anchor draggable="false", for every visible role combination', () => {
-      configure({ hasAnyRole: () => true }); // SysAdmin-equivalent - every conditional link renders
+      configure(); // every tenant-business conditional link renders (default: every role true except SysAdmin)
       flushPendingApprovals();
       fixture.detectChanges();
 
@@ -106,7 +126,7 @@ describe('ShellComponent', () => {
     });
 
     it('has no anchor or image anywhere in the sidebar that lacks draggable="false" (brand/logo included, if ever changed to a link)', () => {
-      configure({ hasAnyRole: () => true });
+      configure();
       flushPendingApprovals();
       fixture.detectChanges();
 
@@ -127,7 +147,7 @@ describe('ShellComponent', () => {
     // of the actual event sequence after this fix is still required and is covered in the report, not
     // in this test.
     it('dispatches dragstart against a sidebar link and confirms the link is configured non-draggable', () => {
-      configure({ hasAnyRole: () => true });
+      configure();
       flushPendingApprovals();
       fixture.detectChanges();
 
@@ -144,7 +164,7 @@ describe('ShellComponent', () => {
     });
 
     it('leaves ordinary click navigation working (RouterLink still fires a real navigation)', async () => {
-      configure({ hasAnyRole: () => true });
+      configure();
       flushPendingApprovals();
       fixture.detectChanges();
       const router = TestBed.inject(Router);
@@ -160,7 +180,7 @@ describe('ShellComponent', () => {
     // link as it does for a mouse click - RouterLink has no separate code path for either, so this is the
     // correct and sufficient proxy for "keyboard Tab + Enter still navigates".
     it('leaves keyboard activation (Enter on a focused link) working, the same native click event RouterLink already handles', async () => {
-      configure({ hasAnyRole: () => true });
+      configure();
       flushPendingApprovals();
       fixture.detectChanges();
       const router = TestBed.inject(Router);
@@ -175,7 +195,7 @@ describe('ShellComponent', () => {
     });
 
     it('still applies routerLinkActive to the current route', async () => {
-      configure({ hasAnyRole: () => true });
+      configure();
       flushPendingApprovals();
       fixture.detectChanges();
       await TestBed.inject(Router).navigateByUrl('/');
@@ -186,7 +206,7 @@ describe('ShellComponent', () => {
     });
 
     it('remains a real anchor with routerLink-derived href, not a button or a plain span', () => {
-      configure({ hasAnyRole: () => true });
+      configure();
       flushPendingApprovals();
       fixture.detectChanges();
 
@@ -200,7 +220,7 @@ describe('ShellComponent', () => {
     // guards against ShellComponent ever growing its own separate/duplicate listener on top of that.
     it('does not add its own document-level dragstart listener', () => {
       const addEventListener = vi.spyOn(document, 'addEventListener');
-      configure({ hasAnyRole: () => true });
+      configure();
       flushPendingApprovals();
       fixture.detectChanges();
 
@@ -208,7 +228,7 @@ describe('ShellComponent', () => {
     });
 
     it('does not mark the disabled "Settings" button or the "Log out" button as draggable (they were never anchors, this fix must not touch them)', () => {
-      configure({ hasAnyRole: () => true });
+      configure();
       flushPendingApprovals();
       fixture.detectChanges();
 

@@ -126,6 +126,7 @@ public sealed class AcceptInvitationConcurrencyTests : IAsyncLifetime
         new UserRepository(dbContext),
         new RefreshTokenRepository(dbContext),
         new InvitationRepository(dbContext),
+        new TenantRepository(dbContext),
         new PasswordHasher(),
         new JwtTokenGenerator(Options.Create(_authOptions)),
         Options.Create(_authOptions),

@@ -88,23 +88,6 @@ public sealed class RemoveUserRoleCommandHandlerTests
         _userRepository.Verify(r => r.RemoveRoleAsync(_callerId, roleId, It.IsAny<CancellationToken>()), Times.Once);
     }
 
-    // Removing TenantAdmin from someone who is ALSO SysAdmin leaves them still administrative - no
-    // last-admin check should even trigger a repository call.
-    [Fact]
-    public async Task Handle_RemovingOneAdminRoleWhenTheTargetHoldsBoth_Succeeds()
-    {
-        var otherUserId = Guid.NewGuid();
-        var roleId = Guid.NewGuid();
-        SetUpUser(otherUserId, UserStatus.Active, ["TenantAdmin", "SysAdmin"]);
-        _userRepository.Setup(r => r.FindRoleByNameAsync("TenantAdmin", It.IsAny<CancellationToken>())).ReturnsAsync(new Role { Id = roleId, Name = "TenantAdmin" });
-
-        var sut = CreateSut();
-        await sut.Handle(new RemoveUserRoleCommandRequest(otherUserId, "TenantAdmin"), CancellationToken.None);
-
-        _userRepository.Verify(r => r.RemoveRoleAsync(otherUserId, roleId, It.IsAny<CancellationToken>()), Times.Once);
-        _userRepository.Verify(r => r.CountActiveAdministratorsAsync(It.IsAny<CancellationToken>()), Times.Never);
-    }
-
     [Fact]
     public async Task Handle_RemovingTheLastActiveAdministratorsOnlyAdminRole_ThrowsLastAdminConflict()
     {

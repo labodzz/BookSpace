@@ -15,8 +15,8 @@ public sealed record GetOwnBookingsQueryRequest(
     : IRequest<PagedResult<GetOwnBookingsResponseItem>>;
 
 // CancelledByAdmin is derived, not a stored column: since this query only ever returns the caller's OWN
-// bookings, the one case CancelledByUserId can differ from the booking's own owner is a TenantAdmin/
-// SysAdmin override (see CancelBookingCommandHandler and docs/open-questions.md) - surfaced as a plain
+// bookings, the one case CancelledByUserId can differ from the booking's own owner is a TenantAdmin
+// override (see CancelBookingCommandHandler and docs/open-questions.md) - surfaced as a plain
 // bool so the client doesn't need to know the caller's own user ID to tell "I cancelled this" from "this
 // was administratively cancelled" apart. SeriesId is surfaced (unlike other Booking fields we don't
 // expose) because this same query already accepts SeriesId as a filter, so the concept is already public
@@ -60,6 +60,15 @@ public sealed class GetOwnBookingsQueryHandler(
 {
     public async Task<PagedResult<GetOwnBookingsResponseItem>> Handle(GetOwnBookingsQueryRequest request, CancellationToken cancellationToken)
     {
+        // The global SysAdmin has no TenantId and can never have a booking - "my bookings" is simply
+        // always empty for it, not an error (unlike the write-side handlers in this folder, which reject
+        // the attempt outright - see TenantMembershipGuard). Returning empty here, rather than throwing,
+        // matters in practice: the dashboard calls this for every signed-in user unconditionally.
+        if (currentUserContext.TenantId is null)
+        {
+            return new PagedResult<GetOwnBookingsResponseItem>([], request.Page, request.PageSize, 0);
+        }
+
         var paged = await bookingRepository.GetOwnBookingsAsync(
             currentUserContext.UserId!.Value, request.SeriesId, request.FromUtc, request.ToUtc, request.Page, request.PageSize, cancellationToken);
 

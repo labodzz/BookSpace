@@ -3,9 +3,10 @@
 // approved/rejected it in time - distinct from Rejected (an approver's own decision).
 export type BookingStatus = 'Pending' | 'Confirmed' | 'Rejected' | 'Cancelled' | 'Completed' | 'NoShow' | 'Expired';
 
-// GetOwnBookingsResponseItem. CancelledByAdmin is server-derived: true only when a TenantAdmin/SysAdmin
-// cancelled someone else's booking, so the UI can tell "you cancelled this" apart from "this was
-// administratively cancelled" without needing to know the current user's own id. checkedInAtUtc is null
+// GetOwnBookingsResponseItem. CancelledByAdmin is server-derived: true only when a TenantAdmin
+// cancelled someone else's booking (never the global SysAdmin - see ApprovalAuthorization), so the UI
+// can tell "you cancelled this" apart from "this was administratively cancelled" without needing to
+// know the current user's own id. checkedInAtUtc is null
 // until checked in. checkInWindowOpensAtUtc/ClosesAtUtc are always present (computed server-side from the
 // caller's own tenant settings) regardless of status, so the UI never special-cases a missing field.
 export interface OwnBooking {

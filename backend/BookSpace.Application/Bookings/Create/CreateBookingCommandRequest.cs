@@ -56,6 +56,8 @@ public sealed class CreateBookingCommandHandler(
 
     private async Task<CreateBookingResponse> CreateUnderLockAsync(CreateBookingCommandRequest request, CancellationToken cancellationToken)
     {
+        var tenantId = TenantMembershipGuard.EnsureTenantMember(currentUserContext);
+
         var resource = await resourceRepository.FindByIdAsync(request.ResourceId, cancellationToken)
             ?? throw new NotFoundException($"Resource {request.ResourceId} was not found.", ErrorCodes.ResourceNotFound);
 
@@ -69,7 +71,7 @@ public sealed class CreateBookingCommandHandler(
         var booking = new Booking
         {
             Id = Guid.NewGuid(),
-            TenantId = currentUserContext.TenantId!.Value,
+            TenantId = tenantId,
             ResourceId = resource.Id,
             UserId = currentUserContext.UserId!.Value,
             StartUtc = request.StartUtc,

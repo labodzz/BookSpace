@@ -52,6 +52,13 @@ services:
       # set to that deployment's actual externally-reachable HTTPS origin instead (see
       # docs/container-deployment.md, "Azure environment variables and secrets").
       CalendarFeed__PublicBaseUrl: "http://localhost:8080"
+      # Required - see docs/tenant-onboarding.md ("Public URL configuration"). Angular and the API are
+      # served from this SAME container/origin (the Dockerfile always builds the Angular production bundle
+      # into wwwroot regardless of ASPNETCORE_ENVIRONMENT - see Program.cs's UseStaticFiles/
+      # MapFallbackToFile wiring), so this is identical to CalendarFeed__PublicBaseUrl above in this
+      # specific compose file - unlike local `dotnet run`/`ng serve` Development, where the two point at
+      # genuinely different ports (see appsettings.Development.json).
+      App__PublicBaseUrl: "http://localhost:8080"
       # Gmail SMTP sender - see docs/background-jobs.md ("Gmail SMTP sender"). Every value here has a
       # safe default (Email__Enabled defaults to "false") so an .env with none of these set still starts
       # the container with email sending disabled, exactly like running `dotnet run` locally with no

@@ -17,10 +17,11 @@ interface ApprovalGroup {
   items: PendingApproval[];
 }
 
-// The approval queue for Approver/TenantAdmin/SysAdmin. GetPendingApprovalsResponseItem only carries a
-// requester UserId, not a name or email - there's no endpoint an Approver can call to resolve that (GET
-// /users is TenantAdmin/SysAdmin-only and isn't a lookup-by-id anyway), so the requester is shown by id
-// rather than inventing a name the API doesn't provide.
+// The approval queue for Approver/TenantAdmin - never the global SysAdmin, which is not a tenant member
+// and gets 403 here now (see ApprovalAuthorization and app.routes.ts's own roleGuard).
+// GetPendingApprovalsResponseItem only carries a requester UserId, not a name or email - there's no
+// endpoint an Approver can call to resolve that (GET /users is TenantAdmin-only and isn't a lookup-by-id
+// anyway), so the requester is shown by id rather than inventing a name the API doesn't provide.
 //
 // Recurring series show up as N separate pending occurrences - a series of, say, 100 weekly occurrences
 // would otherwise force an approver to approve one at a time. Occurrences sharing a seriesId are grouped

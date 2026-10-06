@@ -33,17 +33,19 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
         Assert.True(body.InvitationExpiresAtUtc > DateTimeOffset.UtcNow);
     }
 
+    // The global SysAdmin is not a member of any tenant and must not invite users into one - see
+    // UsersController's own doc comment. This endpoint is TenantAdmin-only now.
     [Fact]
-    public async Task InviteUser_AsSysAdmin_ReturnsCreated()
+    public async Task InviteUser_AsSysAdmin_ReturnsForbidden()
     {
-        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.GlobalSysAdminEmail);
 
         var response = await client.PostAsJsonAsync("/api/users/invitations", new
         {
             email = $"invitee-{Guid.NewGuid()}@acme.integration-test", firstName = "New", lastName = "Hire", roles = new[] { "Member" },
         });
 
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     [Fact]
@@ -289,22 +291,23 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
 
     // The last-admin guard (UserAdministrationGuard.EnsureTenantRetainsAnActiveAdministratorAsync) is
     // exercised directly at the handler level - see DeactivateUserCommandHandlerTests - not here. A real
-    // HTTP caller can only ever reach this endpoint by holding a currently-valid TenantAdmin/SysAdmin JWT
-    // claim, which - in the overwhelmingly ordinary case - means that caller themselves is ALSO a
-    // currently-active administrator. Since the caller can never be the target (self-lockout is checked
-    // first and rejects that), any DIFFERENT, successfully-authorized caller necessarily keeps the active-
-    // administrator count at 2 or more for as long as they're calling it, making "count would drop to
-    // zero" structurally unreachable through this endpoint alone in the normal case. The guard still
-    // exists deliberately as defense-in-depth (a caller whose own account was deactivated moments earlier
-    // but whose access token is still valid within its window, or any future code path that reaches these
-    // handlers without going through this exact authorization gate), which is exactly why it is proven at
-    // the handler level, where that scenario can be constructed directly instead of assumed away.
+    // HTTP caller can only ever reach this endpoint by holding a currently-valid TenantAdmin JWT claim
+    // (the global SysAdmin cannot reach it at all - see UsersController), which - in the overwhelmingly
+    // ordinary case - means that caller themselves is ALSO a currently-active administrator. Since the
+    // caller can never be the target (self-lockout is checked first and rejects that), any DIFFERENT,
+    // successfully-authorized caller necessarily keeps the active-administrator count at 2 or more for as
+    // long as they're calling it, making "count would drop to zero" structurally unreachable through this
+    // endpoint alone in the normal case. The guard still exists deliberately as defense-in-depth (a
+    // caller whose own account was deactivated moments earlier but whose access token is still valid
+    // within its window, or any future code path that reaches these handlers without going through this
+    // exact authorization gate), which is exactly why it is proven at the handler level, where that
+    // scenario can be constructed directly instead of assumed away.
     //
     // What IS meaningfully provable at the HTTP level is the safe case: deactivating one of two
     // administrators, leaving the other, must succeed - the guard must never block a change that still
     // leaves the tenant with an administrator. Uses a fresh, test-local second admin (promoted from a
-    // freshly invited user) rather than the shared AcmeSysAdmin seed fixture, which other tests in this
-    // class also depend on remaining Active/SysAdmin.
+    // freshly invited user) rather than the shared GlobalSysAdmin seed fixture - which couldn't stand in
+    // for a second TenantAdmin anyway now, since it has no TenantId at all.
     [Fact]
     public async Task DeactivateUser_OneOfTwoAdministrators_Succeeds()
     {
@@ -490,7 +493,7 @@ public sealed class UserAdministrationEndpointsTests : IClassFixture<CustomWebAp
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
 
-        var response = await client.DeleteAsync($"/api/users/{TestDataSeeder.AcmeSysAdminUserId}/roles/SysAdmin");
+        var response = await client.DeleteAsync($"/api/users/{TestDataSeeder.GlobalSysAdminUserId}/roles/SysAdmin");
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }

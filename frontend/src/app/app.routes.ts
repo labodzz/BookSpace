@@ -15,6 +15,14 @@ export const routes: Routes = [
     loadComponent: () => import('./features/auth/login/login').then((m) => m.LoginComponent),
   },
   {
+    // Public, like /login and /welcome - reachable from an emailed link with no prior session. guestGuard
+    // (not authGuard) here too: an already-signed-in browser must never silently accept someone else's
+    // invitation under its own current session - see docs/tenant-onboarding.md ("Already logged in").
+    path: 'accept-invitation',
+    canActivate: [guestGuard],
+    loadComponent: () => import('./features/auth/accept-invitation/accept-invitation').then((m) => m.AcceptInvitationComponent),
+  },
+  {
     path: '',
     canActivate: [authGuard],
     loadComponent: () => import('./features/shell/shell').then((m) => m.ShellComponent),
@@ -30,7 +38,7 @@ export const routes: Routes = [
       {
         // Must come before 'resources/:id' - otherwise ':id' would greedily match the literal "new".
         path: 'resources/new',
-        canActivate: [roleGuard('TenantAdmin', 'SysAdmin')],
+        canActivate: [roleGuard('TenantAdmin')],
         loadComponent: () => import('./features/resources/resource-form/resource-form').then((m) => m.ResourceFormComponent),
       },
       {
@@ -39,7 +47,7 @@ export const routes: Routes = [
       },
       {
         path: 'resources/:id/edit',
-        canActivate: [roleGuard('TenantAdmin', 'SysAdmin')],
+        canActivate: [roleGuard('TenantAdmin')],
         loadComponent: () => import('./features/resources/resource-form/resource-form').then((m) => m.ResourceFormComponent),
       },
       {
@@ -49,7 +57,7 @@ export const routes: Routes = [
       },
       {
         path: 'resources/:id/manage-availability',
-        canActivate: [roleGuard('TenantAdmin', 'SysAdmin')],
+        canActivate: [roleGuard('TenantAdmin')],
         loadComponent: () =>
           import('./features/resources/resource-availability-manage/resource-availability-manage').then(
             (m) => m.ResourceAvailabilityManageComponent,
@@ -57,7 +65,7 @@ export const routes: Routes = [
       },
       {
         path: 'resources/:id/manage-approvers',
-        canActivate: [roleGuard('TenantAdmin', 'SysAdmin')],
+        canActivate: [roleGuard('TenantAdmin')],
         loadComponent: () =>
           import('./features/resources/resource-approvers-manage/resource-approvers-manage').then(
             (m) => m.ResourceApproversManageComponent,
@@ -65,17 +73,17 @@ export const routes: Routes = [
       },
       {
         path: 'users',
-        canActivate: [roleGuard('TenantAdmin', 'SysAdmin')],
+        canActivate: [roleGuard('TenantAdmin')],
         loadComponent: () => import('./features/users/user-list/user-list').then((m) => m.UserListComponent),
       },
       {
         path: 'users/:id',
-        canActivate: [roleGuard('TenantAdmin', 'SysAdmin')],
+        canActivate: [roleGuard('TenantAdmin')],
         loadComponent: () => import('./features/users/user-detail/user-detail').then((m) => m.UserDetailComponent),
       },
       {
         path: 'resource-types',
-        canActivate: [roleGuard('TenantAdmin', 'SysAdmin')],
+        canActivate: [roleGuard('TenantAdmin')],
         loadComponent: () =>
           import('./features/resource-types/resource-type-list/resource-type-list').then((m) => m.ResourceTypeListComponent),
       },
@@ -97,8 +105,29 @@ export const routes: Routes = [
         loadComponent: () => import('./features/calendar/calendar').then((m) => m.CalendarComponent),
       },
       {
+        // SysAdmin only - every tenant-lifecycle route is, since this is platform administration, not a
+        // tenant's own business function. TenantAdmin never gets access here, not even to its own tenant
+        // (see TenantsController's own doc comment and docs/tenant-onboarding.md, "Permissions matrix").
+        path: 'tenants',
+        canActivate: [roleGuard('SysAdmin')],
+        loadComponent: () => import('./features/tenants/tenant-list/tenant-list').then((m) => m.TenantListComponent),
+      },
+      {
+        // Must come before 'tenants/:id' - otherwise ':id' would greedily match the literal "new".
+        path: 'tenants/new',
+        canActivate: [roleGuard('SysAdmin')],
+        loadComponent: () => import('./features/tenants/tenant-form/tenant-form').then((m) => m.TenantFormComponent),
+      },
+      {
+        path: 'tenants/:id',
+        canActivate: [roleGuard('SysAdmin')],
+        loadComponent: () => import('./features/tenants/tenant-detail/tenant-detail').then((m) => m.TenantDetailComponent),
+      },
+      {
+        // SysAdmin deliberately excluded - a global SysAdmin is not a tenant member and must not approve/
+        // reject bookings (see ApprovalAuthorization and BookingsController's own [Authorize]).
         path: 'approvals',
-        canActivate: [roleGuard('Approver', 'TenantAdmin', 'SysAdmin')],
+        canActivate: [roleGuard('Approver', 'TenantAdmin')],
         loadComponent: () => import('./features/approvals/approval-queue/approval-queue').then((m) => m.ApprovalQueueComponent),
       },
     ],

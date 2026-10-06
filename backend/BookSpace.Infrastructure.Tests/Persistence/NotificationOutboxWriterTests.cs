@@ -200,6 +200,29 @@ public sealed class NotificationOutboxWriterTests : IAsyncLifetime
         Assert.NotEqual(2627, sqlException.Number);
     }
 
+    // A DIFFERENT entity's own unique-index/constraint violation (2601/2627), staged on the SAME DbContext
+    // before EnqueueAsync is called as the single commit point - e.g. a tenant-onboarding handler's
+    // Tenant.Name conflict losing a race at the database (see docs/tenant-onboarding.md, "Concurrent
+    // create"). Must be reported as ConflictException, not silently misreported as "this notification
+    // already exists" (which IsDuplicateKeyViolation's own index-name check exists specifically to avoid)
+    // and not left to escape as a raw DbUpdateException/SqlException, since BookSpace.Application callers
+    // cannot reference either type themselves.
+    [Fact]
+    public async Task EnqueueAsync_WhenADifferentEntitysUniqueConstraintIsViolatedInTheSameSave_ThrowsConflictException()
+    {
+        await using var dbContext = CreateDbContext();
+        var writer = new NotificationOutboxWriter(dbContext, NullLogger<NotificationOutboxWriter>.Instance);
+        dbContext.Tenants.Add(new Tenant
+        {
+            Id = Guid.NewGuid(), Name = "Outbox Tenant A", DefaultTimeZoneId = "UTC", CreatedAtUtc = DateTimeOffset.UtcNow,
+        }); // "Outbox Tenant A" already exists from InitializeAsync - violates Tenant.Name's own unique index.
+
+        var exception = await Assert.ThrowsAsync<BookSpace.Application.Common.ConflictException>(
+            () => writer.EnqueueAsync(BuildRequest("booking:other-entity-race:confirmation"), CancellationToken.None));
+
+        Assert.Equal("The request conflicts with existing data.", exception.Message);
+    }
+
     // After the expected duplicate-key failure, the SAME DbContext must still be usable for a further,
     // unrelated save - proving the failed entity was detached from the change tracker, not left dangling
     // to corrupt (or silently re-attempt) the next SaveChangesAsync on this scope.

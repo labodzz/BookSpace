@@ -112,11 +112,12 @@ public sealed class CheckInBookingCommandHandler(
 
     // Member: only their own booking. ResourceApprover: any booking on a resource they are actually
     // assigned to (ResourceApprover is a resource-level grant, independent of whether that specific
-    // booking ever needed approval - see IResourceApproverRepository). TenantAdmin/SysAdmin: anything in
-    // their own tenant, enforced automatically by the global query filter already scoping FindByIdAsync.
+    // booking ever needed approval - see IResourceApproverRepository). TenantAdmin: anything in their
+    // own tenant, enforced automatically by the global query filter already scoping FindByIdAsync.
+    // SysAdmin is deliberately excluded - see ApprovalAuthorization's own doc comment.
     private async Task<bool> CanCheckInAsync(Booking booking, Guid resourceId, CancellationToken cancellationToken)
     {
-        if (booking.UserId == currentUserContext.UserId || ApprovalAuthorization.IsTenantAdminOrSysAdmin(currentUserContext))
+        if (booking.UserId == currentUserContext.UserId || ApprovalAuthorization.IsTenantAdmin(currentUserContext))
         {
             return true;
         }

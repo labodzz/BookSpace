@@ -49,6 +49,24 @@ public sealed class CreateCalendarSubscriptionCommandHandlerTests
         Assert.NotEqual(first.FeedUrl, second.FeedUrl);
     }
 
+    // The global SysAdmin has no TenantId and can never have bookings to export - this must throw a
+    // clean, documented ConflictException, never an unhandled NullReferenceException/
+    // InvalidOperationException from a bare TenantId!.Value further down.
+    [Fact]
+    public async Task Handle_ForTheGlobalSysAdminWithNoTenantId_ThrowsConflictExceptionWithoutSaving()
+    {
+        _currentUserContext.SetupGet(c => c.TenantId).Returns((Guid?)null);
+        _currentUserContext.SetupGet(c => c.UserId).Returns(Guid.NewGuid());
+        var sut = CreateSut();
+
+        var exception = await Assert.ThrowsAsync<ConflictException>(() => sut.Handle(new CreateCalendarSubscriptionCommandRequest(), CancellationToken.None));
+
+        Assert.Equal("CalendarSubscription.RequiresTenantMembership", exception.ErrorCode);
+        _calendarSubscriptionRepository.Verify(r => r.FindActiveByUserAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+        _calendarSubscriptionRepository.Verify(r => r.AddAsync(It.IsAny<CalendarSubscription>(), It.IsAny<CancellationToken>()), Times.Never);
+        _calendarSubscriptionRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     [Fact]
     public async Task Handle_WithAnExistingActiveSubscription_ThrowsConflictExceptionWithoutSaving()
     {

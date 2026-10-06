@@ -261,31 +261,21 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
         Assert.Null(body!.Single(item => item.BookingId == created!.Id).SeriesId);
     }
 
-    // SysAdmin had never been exercised at the API level for any of the three approval endpoints - only
-    // TenantAdmin's half of [Authorize(Roles="Approver,TenantAdmin,SysAdmin")] was proven to actually work.
+    // The global SysAdmin is not a member of any tenant and must not approve/reject its bookings - see
+    // ApprovalAuthorization and BookingsController's own [Authorize(Roles = "Approver,TenantAdmin")] on
+    // all three of these routes (SysAdmin removed).
     [Fact]
-    public async Task GetPendingApprovals_AsSysAdmin_SeesEveryPendingBookingInTheTenant()
+    public async Task GetPendingApprovals_AsSysAdmin_ReturnsForbidden()
     {
-        using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
-        var start = TestDataSeeder.AvailabilityAnchorUtc.AddHours(2).AddDays(71);
-        var createResponse = await memberClient.PostAsJsonAsync("/api/bookings", new
-        {
-            resourceId = TestDataSeeder.AcmeApprovalRequiredResourceId, startUtc = start, endUtc = start.AddHours(1), quantity = 1,
-        });
-        var created = await createResponse.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
+        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.GlobalSysAdminEmail);
 
-        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
         var response = await sysAdminClient.GetAsync("/api/bookings/pending-approval");
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadFromJsonAsync<List<PendingApprovalItem>>(JsonOptions);
-        Assert.Contains(body!, item => item.BookingId == created!.Id);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
-    // TenantAdmin is explicitly listed in [Authorize(Roles="Approver,TenantAdmin,SysAdmin")] on all 3 of
-    // these routes, but - unlike Approver and SysAdmin - had never actually been exercised against any
-    // of them by name; TestDataSeeder's own comment acknowledges Approver/SysAdmin were added specifically
-    // to close this kind of gap, but TenantAdmin coverage here was never added alongside it.
+    // TenantAdmin is explicitly listed in [Authorize(Roles="Approver,TenantAdmin")] on all 3 of these
+    // routes, but had never actually been exercised against any of them by name.
     [Fact]
     public async Task GetPendingApprovals_AsTenantAdmin_SeesEveryPendingBookingInTheTenant()
     {
@@ -344,7 +334,7 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
     }
 
     [Fact]
-    public async Task ApproveBooking_AsSysAdmin_ConfirmsTheBooking()
+    public async Task ApproveBooking_AsSysAdmin_ReturnsForbidden()
     {
         using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
         var start = TestDataSeeder.AvailabilityAnchorUtc.AddHours(2).AddDays(72);
@@ -354,16 +344,14 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
         });
         var created = await createResponse.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
 
-        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.GlobalSysAdminEmail);
         var response = await sysAdminClient.PostAsJsonAsync($"/api/bookings/{created!.Id}/approve", new { decisionNote = (string?)null });
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
-        Assert.Equal(BookingStatus.Confirmed, body!.Status);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     [Fact]
-    public async Task RejectBooking_AsSysAdmin_RejectsTheBooking()
+    public async Task RejectBooking_AsSysAdmin_ReturnsForbidden()
     {
         using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
         var start = TestDataSeeder.AvailabilityAnchorUtc.AddHours(2).AddDays(73);
@@ -373,12 +361,10 @@ public sealed class RecurringSeriesAndApprovalEndpointsTests : IClassFixture<Cus
         });
         var created = await createResponse.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
 
-        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.GlobalSysAdminEmail);
         var response = await sysAdminClient.PostAsJsonAsync($"/api/bookings/{created!.Id}/reject", new { decisionNote = (string?)null });
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
-        Assert.Equal(BookingStatus.Rejected, body!.Status);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     [Fact]

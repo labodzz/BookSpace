@@ -2,6 +2,7 @@ using System.Reflection;
 using BookSpace.Application.Auth;
 using BookSpace.Application.BackgroundJobs;
 using BookSpace.Application.Calendar;
+using BookSpace.Application.Common;
 using BookSpace.Application.Email;
 using BookSpace.Application.Logging;
 using BookSpace.Application.Mediator;
@@ -33,6 +34,9 @@ public static class DependencyInjection
 
         // Calendar subscription feed (WP-8) - see docs/calendar-subscription-feed.md.
         services.AddSingleton<IValidateOptions<CalendarFeedOptions>, CalendarFeedOptionsValidator>();
+
+        // App-wide public base URL (tenant onboarding's invitation link) - see docs/tenant-onboarding.md.
+        services.AddSingleton<IValidateOptions<AppOptions>, AppOptionsValidator>();
 
         // Singleton: one stable OwnerId, and one lease coordinator holding only IServiceScopeFactory, for
         // this instance's entire lifetime - see docs/background-jobs.md ("Job lease lock"). Neither ever

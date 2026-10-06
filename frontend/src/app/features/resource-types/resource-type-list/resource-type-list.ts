@@ -15,10 +15,10 @@ const CONFLICT_MESSAGES: Record<string, string> = {
 
 type TypeDialogState = { mode: 'create' } | { mode: 'edit'; type: ResourceType };
 
-// TenantAdmin/SysAdmin only (route-gated, not just button-hidden - see app.routes.ts). GET
-// /resource-types itself is open to any authenticated user (needed to pick a type when creating a
-// resource), but this management page - and the "Resource types" nav link that leads to it - is admin
-// only, matching ResourceTypesController's own [Authorize(Roles = "TenantAdmin,SysAdmin")] on every
+// TenantAdmin only (route-gated, not just button-hidden - see app.routes.ts) - never the global
+// SysAdmin. GET /resource-types itself is open to any authenticated user (needed to pick a type when
+// creating a resource), but this management page - and the "Resource types" nav link that leads to it -
+// is admin only, matching ResourceTypesController's own [Authorize(Roles = "TenantAdmin")] on every
 // POST/PUT/DELETE.
 @Component({
   selector: 'app-resource-type-list',

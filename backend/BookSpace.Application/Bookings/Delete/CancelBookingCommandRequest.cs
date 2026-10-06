@@ -13,7 +13,7 @@ namespace BookSpace.Application.Bookings;
 // docs/recurring-bookings-and-approvals.md. Ignored (no error) for a booking with no SeriesId - a
 // one-off booking has no "remaining series" to cascade into.
 //
-// Reason is optional and applies to a TenantAdmin/SysAdmin cancelling someone ELSE's booking (see
+// Reason is optional and applies to a TenantAdmin cancelling someone ELSE's booking (see
 // docs/open-questions.md, "TenantAdmin Cancellation of Another User's Booking") - it is stored as-is on
 // CancellationReason so the affected owner can see why in their booking history, even though there is
 // still no notification mechanism to actively tell them (deferred to a later work packet). Left optional
@@ -78,14 +78,15 @@ public sealed class CancelBookingCommandHandler(
         // after the lock is held. Never trust the pre-lock projection above for anything but the resource id.
         var booking = await bookingRepository.FindByIdAsync(request.Id, cancellationToken);
 
-        // Not-found, "belongs to a different user", and "a different user who isn't a TenantAdmin/
-        // SysAdmin" all look identical to the caller - never confirm another user's booking exists via a
-        // different error shape (same philosophy already applied to cross-tenant lookups elsewhere:
+        // Not-found, "belongs to a different user", and "a different user who isn't a TenantAdmin" all
+        // look identical to the caller - never confirm another user's booking exists via a different
+        // error shape (same philosophy already applied to cross-tenant lookups elsewhere:
         // NotFoundException, not a 403, so nothing about someone else's data is leaked by the response
-        // shape). TenantAdmin/SysAdmin bypass the ownership check the same way they already bypass the
-        // per-resource approver check in ApprovalAuthorization.
+        // shape). TenantAdmin bypasses the ownership check the same way it already bypasses the
+        // per-resource approver check in ApprovalAuthorization. SysAdmin does not - see that type's own
+        // doc comment.
         var isOwner = booking is not null && booking.UserId == currentUserContext.UserId;
-        if (booking is null || !(isOwner || ApprovalAuthorization.IsTenantAdminOrSysAdmin(currentUserContext)))
+        if (booking is null || !(isOwner || ApprovalAuthorization.IsTenantAdmin(currentUserContext)))
         {
             throw new NotFoundException($"Booking {request.Id} was not found.", ErrorCodes.BookingNotFound);
         }

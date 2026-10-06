@@ -50,12 +50,14 @@ public sealed class GetUsersQueryRequestHandler(IUserRepository userRepository)
 
         return new PagedResult<UserSummaryResponse>(
             paged.Items
+                // user.TenantId can't be null here: userRepository.GetPagedAsync is tenant-filtered, and
+                // this endpoint is TenantAdmin-only (never the global SysAdmin) - see UsersController.
                 .Select(user => new UserSummaryResponse(
                     user.Id,
                     user.FirstName,
                     user.LastName,
                     user.Email,
-                    user.TenantId,
+                    user.TenantId!.Value,
                     user.Status,
                     rolesByUserId.TryGetValue(user.Id, out var roles) ? roles : []))
                 .ToList(),

@@ -45,7 +45,7 @@ public sealed class GetUserQueryHandlerTests
     {
         var userId = Guid.NewGuid();
         _userRepository.Setup(r => r.FindByIdAsync(userId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new User { Id = userId, Status = UserStatus.Invited });
+            .ReturnsAsync(new User { Id = userId, TenantId = Guid.NewGuid(), Status = UserStatus.Invited });
         _userRepository.Setup(r => r.GetRolesAsync(userId, It.IsAny<CancellationToken>())).ReturnsAsync((IReadOnlyList<string>)[]);
         var expiresAt = DateTimeOffset.UtcNow.AddHours(60);
         _invitationRepository.Setup(r => r.FindActiveByUserIdAsync(userId, It.IsAny<CancellationToken>()))

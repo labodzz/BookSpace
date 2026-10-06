@@ -19,7 +19,7 @@ public sealed class ReactivateUserCommandHandlerTests
     {
         var userId = Guid.NewGuid();
         _userRepository.Setup(r => r.FindByIdAsync(userId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new User { Id = userId, Status = UserStatus.Inactive });
+            .ReturnsAsync(new User { Id = userId, TenantId = Guid.NewGuid(), Status = UserStatus.Inactive });
         _userRepository.Setup(r => r.GetRolesAsync(userId, It.IsAny<CancellationToken>())).ReturnsAsync((IReadOnlyList<string>)["Member"]);
 
         var sut = CreateSut();

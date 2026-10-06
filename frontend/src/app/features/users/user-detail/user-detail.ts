@@ -13,7 +13,9 @@ function toApiErrorOrFallback(error: unknown): ApiError {
   return error instanceof HttpErrorResponse ? toApiError(error) : { status: 0, title: 'Something went wrong.' };
 }
 
-// TenantAdmin/SysAdmin only (route-gated). One page for viewing, editing basic fields, lifecycle
+// TenantAdmin only (route-gated) - never the global SysAdmin, who is not a member of any tenant and
+// must not manage its users (see app.routes.ts and UsersController). One page for viewing, editing basic
+// fields, lifecycle
 // (deactivate/reactivate), and role management - the equivalent of resource-detail.html plus
 // resource-approvers-manage.html combined into one screen, since a user's editable surface here is far
 // smaller than a Resource's (two name fields, no separate create flow in this batch) and splitting it
@@ -81,10 +83,12 @@ export class UserDetailComponent {
     this.load();
   }
 
-  // Only TenantAdmin/SysAdmin are lockout-sensitive for the caller's OWN account - dropping your own
-  // Member/Approver role is never a lockout concern, mirroring UserAdministrationGuard exactly.
+  // Only TenantAdmin is lockout-sensitive for the caller's OWN account - dropping your own Member/
+  // Approver role is never a lockout concern, mirroring UserAdministrationGuard exactly. SysAdmin never
+  // appears here at all: this page only ever shows tenant users (GET /users is TenantAdmin-only and
+  // tenant-filtered), and a global SysAdmin can never be one - see User.TenantId's own doc comment.
   protected canRemoveOwnRole(role: string): boolean {
-    return !(this.isSelf() && (role === 'TenantAdmin' || role === 'SysAdmin'));
+    return !(this.isSelf() && role === 'TenantAdmin');
   }
 
   protected submitEdit(): void {
@@ -156,7 +160,7 @@ export class UserDetailComponent {
           apiError.errorCode === 'User.SelfLockout'
             ? 'You cannot deactivate your own account.'
             : apiError.errorCode === 'User.LastAdminRemaining'
-              ? 'This tenant must always retain at least one active administrator. Assign another TenantAdmin or SysAdmin before deactivating this one.'
+              ? 'This tenant must always retain at least one active administrator. Assign another TenantAdmin before deactivating this one.'
               : (apiError.detail ?? apiError.title),
         );
       },
@@ -255,7 +259,7 @@ export class UserDetailComponent {
             : apiError.errorCode === 'User.SelfLockout'
               ? 'You cannot remove your own administrative role.'
               : apiError.errorCode === 'User.LastAdminRemaining'
-                ? 'This tenant must always retain at least one active administrator. Assign another TenantAdmin or SysAdmin before removing this one.'
+                ? 'This tenant must always retain at least one active administrator. Assign another TenantAdmin before removing this one.'
                 : (apiError.detail ?? apiError.title),
         );
       },

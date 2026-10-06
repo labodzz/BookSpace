@@ -1,0 +1,86 @@
+<section class="tenant-list">
+  <header class="tenant-list__header">
+    <div>
+      <h1>Tenants</h1>
+      <p class="field-hint">Every company on the BookSpace platform.</p>
+    </div>
+    <a class="btn btn-primary" routerLink="/tenants/new">New tenant</a>
+  </header>
+
+  <div class="tenant-list__filters">
+    <div class="field">
+      <label for="tenant-search">Search</label>
+      <input id="tenant-search" type="text" placeholder="Search by name…" [value]="searchTerm()" (input)="onSearchInput($any($event.target).value)" />
+    </div>
+    <div class="field">
+      <label for="status-filter">Status</label>
+      <select id="status-filter" [value]="status()" (change)="onStatusChange($event)">
+        <option value="">All statuses</option>
+        @for (s of allStatuses; track s) {
+          <option [value]="s">{{ s }}</option>
+        }
+      </select>
+    </div>
+  </div>
+
+  @if (loading()) {
+    <div class="card tenant-list__table" aria-busy="true">
+      @for (i of [1, 2, 3, 4]; track i) {
+        <div class="tenant-row">
+          <span class="skeleton" style="height: 1rem; width: 40%;"></span>
+          <span class="skeleton" style="height: 0.875rem; width: 30%;"></span>
+        </div>
+      }
+    </div>
+  } @else if (error()) {
+    <div class="state-panel card">
+      <p class="state-panel__title">Couldn't load tenants</p>
+      <p>{{ error()!.detail ?? error()!.title }}</p>
+      <button type="button" class="btn btn-secondary" (click)="retry()">Try again</button>
+    </div>
+  } @else if (tenants().length === 0) {
+    <div class="state-panel card">
+      <p class="state-panel__title">No tenants found</p>
+      <p>Try a different search term or status filter.</p>
+    </div>
+  } @else {
+    <div class="card tenant-list__table" role="table" aria-label="Tenants">
+      @for (tenant of tenants(); track tenant.id) {
+        <a class="tenant-row" role="row" [routerLink]="['/tenants', tenant.id]" [queryParams]="currentQueryParams()">
+          <div class="tenant-row__identity" role="cell">
+            <span class="tenant-row__name">{{ tenant.name }}</span>
+            <span class="tenant-row__created">Created {{ tenant.createdAtUtc | date: 'mediumDate' }}</span>
+          </div>
+          <div class="tenant-row__counts" role="cell">
+            <span>{{ tenant.totalUserCount }} user(s)</span>
+            <span class="field-hint">{{ tenant.activeUserCount }} active · {{ tenant.invitedUserCount }} invited · {{ tenant.inactiveUserCount }} disabled</span>
+          </div>
+          <div class="tenant-row__admin" role="cell">
+            @if (tenant.hasActiveTenantAdmin) {
+              <span class="field-hint">{{ tenant.activeTenantAdminEmails.join(', ') }}</span>
+            } @else {
+              <span class="banner-warning tenant-row__needs-admin">No active administrator</span>
+            }
+          </div>
+          <span
+            class="status-pill"
+            role="cell"
+            [class.status-pill--confirmed]="tenant.status === 'Active'"
+            [class.status-pill--pending]="tenant.status === 'Suspended'"
+            [class.status-pill--cancelled]="tenant.status === 'Deleted'"
+          >
+            {{ tenant.status }}
+          </span>
+        </a>
+      }
+    </div>
+
+    @if (totalPages() > 1) {
+      <nav class="pagination" aria-label="Tenant list pages">
+        <button type="button" class="btn btn-secondary" [disabled]="page() === 1" (click)="goToPage(page() - 1)">Previous</button>
+        <span>Page {{ page() }} of {{ totalPages() }}</span>
+        <button type="button" class="btn btn-secondary" [disabled]="page() === totalPages()" (click)="goToPage(page() + 1)">Next</button>
+      </nav>
+    }
+  }
+</section>

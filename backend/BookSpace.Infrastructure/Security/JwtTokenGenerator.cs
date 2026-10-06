@@ -19,8 +19,14 @@ internal sealed class JwtTokenGenerator(IOptions<AuthOptions> authOptions) : IJw
         {
             new(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
             new(JwtRegisteredClaimNames.Email, user.Email),
-            new("tenant_id", user.TenantId.ToString()),
         };
+        // Omitted entirely for the global SysAdmin (user.TenantId == null) - never a fake/empty value.
+        // CurrentUserContext.TenantId already tolerates a missing claim (TryGetGuidClaim returns null
+        // rather than throwing), so there is nothing for a reader to Guid.Parse against.
+        if (user.TenantId is { } tenantId)
+        {
+            claims.Add(new Claim("tenant_id", tenantId.ToString()));
+        }
         claims.AddRange(roles.Select(role => new Claim(ClaimTypes.Role, role)));
 
         var signingCredentials = new SigningCredentials(

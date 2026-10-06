@@ -19,20 +19,26 @@
       >
         Dashboard
       </a>
-      <a routerLink="/resources" routerLinkActive="shell-nav__link--active" class="shell-nav__link" draggable="false">Resources</a>
-      <a routerLink="/bookings" routerLinkActive="shell-nav__link--active" class="shell-nav__link" draggable="false">My bookings</a>
-      <a routerLink="/calendar" routerLinkActive="shell-nav__link--active" class="shell-nav__link" draggable="false">Calendar</a>
-      @if (isApprover) {
-        <a routerLink="/approvals" routerLinkActive="shell-nav__link--active" class="shell-nav__link" draggable="false">
-          <span>Approvals</span>
-          @if (pendingApprovalCount() > 0) {
-            <span class="shell-nav__badge">{{ pendingApprovalCount() }}</span>
-          }
-        </a>
+      @if (!isSysAdmin) {
+        <a routerLink="/resources" routerLinkActive="shell-nav__link--active" class="shell-nav__link" draggable="false">Resources</a>
+        <a routerLink="/bookings" routerLinkActive="shell-nav__link--active" class="shell-nav__link" draggable="false">My bookings</a>
+        <a routerLink="/calendar" routerLinkActive="shell-nav__link--active" class="shell-nav__link" draggable="false">Calendar</a>
+        @if (isApprover) {
+          <a routerLink="/approvals" routerLinkActive="shell-nav__link--active" class="shell-nav__link" draggable="false">
+            <span>Approvals</span>
+            @if (pendingApprovalCount() > 0) {
+              <span class="shell-nav__badge">{{ pendingApprovalCount() }}</span>
+            }
+          </a>
+        }
+        @if (authService.hasAnyRole('TenantAdmin')) {
+          <a routerLink="/users" routerLinkActive="shell-nav__link--active" class="shell-nav__link" draggable="false">Users</a>
+          <a routerLink="/resource-types" routerLinkActive="shell-nav__link--active" class="shell-nav__link" draggable="false">Resource types</a>
+        }
       }
-      @if (authService.hasAnyRole('TenantAdmin', 'SysAdmin')) {
-        <a routerLink="/users" routerLinkActive="shell-nav__link--active" class="shell-nav__link" draggable="false">Users</a>
-        <a routerLink="/resource-types" routerLinkActive="shell-nav__link--active" class="shell-nav__link" draggable="false">Resource types</a>
+      @if (isSysAdmin) {
+        <a routerLink="/tenants" routerLinkActive="shell-nav__link--active" class="shell-nav__link" draggable="false">Tenants</a>
+        <a routerLink="/tenants/new" routerLinkActive="shell-nav__link--active" class="shell-nav__link" draggable="false">New tenant</a>
       }
       <button type="button" class="shell-nav__link shell-nav__link--disabled" disabled title="Settings are coming soon">
         Settings

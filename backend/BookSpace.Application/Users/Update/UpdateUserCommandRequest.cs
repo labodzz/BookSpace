@@ -40,6 +40,8 @@ public sealed class UpdateUserCommandHandler(IUserRepository userRepository)
         await userRepository.SaveChangesAsync(cancellationToken);
 
         var roles = await userRepository.GetRolesAsync(user.Id, cancellationToken);
-        return new UpdateUserResponse(user.Id, user.FirstName, user.LastName, user.Email, user.TenantId, user.Status, roles);
+        // user.TenantId can't be null here: userRepository.FindByIdAsync is tenant-filtered, and this
+        // endpoint is TenantAdmin-only (never the global SysAdmin) - see UsersController.
+        return new UpdateUserResponse(user.Id, user.FirstName, user.LastName, user.Email, user.TenantId!.Value, user.Status, roles);
     }
 }

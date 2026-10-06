@@ -177,15 +177,17 @@ public sealed class CancelBookingCommandHandlerTests
         _notificationOutboxWriter.Verify(w => w.EnqueueManyAsync(It.IsAny<IReadOnlyList<NotificationOutboxRequest>>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
-    [Theory]
-    [InlineData("TenantAdmin")]
-    [InlineData("SysAdmin")]
-    public async Task Handle_WithPrivilegedRoleCancellingAnotherUsersBooking_CancelsAndRecordsTheAdminAsCanceller(string role)
+    // SysAdmin is deliberately not parameterized here any more - see ApprovalAuthorization.IsTenantAdmin,
+    // which no longer treats it as privileged; a global SysAdmin cancelling someone else's booking now
+    // gets the identical NotFoundException a plain Member would (see
+    // Handle_AsSysAdminCancellingAnotherUsersBooking_ThrowsNotFoundException below).
+    [Fact]
+    public async Task Handle_WithPrivilegedRoleCancellingAnotherUsersBooking_CancelsAndRecordsTheAdminAsCanceller()
     {
         var adminUserId = Guid.NewGuid();
         var booking = CreateBooking(BookingStatus.Confirmed); // owned by UserId, not adminUserId
         _currentUserContext.SetupGet(c => c.UserId).Returns(adminUserId);
-        _currentUserContext.SetupGet(c => c.Roles).Returns([role]);
+        _currentUserContext.SetupGet(c => c.Roles).Returns(["TenantAdmin"]);
         SetupFoundBooking(booking);
         var sut = CreateSut();
 
@@ -283,8 +285,8 @@ public sealed class CancelBookingCommandHandlerTests
         _notificationOutboxWriter.Verify(w => w.EnqueueManyAsync(It.IsAny<IReadOnlyList<NotificationOutboxRequest>>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
-    // A checked-in booking is never retroactively cancelled, by anyone - the TenantAdmin/SysAdmin bypass
-    // only ever widens WHO may act (the ownership check), never WHICH states are eligible (the status
+    // A checked-in booking is never retroactively cancelled, by anyone - the TenantAdmin bypass only ever
+    // widens WHO may act (the ownership check), never WHICH states are eligible (the status
     // check below, unconditional for every caller including admins - confirmed by reading
     // CancelBookingCommandHandler.CancelUnderLockAsync: CancellableStatuses has no role branch, so this
     // rule follows that exact, already-existing precedent rather than inventing a new one).
@@ -306,15 +308,13 @@ public sealed class CancelBookingCommandHandlerTests
         _notificationOutboxWriter.Verify(w => w.EnqueueManyAsync(It.IsAny<IReadOnlyList<NotificationOutboxRequest>>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
-    [Theory]
-    [InlineData("TenantAdmin")]
-    [InlineData("SysAdmin")]
-    public async Task Handle_WithPrivilegedRoleCancellingAnAlreadyCheckedInBooking_StillThrowsConflictException(string role)
+    [Fact]
+    public async Task Handle_WithPrivilegedRoleCancellingAnAlreadyCheckedInBooking_StillThrowsConflictException()
     {
         var adminUserId = Guid.NewGuid();
         var booking = CreateBooking(BookingStatus.Confirmed, DateTimeOffset.UtcNow.AddMinutes(-5)); // owned by UserId, not adminUserId
         _currentUserContext.SetupGet(c => c.UserId).Returns(adminUserId);
-        _currentUserContext.SetupGet(c => c.Roles).Returns([role]);
+        _currentUserContext.SetupGet(c => c.Roles).Returns(["TenantAdmin"]);
         SetupFoundBooking(booking);
         var sut = CreateSut();
 
@@ -322,6 +322,28 @@ public sealed class CancelBookingCommandHandlerTests
             sut.Handle(new CancelBookingCommandRequest(booking.Id), CancellationToken.None));
 
         Assert.Equal(ErrorCodes.BookingAlreadyCheckedIn, exception.ErrorCode);
+    }
+
+    // The global SysAdmin is never a tenant member - cancelling someone else's booking must fail the
+    // identical way a plain Member's attempt does (NotFoundException, never revealing the booking exists -
+    // see Handle_WithNonAdminRoleCancellingAnotherUsersBooking_ThrowsNotFoundException above), not succeed
+    // the way TenantAdmin's does. See ApprovalAuthorization.IsTenantAdmin.
+    [Fact]
+    public async Task Handle_AsSysAdminCancellingAnotherUsersBooking_ThrowsNotFoundException()
+    {
+        var adminUserId = Guid.NewGuid();
+        var booking = CreateBooking(BookingStatus.Confirmed);
+        booking.UserId = Guid.NewGuid();
+        _currentUserContext.SetupGet(c => c.UserId).Returns(adminUserId);
+        _currentUserContext.SetupGet(c => c.Roles).Returns(["SysAdmin"]);
+        SetupFoundBooking(booking);
+        var sut = CreateSut();
+
+        var exception = await Assert.ThrowsAsync<NotFoundException>(() =>
+            sut.Handle(new CancelBookingCommandRequest(booking.Id), CancellationToken.None));
+
+        Assert.Equal(ErrorCodes.BookingNotFound, exception.ErrorCode);
+        _bookingRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]

@@ -8,12 +8,13 @@ using Xunit;
 
 namespace BookSpace.Infrastructure.Tests.Persistence;
 
-// Proves the global tenant query filter (BookSpaceDbContext.ApplyTenantFilter) fails CLOSED - a
-// missing tenant context must see zero tenant-owned rows, never every tenant's rows - and that the
-// one sanctioned exception (UserRepository.FindByEmailAsync, used pre-authentication during login)
-// still works via its own explicit IgnoreQueryFilters() rather than relying on the filter itself.
-// Runs against real SQL Server (LocalDB), matching SaveChangesHandlingConflictsAsyncTests - a
-// throwaway per-test-run database, not the shared dev one.
+// Proves the global tenant query filter (BookSpaceDbContext.ApplyTenantFilter, and User's own
+// ApplyUserTenantFilter) fails CLOSED - a missing tenant context must see zero tenant-owned rows (and
+// zero global-SysAdmin rows, including the caller's own), never every tenant's/every SysAdmin's rows -
+// and that the sanctioned exceptions (UserRepository.FindByEmailAsync/FindByIdForAuthenticationAsync,
+// used pre-authentication during login/refresh) still work via their own explicit IgnoreQueryFilters()
+// rather than relying on the filter itself. Runs against real SQL Server (LocalDB), matching
+// SaveChangesHandlingConflictsAsyncTests - a throwaway per-test-run database, not the shared dev one.
 public sealed class TenantIsolationFilterTests : IAsyncLifetime
 {
     private readonly string _connectionString =
@@ -21,6 +22,8 @@ public sealed class TenantIsolationFilterTests : IAsyncLifetime
 
     private Guid _tenantAId;
     private Guid _tenantBId;
+    private Guid _sysAdminOneId;
+    private Guid _sysAdminTwoId;
 
     public async Task InitializeAsync()
     {
@@ -65,6 +68,25 @@ public sealed class TenantIsolationFilterTests : IAsyncLifetime
             Email = "tenant-b-user@bookspace.test",
             PasswordHash = "irrelevant-for-this-test",
             CreatedAtUtc = DateTimeOffset.UtcNow,
+        });
+
+        // Two SEPARATE global SysAdmins (TenantId = null on both) - this is exactly the shape that
+        // caught a real EF Core translation bug during this feature's own development (see
+        // SysAdminFilter_WithNoTenantContext_SeesNoGlobalSysAdminEitherIncludingItsOwn below): a naive
+        // `user.TenantId == currentUserContext.TenantId` filter, with both sides null, gets rewritten by
+        // EF Core's default C# null-comparison semantics into effectively "both are null", which would
+        // make every SysAdmin visible to every other SysAdmin through this ordinary filtered query.
+        _sysAdminOneId = Guid.NewGuid();
+        _sysAdminTwoId = Guid.NewGuid();
+        dbContext.Users.Add(new User
+        {
+            Id = _sysAdminOneId, TenantId = null, FirstName = "Sys", LastName = "AdminOne",
+            Email = "sysadmin-one@bookspace.test", PasswordHash = "irrelevant-for-this-test", CreatedAtUtc = DateTimeOffset.UtcNow,
+        });
+        dbContext.Users.Add(new User
+        {
+            Id = _sysAdminTwoId, TenantId = null, FirstName = "Sys", LastName = "AdminTwo",
+            Email = "sysadmin-two@bookspace.test", PasswordHash = "irrelevant-for-this-test", CreatedAtUtc = DateTimeOffset.UtcNow,
         });
         await dbContext.SaveChangesAsync();
     }
@@ -131,6 +153,34 @@ public sealed class TenantIsolationFilterTests : IAsyncLifetime
         var users = await dbContext.Users.ToListAsync();
 
         Assert.DoesNotContain(users, user => user.Email == "tenant-a-user@bookspace.test");
+    }
+
+    // Named explicitly (rather than just relying on TenantFilter_WithNoTenantContext_ReturnsNoTenantOwnedRows
+    // above also covering it) because this is the exact scenario that caught a real bug during this
+    // feature's own development - see the seed data's own comment and
+    // BookSpaceDbContext.ApplyUserTenantFilter's doc comment for the EF Core null-translation detail.
+    [Fact]
+    public async Task SysAdminFilter_WithNoTenantContext_SeesNoGlobalSysAdminEitherIncludingItsOwn()
+    {
+        await using var dbContext = CreateDbContext(tenantId: null);
+
+        var users = await dbContext.Users.ToListAsync();
+
+        Assert.Empty(users);
+        Assert.Null(await dbContext.Users.FirstOrDefaultAsync(u => u.Id == _sysAdminOneId));
+        Assert.Null(await dbContext.Users.FirstOrDefaultAsync(u => u.Id == _sysAdminTwoId));
+    }
+
+    [Fact]
+    public async Task FindByIdForAuthenticationAsync_WithNoTenantContext_StillFindsTheGlobalSysAdmin()
+    {
+        await using var dbContext = CreateDbContext(tenantId: null);
+        IUserRepository repository = new UserRepository(dbContext);
+
+        var user = await repository.FindByIdForAuthenticationAsync(_sysAdminOneId, CancellationToken.None);
+
+        Assert.NotNull(user);
+        Assert.Null(user!.TenantId);
     }
 
     [Fact]

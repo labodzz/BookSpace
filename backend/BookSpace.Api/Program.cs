@@ -8,6 +8,7 @@ using BookSpace.Api.Security;
 using BookSpace.Application;
 using BookSpace.Application.BackgroundJobs;
 using BookSpace.Application.Calendar;
+using BookSpace.Application.Common;
 using BookSpace.Application.Email;
 using BookSpace.Application.Logging;
 using BookSpace.Application.Security;
@@ -197,6 +198,12 @@ try
     // startup immediately rather than only surfacing once a member tries to create their first subscription.
     builder.Services.AddOptions<CalendarFeedOptions>()
         .Bind(builder.Configuration.GetSection("CalendarFeed"))
+        .ValidateOnStart();
+
+    // App-wide public base URL (tenant onboarding's invitation link) - see docs/tenant-onboarding.md. Same
+    // ValidateOnStart convention as every other options class above.
+    builder.Services.AddOptions<AppOptions>()
+        .Bind(builder.Configuration.GetSection("App"))
         .ValidateOnStart();
 
     builder.Services.AddHttpContextAccessor();

@@ -19,14 +19,19 @@ export function isUserStatus(value: string | null): value is UserStatus {
 // this UI never offers a control for it either.
 export const DELEGABLE_ROLES: readonly string[] = ['Member', 'Approver', 'TenantAdmin'];
 
-// Every global role that can exist on a user, delegable or not - used only for the read-only role
-// FILTER on the list page (an existing SysAdmin account, seeded outside this UI, must still be
-// filterable), never for an assignment control.
-export const ALL_GLOBAL_ROLES: readonly string[] = ['Member', 'Approver', 'TenantAdmin', 'SysAdmin'];
+// Every global role a TENANT user can hold - used for the read-only role FILTER on the list page.
+// Deliberately identical to DELEGABLE_ROLES: unlike an earlier version of this constant, SysAdmin is not
+// included even for filtering - GET /users is TenantAdmin-only and tenant-filtered (see UsersController),
+// and a global SysAdmin can never have a TenantId, so it can never appear in this list at all (see
+// User.TenantId's own doc comment). A role filter value this list's users could never actually hold
+// would just be a dead, always-empty option.
+export const ALL_GLOBAL_ROLES: readonly string[] = DELEGABLE_ROLES;
 
-// UserSummaryResponse - GET /users (TenantAdmin/SysAdmin only). roles is every global role name the
-// user holds (e.g. "Approver", "TenantAdmin") - not a per-resource assignment, which is a completely
-// separate, live-checked concept (see resource.models.ts's AssignedApprover).
+// UserSummaryResponse - GET /users (TenantAdmin only - never the global SysAdmin, see UsersController).
+// roles is every global role name the user holds (e.g. "Approver", "TenantAdmin") - not a per-resource
+// assignment, which is a completely separate, live-checked concept (see resource.models.ts's
+// AssignedApprover). tenantId is always present (never null) here: only tenant users are ever returned
+// by this tenant-filtered endpoint.
 export interface UserSummary {
   id: string;
   firstName: string;

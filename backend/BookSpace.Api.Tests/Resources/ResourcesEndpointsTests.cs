@@ -98,13 +98,14 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         Assert.Equal("Resource.AvailabilityRuleRequired", await ReadErrorCodeAsync(deleteResponse));
     }
 
-    // [Authorize(Roles = "TenantAdmin,SysAdmin")] on every mutation in this controller had never
-    // actually been exercised with a real SysAdmin login before this test - only TenantAdmin's half
-    // of that role list was ever proven to work.
+    // The global SysAdmin is not a member of any tenant and must not manage its resources - see
+    // ResourcesController's own doc comment. [Authorize(Roles = "TenantAdmin")] now, not
+    // "TenantAdmin,SysAdmin" - see the "SysAdmin-forbidden sweep" further below for the rest of this
+    // controller's mutations.
     [Fact]
-    public async Task CreateResource_AsSysAdmin_ReturnsCreatedWithCreatedResource()
+    public async Task CreateResource_AsSysAdmin_ReturnsForbidden()
     {
-        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.GlobalSysAdminEmail);
 
         var response = await client.PostAsJsonAsync("/api/resources", new
         {
@@ -116,7 +117,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
             timeZoneId = "UTC",
         });
 
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     [Fact]
@@ -326,18 +327,17 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
     }
 
-    // --- SysAdmin-Allowed sweep: every mutation in this controller is [Authorize(Roles =
-    // "TenantAdmin,SysAdmin")], but only CreateResource had ever actually been exercised with a real
-    // SysAdmin login (see the comment on CreateResource_AsSysAdmin_ReturnsOkWithCreatedResource above).
-    // Since SysAdmin and TenantAdmin are meant to be treated identically everywhere, a regression that
-    // accidentally dropped SysAdmin from any one of these role lists would go undetected without this. ---
+    // --- SysAdmin-forbidden sweep: every mutation in this controller is [Authorize(Roles =
+    // "TenantAdmin")] now, never SysAdmin - the global SysAdmin is not a member of any tenant and must
+    // not manage its resources (see ResourcesController's own doc comment). A regression that
+    // accidentally re-added SysAdmin to any one of these role lists would go undetected without this. ---
 
     [Fact]
-    public async Task UpdateResource_AsSysAdmin_ReturnsOk()
+    public async Task UpdateResource_AsSysAdmin_ReturnsForbidden()
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"SysAdminUpdate {Guid.NewGuid()}");
-        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.GlobalSysAdminEmail);
 
         var response = await sysAdminClient.PutAsJsonAsync($"/api/resources/{resource.Id}", new
         {
@@ -346,70 +346,68 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
             capacity = 8,
             requiresApproval = false,
             timeZoneId = "UTC",
-            // Inactive, not Active - this test is about the SysAdmin RBAC path succeeding, not about the
-            // activation invariant, and the freshly-created resource has no AvailabilityRule yet.
             status = ResourceStatus.Inactive,
         });
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     [Fact]
-    public async Task DeleteResource_AsSysAdmin_ReturnsOk()
+    public async Task DeleteResource_AsSysAdmin_ReturnsForbidden()
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"SysAdminDelete {Guid.NewGuid()}");
-        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.GlobalSysAdminEmail);
 
         var response = await sysAdminClient.DeleteAsync($"/api/resources/{resource.Id}");
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     [Fact]
-    public async Task CreateAvailabilityRule_AsSysAdmin_ReturnsCreated()
+    public async Task CreateAvailabilityRule_AsSysAdmin_ReturnsForbidden()
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"SysAdminRule {Guid.NewGuid()}");
-        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.GlobalSysAdminEmail);
 
         var response = await sysAdminClient.PostAsJsonAsync($"/api/resources/{resource.Id}/availability-rules",
             new { dayOfWeek = DayOfWeek.Friday, startTime = "08:00:00", endTime = "10:00:00" });
 
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     [Fact]
-    public async Task DeleteAvailabilityRule_AsSysAdmin_ReturnsNoContent()
+    public async Task DeleteAvailabilityRule_AsSysAdmin_ReturnsForbidden()
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"SysAdminRuleDelete {Guid.NewGuid()}");
         var createResponse = await client.PostAsJsonAsync($"/api/resources/{resource.Id}/availability-rules",
             new { dayOfWeek = DayOfWeek.Saturday, startTime = "08:00:00", endTime = "10:00:00" });
         var rule = await createResponse.Content.ReadFromJsonAsync<AvailabilityRuleResponse>(JsonOptions);
-        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.GlobalSysAdminEmail);
 
         var response = await sysAdminClient.DeleteAsync($"/api/resources/{resource.Id}/availability-rules/{rule!.Id}");
 
-        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     [Fact]
-    public async Task CreateBlackoutPeriod_AsSysAdmin_ReturnsCreated()
+    public async Task CreateBlackoutPeriod_AsSysAdmin_ReturnsForbidden()
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"SysAdminBlackout {Guid.NewGuid()}");
-        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.GlobalSysAdminEmail);
         var start = DateTimeOffset.UtcNow.AddDays(8);
 
         var response = await sysAdminClient.PostAsJsonAsync($"/api/resources/{resource.Id}/blackout-periods",
             new { startUtc = start, endUtc = start.AddHours(1), reason = "SysAdmin maintenance" });
 
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     [Fact]
-    public async Task UpdateBlackoutPeriod_AsSysAdmin_ReturnsOk()
+    public async Task UpdateBlackoutPeriod_AsSysAdmin_ReturnsForbidden()
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"SysAdminBlackoutUpdate {Guid.NewGuid()}");
@@ -417,16 +415,16 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         var createResponse = await client.PostAsJsonAsync($"/api/resources/{resource.Id}/blackout-periods",
             new { startUtc = start, endUtc = start.AddHours(1), reason = "Original" });
         var period = await createResponse.Content.ReadFromJsonAsync<BlackoutPeriodResponse>(JsonOptions);
-        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.GlobalSysAdminEmail);
 
         var response = await sysAdminClient.PutAsJsonAsync($"/api/resources/{resource.Id}/blackout-periods/{period!.Id}",
             new { startUtc = start, endUtc = start.AddHours(2), reason = "Changed by SysAdmin" });
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     [Fact]
-    public async Task DeleteBlackoutPeriod_AsSysAdmin_ReturnsNoContent()
+    public async Task DeleteBlackoutPeriod_AsSysAdmin_ReturnsForbidden()
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"SysAdminBlackoutDelete {Guid.NewGuid()}");
@@ -434,37 +432,37 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
         var createResponse = await client.PostAsJsonAsync($"/api/resources/{resource.Id}/blackout-periods",
             new { startUtc = start, endUtc = start.AddHours(1), reason = "To delete" });
         var period = await createResponse.Content.ReadFromJsonAsync<BlackoutPeriodResponse>(JsonOptions);
-        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.GlobalSysAdminEmail);
 
         var response = await sysAdminClient.DeleteAsync($"/api/resources/{resource.Id}/blackout-periods/{period!.Id}");
 
-        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     [Fact]
-    public async Task AssignResourceApprover_AsSysAdmin_ReturnsCreated()
+    public async Task AssignResourceApprover_AsSysAdmin_ReturnsForbidden()
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"SysAdminApproverAssign {Guid.NewGuid()}");
-        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.GlobalSysAdminEmail);
 
         var response = await sysAdminClient.PostAsJsonAsync(
             $"/api/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
 
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     [Fact]
-    public async Task RemoveResourceApprover_AsSysAdmin_ReturnsNoContent()
+    public async Task RemoveResourceApprover_AsSysAdmin_ReturnsForbidden()
     {
         using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var resource = await CreateResourceAsync(client, $"SysAdminApproverRemove {Guid.NewGuid()}");
         await client.PostAsJsonAsync($"/api/resources/{resource.Id}/approvers", new { userId = TestDataSeeder.AcmeUnassignedApproverUserId });
-        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.GlobalSysAdminEmail);
 
         var response = await sysAdminClient.DeleteAsync($"/api/resources/{resource.Id}/approvers/{TestDataSeeder.AcmeUnassignedApproverUserId}");
 
-        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     // --- Member-Denied sweep: UpdateResource/DeleteResource/AssignResourceApprover already had this;
@@ -543,8 +541,8 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     }
 
     // --- Approver-Denied sweep: Approver is a real, seeded role distinct from Member, but every one of
-    // these 10 TenantAdmin,SysAdmin-only endpoints only ever had a Member-forbidden test. Its exclusion
-    // from these routes was previously only asserted by the [Authorize(Roles=...)] attribute itself. ---
+    // these 10 TenantAdmin-only endpoints only ever had a Member-forbidden test. Its exclusion from
+    // these routes was previously only asserted by the [Authorize(Roles=...)] attribute itself. ---
 
     [Fact]
     public async Task CreateResource_AsApprover_ReturnsForbidden()
@@ -781,7 +779,7 @@ public sealed class ResourcesEndpointsTests : IClassFixture<CustomWebApplication
     }
 
     // No role restriction, same posture as GET /resource-types - any authenticated tenant member picks
-    // a time zone when creating/editing a resource, not just TenantAdmin/SysAdmin.
+    // a time zone when creating/editing a resource, not just TenantAdmin.
     [Fact]
     public async Task GetSupportedTimeZones_AsMember_ReturnsOkWithWellKnownZones()
     {

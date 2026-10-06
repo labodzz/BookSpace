@@ -19,7 +19,7 @@ public sealed class DeactivateUserCommandHandlerTests
     private void SetUpUser(Guid userId, UserStatus status, IReadOnlyList<string> roles)
     {
         _userRepository.Setup(r => r.FindByIdAsync(userId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new User { Id = userId, FirstName = "Jane", LastName = "Doe", Email = "jane@bookspace.test", Status = status });
+            .ReturnsAsync(new User { Id = userId, TenantId = Guid.NewGuid(), FirstName = "Jane", LastName = "Doe", Email = "jane@bookspace.test", Status = status });
         _userRepository.Setup(r => r.GetRolesAsync(userId, It.IsAny<CancellationToken>())).ReturnsAsync(roles);
     }
 

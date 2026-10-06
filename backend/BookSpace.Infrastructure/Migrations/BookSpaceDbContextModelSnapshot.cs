@@ -741,7 +741,7 @@ namespace BookSpace.Infrastructure.Migrations
                         .HasColumnType("nvarchar(20)")
                         .HasDefaultValue("Active");
 
-                    b.Property<Guid>("TenantId")
+                    b.Property<Guid?>("TenantId")
                         .HasColumnType("uniqueidentifier");
 
                     b.HasKey("Id");
@@ -988,8 +988,7 @@ namespace BookSpace.Infrastructure.Migrations
                     b.HasOne("BookSpace.Domain.Entities.Tenant", null)
                         .WithMany()
                         .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("BookSpace.Domain.Entities.UserRole", b =>

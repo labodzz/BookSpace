@@ -28,8 +28,10 @@ its security-model overlap with the rest of this file:
 ## Token model
 
 - **Access token**: a short-lived, stateless JWT (`AccessTokenMinutes`, currently 15). Carries the
-  user's id, roles, and `tenant_id` claim. Never stored server-side; expiry is enforced purely by
-  clients no longer being able to present a valid signature/`exp`.
+  user's id and roles always, and a `tenant_id` claim **only for a tenant-scoped user** - the global
+  `SysAdmin` (see [tenant-onboarding.md](tenant-onboarding.md)) has no tenant and gets no such claim at
+  all, never a placeholder. Never stored server-side; expiry is enforced purely by clients no longer
+  being able to present a valid signature/`exp`.
 - **Refresh token**: a long-lived (`RefreshTokenDays`, currently 14), high-entropy random value. Only
   its SHA-256 hash is stored (`RefreshToken.TokenHash`); the raw value is returned to the client once,
   at issuance, and never persisted. Used solely to obtain a new access+refresh token pair via
@@ -190,6 +192,22 @@ The failure is the exact same generic `Auth.InvalidCredentials` result an unknow
 password produces - login never reveals account status to an outside prober. See
 [user-administration.md](user-administration.md) §1 for the full `UserStatus` lifecycle this check
 enforces.
+
+## Login and refresh also reject a non-Active tenant
+
+Alongside `user.Status`, `LoginAsync`/`RefreshAsync`/`AcceptInvitationAsync` all call the same private
+`IsUsableAsync(user)` check: for a tenant-scoped user (`user.TenantId` set), the tenant itself must be
+`TenantStatus.Active` - a `Suspended` or soft-deleted (`Deleted`) tenant's users cannot log in, refresh,
+or accept a pending invitation, collapsed into the identical generic failure as every other login/
+refresh/acceptance rejection (never a distinct "your organization was suspended" message - see
+[tenant-onboarding.md](tenant-onboarding.md), "Tenant lifecycle"). The global SysAdmin has no
+`TenantId`, so this check is a no-op for it - there is no tenant status to block it on.
+
+This closes the gap that matters in practice: suspending/deleting a tenant does **not** retroactively
+revoke its users' already-issued refresh tokens (no bulk-revocation mechanism exists for this - see that
+same section for why this was a deliberate, documented tradeoff rather than an oversight). An
+already-valid access token can still be used for up to `AccessTokenMinutes` after suspension, but the
+*next* refresh or login attempt is where enforcement actually happens.
 
 ## Bounded `/api/auth/refresh` call
 

@@ -18,5 +18,11 @@ public interface IInvitationRepository
     // needs to revoke an expired-but-not-yet-cleaned-up row exactly the same as a live one).
     Task<Invitation?> FindActiveByUserIdAsync(Guid userId, CancellationToken cancellationToken);
 
+    // Explicitly bypasses the tenant query filter and re-applies BOTH tenantId and userId in the same
+    // Where clause - the Invitation-side counterpart to IUserRepository.FindByIdForTenantAdministrationAsync,
+    // for the identical reason (a SysAdmin's own ambient tenant is never the tenant being onboarded). Only
+    // ResendTenantAdminInvitationCommandHandler should call this.
+    Task<Invitation?> FindActiveByUserIdForTenantAdministrationAsync(Guid tenantId, Guid userId, CancellationToken cancellationToken);
+
     Task SaveChangesAsync(CancellationToken cancellationToken);
 }

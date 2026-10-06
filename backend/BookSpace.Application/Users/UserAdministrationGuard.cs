@@ -11,7 +11,10 @@ namespace BookSpace.Application.Users;
 // docs/user-administration.md for the full rationale.
 internal static class UserAdministrationGuard
 {
-    private static readonly string[] AdministratorRoles = ["TenantAdmin", "SysAdmin"];
+    // TenantAdmin only - a tenant user can never hold SysAdmin (see DelegableRoles below and
+    // User.TenantId's own doc comment), so every caller of IsAdministrator here is already looking at a
+    // tenant-scoped user's role list, which could never legitimately contain it.
+    private static readonly string[] AdministratorRoles = ["TenantAdmin"];
 
     // SysAdmin delegation is deliberately unsupported by InviteUser/AssignUserRole/RemoveUserRole, for
     // every caller (not just an ordinary TenantAdmin) - no existing documentation defines who, if
@@ -49,7 +52,7 @@ internal static class UserAdministrationGuard
         if (activeAdministratorCount <= 1)
         {
             throw new ConflictException(
-                "This tenant must always retain at least one active TenantAdmin or SysAdmin.", ErrorCodes.UserLastAdminRemaining);
+                "This tenant must always retain at least one active TenantAdmin.", ErrorCodes.UserLastAdminRemaining);
         }
     }
 }

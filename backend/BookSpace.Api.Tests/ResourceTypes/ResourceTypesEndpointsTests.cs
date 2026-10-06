@@ -28,14 +28,16 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
         Assert.Equal(name, body!.Name);
     }
 
+    // The global SysAdmin is not a member of any tenant and must not manage its resource type catalog -
+    // see ResourceTypesController's own doc comment. [Authorize(Roles = "TenantAdmin")] now.
     [Fact]
-    public async Task CreateResourceType_AsSysAdmin_ReturnsCreatedWithCreatedResourceType()
+    public async Task CreateResourceType_AsSysAdmin_ReturnsForbidden()
     {
-        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.GlobalSysAdminEmail);
 
         var response = await client.PostAsJsonAsync("/api/resource-types", new { name = $"Parking Spot {Guid.NewGuid()}" });
 
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     [Fact]
@@ -163,15 +165,15 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
     }
 
     [Fact]
-    public async Task UpdateResourceType_AsSysAdmin_ReturnsOk()
+    public async Task UpdateResourceType_AsSysAdmin_ReturnsForbidden()
     {
         using var adminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var created = await CreateResourceTypeAsync(adminClient, $"SysAdminUpdateTarget {Guid.NewGuid()}");
-        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.GlobalSysAdminEmail);
 
         var response = await sysAdminClient.PutAsJsonAsync($"/api/resource-types/{created.Id}", new { name = $"Renamed By SysAdmin {Guid.NewGuid()}" });
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     [Fact]
@@ -246,15 +248,15 @@ public sealed class ResourceTypesEndpointsTests : IClassFixture<CustomWebApplica
     }
 
     [Fact]
-    public async Task DeleteResourceType_AsSysAdmin_ReturnsNoContent()
+    public async Task DeleteResourceType_AsSysAdmin_ReturnsForbidden()
     {
         using var adminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeAdminEmail);
         var created = await CreateResourceTypeAsync(adminClient, $"SysAdminDeleteTarget {Guid.NewGuid()}");
-        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.GlobalSysAdminEmail);
 
         var response = await sysAdminClient.DeleteAsync($"/api/resource-types/{created.Id}");
 
-        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     private async Task<ResourceTypeResponse> CreateResourceTypeAsync(HttpClient client, string name)

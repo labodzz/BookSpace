@@ -115,8 +115,8 @@ describe('ResourceListComponent', () => {
     expect((fixture.nativeElement as HTMLElement).textContent).toContain('Falcon Room');
   });
 
-  // "New resource" is TenantAdmin/SysAdmin-only - a Member browsing to book something should never see
-  // an entry point into resource administration.
+  // "New resource" is TenantAdmin-only (never the global SysAdmin, which is not a tenant member) - a
+  // Member browsing to book something should never see an entry point into resource administration.
   it('shows the "New resource" action for a TenantAdmin', () => {
     configure((...roles) => roles.includes('TenantAdmin'));
     httpTesting.expectOne((r) => r.url === TYPES_URL).flush([]);

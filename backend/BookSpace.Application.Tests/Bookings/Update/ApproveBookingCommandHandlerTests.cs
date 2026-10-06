@@ -162,23 +162,25 @@ public sealed class ApproveBookingCommandHandlerTests
         Assert.Equal(BookingStatus.Confirmed, result.Status);
     }
 
+    // The global SysAdmin does NOT get TenantAdmin's per-resource-approver bypass any more - see
+    // ApprovalAuthorization.IsTenantAdmin. Falls through to the identical ConflictException a plain,
+    // unassigned Approver gets (see the next test).
     [Fact]
-    public async Task Handle_AsSysAdmin_BypassesThePerResourceApproverCheck()
+    public async Task Handle_AsSysAdmin_DoesNotBypassThePerResourceApproverCheck()
     {
         var resource = CreateResource();
         var booking = CreatePendingBooking(resource);
         SetupEligible(resource, booking);
         _currentUserContext.SetupGet(c => c.Roles).Returns(["SysAdmin"]);
-        // Deliberately NOT a ResourceApprover for this resource - SysAdmin must not need to be, exactly
-        // like TenantAdmin above.
         _resourceApproverRepository
             .Setup(r => r.FindByResourceAndUserAsync(resource.Id, ApproverUserId, It.IsAny<CancellationToken>()))
             .ReturnsAsync((ResourceApprover?)null);
         var sut = CreateSut();
 
-        var result = await sut.Handle(new ApproveBookingCommandRequest(booking.Id, null), CancellationToken.None);
+        var exception = await Assert.ThrowsAsync<ConflictException>(() =>
+            sut.Handle(new ApproveBookingCommandRequest(booking.Id, null), CancellationToken.None));
 
-        Assert.Equal(BookingStatus.Confirmed, result.Status);
+        Assert.Equal(ErrorCodes.BookingApprovalForbidden, exception.ErrorCode);
     }
 
     [Fact]

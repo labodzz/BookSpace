@@ -61,9 +61,14 @@ internal static class BookSpaceModelConfiguration
             // explicitly. See User.cs's own comment for why Active had to be the zero member.
             entity.Property(user => user.Status).HasConversion<string>().HasMaxLength(20).HasDefaultValue(UserStatus.Active);
             // Global, not per-tenant: login looks a user up by email alone, before any tenant is
-            // known, so two tenants sharing an email would make that lookup ambiguous.
+            // known, so two tenants sharing an email would make that lookup ambiguous. Stays global
+            // (not scoped around the null TenantId case) even for the global SysAdmin: one platform-
+            // wide identity space, same as everyone else.
             entity.HasIndex(user => user.Email).IsUnique();
-            entity.HasOne<Tenant>().WithMany().HasForeignKey(user => user.TenantId).OnDelete(DeleteBehavior.Restrict);
+            // IsRequired(false) explicit, not just inferred from the nullable CLR property - TenantId
+            // nullability is the load-bearing part of the whole SysAdmin-is-global invariant, so this
+            // FK's optionality is spelled out rather than left to EF's default inference.
+            entity.HasOne<Tenant>().WithMany().HasForeignKey(user => user.TenantId).IsRequired(false).OnDelete(DeleteBehavior.Restrict);
         });
 
         builder.Entity<Invitation>(entity =>

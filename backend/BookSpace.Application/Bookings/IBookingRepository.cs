@@ -37,7 +37,7 @@ public interface IBookingRepository
 
     // Bookings with an outstanding ApprovalRequest, for the approver's own queue. resourceIds narrows to
     // a specific set (a ResourceApprover's assigned resources); null returns every Pending booking in the
-    // tenant (TenantAdmin/SysAdmin, who aren't restricted to specific resources).
+    // tenant (TenantAdmin, who isn't restricted to specific resources).
     Task<IReadOnlyList<Booking>> GetPendingApprovalAsync(IReadOnlyList<Guid>? resourceIds, CancellationToken cancellationToken);
 
     Task AddAsync(Booking booking, CancellationToken cancellationToken);

@@ -84,7 +84,7 @@ of going straight to `Confirmed` - the one prior work packet's docs explicitly d
 `ResourceApprover`s rejects the booking/occurrence outright (`Booking.NoApproverConfigured`) rather than
 silently confirming it (defeats the flag) or creating a `Pending` row nobody could ever approve.
 
-**Who may decide**: any `ResourceApprover` for that specific resource, or `TenantAdmin`/`SysAdmin`
+**Who may decide**: any `ResourceApprover` for that specific resource, or `TenantAdmin`
 (the same administrative-override role this codebase already gives them over resource management
 generally). `ApprovalRequest.ApproverId` is nullable and populated only at decision time with whoever
 actually acted - not pre-assigned at request time, since any of potentially several approvers may act on
@@ -258,7 +258,7 @@ automatically - blocking blackout creation whenever it overlaps an existing book
 end (a TenantAdmin needing to declare "the building has no power next Tuesday" could never do so if
 anyone already had so much as a 5-minute booking that day, with no way to clear it). Surfacing the
 conflict and letting a human decide what to do about it is the only option that doesn't create that dead
-end. A TenantAdmin/SysAdmin can now follow up by manually cancelling the conflicting bookings listed in
+end. A TenantAdmin can now follow up by manually cancelling the conflicting bookings listed in
 `ConflictingBookingIds` (`CancelBookingCommandHandler` - see
 [bookings-and-concurrency.md](bookings-and-concurrency.md#2-ownership-and-tenant-isolation)), but that's a
 separate, deliberate action, not something blackout creation does on its own; whether and how the
@@ -279,7 +279,7 @@ from `ICurrentUserContext`, never client-supplied. `GetRecurringSeriesQueryHandl
 "NotFound, not Forbidden" convention as booking cancellation - a series belonging to another user (or
 tenant) looks identical to one that doesn't exist. `GetPendingApprovalsQueryHandler` additionally scopes
 a plain `Approver`'s results to only the resources they're assigned to (`IResourceApproverRepository.GetResourceIdsByUserAsync`) -
-`TenantAdmin`/`SysAdmin` see every `Pending` booking in their own tenant (never another tenant's, via the
+`TenantAdmin` see every `Pending` booking in their own tenant (never another tenant's, via the
 same global filter), with no per-resource restriction.
 
 ## 13a. `ResourceApprover` eligibility is live-checked, never baked into the token
@@ -298,7 +298,7 @@ carried in the JWT. Two consequences, both now proven end-to-end rather than onl
   persisting until the token naturally expires (`RemoveResourceApprover_ThenApproveWithTheSameToken_IsImmediatelyRejected`).
 
 This is the one authorization concept in this codebase that behaves this way; contrast with global roles
-(`Member`/`Approver`/`TenantAdmin`/`SysAdmin`), which *are* baked into the JWT at issuance and only take
+(`Member`/`Approver`/`TenantAdmin`), which *are* baked into the JWT at issuance and only take
 effect on the session's next refresh or login - see
 [user-administration.md](user-administration.md) §5's "JWT staleness" tradeoff.
 
@@ -320,7 +320,7 @@ effect on the session's next refresh or login - see
 - **`BookSpace.Api.Tests/Bookings/RecurringSeriesAndApprovalEndpointsTests.cs`**: full HTTP-pipeline
   coverage - series creation with and without conflicts, cross-tenant 404 on series create/view, cascade
   cancellation, `RequiresApproval` producing `Pending` over the wire, the pending-approval queue, approve/
-  reject, RBAC (`Approver`/`TenantAdmin`/`SysAdmin` vs. plain `Member`), cross-tenant 404 on approve,
+  reject, RBAC (`Approver`/`TenantAdmin` vs. plain `Member`), cross-tenant 404 on approve,
   re-approving an already-Confirmed booking.
 - **`BookSpace.Infrastructure.Tests/Persistence/ApprovalConcurrencyTests.cs`** (real SQL Server LocalDB,
   required - SQLite has no `UPDLOCK`/`HOLDLOCK` support): two genuinely concurrent approve calls on the

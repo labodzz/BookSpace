@@ -14,9 +14,10 @@ public sealed record GetPendingApprovalsResponseItem(
     Guid BookingId, Guid ResourceId, Guid UserId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, int Quantity, DateTimeOffset ExpiresAtUtc,
     Guid? SeriesId, string TimeZoneId);
 
-// The approver's own queue: TenantAdmin/SysAdmin see every Pending booking in the tenant; a plain
-// Approver sees only bookings for resources they're a ResourceApprover for - never another approver's
-// resources, and never another tenant's bookings at all (the global query filter already guarantees that).
+// The approver's own queue: TenantAdmin sees every Pending booking in the tenant; a plain Approver sees
+// only bookings for resources they're a ResourceApprover for - never another approver's resources, and
+// never another tenant's bookings at all (the global query filter already guarantees that). SysAdmin is
+// deliberately excluded from the TenantAdmin-equivalent bypass - see ApprovalAuthorization.
 public sealed class GetPendingApprovalsQueryHandler(
     IBookingRepository bookingRepository, IApprovalRequestRepository approvalRequestRepository,
     IResourceApproverRepository resourceApproverRepository, IResourceRepository resourceRepository, ICurrentUserContext currentUserContext)
@@ -25,7 +26,7 @@ public sealed class GetPendingApprovalsQueryHandler(
     public async Task<IReadOnlyList<GetPendingApprovalsResponseItem>> Handle(GetPendingApprovalsQueryRequest request, CancellationToken cancellationToken)
     {
         IReadOnlyList<Guid>? resourceIds = null;
-        if (!currentUserContext.Roles.Contains("TenantAdmin") && !currentUserContext.Roles.Contains("SysAdmin"))
+        if (!ApprovalAuthorization.IsTenantAdmin(currentUserContext))
         {
             resourceIds = await resourceApproverRepository.GetResourceIdsByUserAsync(currentUserContext.UserId!.Value, cancellationToken);
         }

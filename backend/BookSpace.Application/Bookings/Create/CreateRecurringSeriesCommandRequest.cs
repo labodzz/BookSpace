@@ -124,6 +124,8 @@ public sealed class CreateRecurringSeriesCommandHandler(
 
     private async Task<CreateRecurringSeriesResponse> CreateUnderLockAsync(CreateRecurringSeriesCommandRequest request, CancellationToken cancellationToken)
     {
+        var tenantId = TenantMembershipGuard.EnsureTenantMember(currentUserContext);
+
         var resource = await resourceRepository.FindByIdAsync(request.ResourceId, cancellationToken)
             ?? throw new NotFoundException($"Resource {request.ResourceId} was not found.", ErrorCodes.ResourceNotFound);
 
@@ -137,14 +139,14 @@ public sealed class CreateRecurringSeriesCommandHandler(
                     $"Resource {resource.Id} requires approval but has no approvers configured.", ErrorCodes.BookingNoApproverConfigured);
             }
 
-            tenant = await tenantRepository.FindByIdAsync(currentUserContext.TenantId!.Value, cancellationToken)
-                ?? throw new InvalidOperationException($"Tenant {currentUserContext.TenantId} for the current request was not found.");
+            tenant = await tenantRepository.FindByIdAsync(tenantId, cancellationToken)
+                ?? throw new InvalidOperationException($"Tenant {tenantId} for the current request was not found.");
         }
 
         var series = new RecurringSeries
         {
             Id = Guid.NewGuid(),
-            TenantId = currentUserContext.TenantId!.Value,
+            TenantId = tenantId,
             ResourceId = resource.Id,
             UserId = currentUserContext.UserId!.Value,
             StartDate = request.StartDate,

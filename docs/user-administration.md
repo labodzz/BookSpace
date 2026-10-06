@@ -41,30 +41,37 @@ non-conforming stored value).
 
 ## 2. Administrative authority - the delegation matrix
 
-No existing documentation defined this before Batch 4A; the model below is what was implemented, following
-the task's own conservative default where nothing existing said otherwise.
+**Superseded by the platform-separation work in [tenant-onboarding.md](tenant-onboarding.md)** ("SysAdmin
+and tenant business data" / "Permissions matrix"): `SysAdmin` is no longer a tenant-scoped "elevated
+TenantAdmin" - it is the **global platform administrator**, has no `TenantId` at all, and is not a member
+of any tenant. The table below reflects the current model; see that document for the full rationale and
+the EF Core null-comparison bug this surfaced (`BookSpaceDbContext.ApplyUserTenantFilter`).
 
 | Actor | Manage users in own tenant | Manage users in another tenant | Grant/revoke `SysAdmin` |
 |---|---|---|---|
 | `Member` | No (403) | No (403) | No |
 | `Approver` | No (403) | No (403) | No |
 | `TenantAdmin` | Yes | No (404 - the target is invisible, not forbidden; see [tenant-isolation.md](tenant-isolation.md)) | **No** |
-| `SysAdmin` | Yes | No (404, same as `TenantAdmin` - confirms [open-questions.md](open-questions.md)'s "SysAdmin Scope" entry: `SysAdmin` is elevated but tenant-scoped, not a cross-tenant role) | **No** |
+| `SysAdmin` | **No (403)** - not a tenant member; see below | No (403) | **No** |
 
-Every mutation endpoint below is `[Authorize(Roles = "TenantAdmin,SysAdmin")]`; every target lookup goes
-through the ordinary tenant-filtered `IUserRepository.FindByIdAsync`, so a cross-tenant target id is
-invisible (`User.NotFound`, 404) rather than a `403` that would confirm the id exists somewhere else.
+Every mutation endpoint on `UsersController` is `[Authorize(Roles = "TenantAdmin")]` - `SysAdmin` was
+removed from every one of them (it used to read `"TenantAdmin,SysAdmin"`). The global SysAdmin manages a
+tenant's *lifecycle* (suspend/reactivate/soft-delete, resend/revoke/replace its TenantAdmin's invitation)
+through `TenantsController` instead - never its ordinary member roster. Every target lookup on
+`UsersController` goes through the ordinary tenant-filtered `IUserRepository.FindByIdAsync`, so a
+cross-tenant target id is invisible (`User.NotFound`, 404) rather than a `403` that would confirm the id
+exists somewhere else; a global SysAdmin calling these endpoints never even reaches that lookup, since the
+route-level `[Authorize]` check rejects it first.
 
 **`SysAdmin` role delegation is deliberately unsupported** - `AssignUserRoleCommandRequestValidator` and
 `RemoveUserRoleCommandRequestValidator` both reject `"SysAdmin"` outright (`400 Bad Request`), for *every*
-caller, not just an ordinary `TenantAdmin`. This is not "`TenantAdmin` can't grant it but `SysAdmin` can" -
-no documentation anywhere in this codebase defines who, if anyone, should be able to grant or revoke a
-platform-escalation-sounding role like `SysAdmin` (see [open-questions.md](open-questions.md)'s own "SysAdmin
-Scope" entry, which already flags this as unresolved), and guessing a delegation rule for it here would be
-exactly the kind of decision this batch was told to leave open rather than invent. `SysAdmin` accounts exist
-today only through `DevelopmentSeeder`/`TestDataSeeder`, same as before this batch. `InviteUserCommandRequest`
-applies the identical restriction to its own `Roles` list (`UserAdministrationGuard.DelegableRoles = ["Member",
-"Approver", "TenantAdmin"]`) - an invitation can never grant `SysAdmin` either.
+caller. This is now a hard domain invariant, not just an unresolved-and-declined question: a tenant user
+can never hold `SysAdmin` (it would mean belonging to a tenant *and* being the global platform admin at
+once), so no delegation rule for it was ever going to exist. `SysAdmin` accounts are created only by
+`ProductionBootstrapper` (production, first boot) or `DevelopmentSeeder`/`TestDataSeeder` (dev/test) -
+there is no API path that creates or promotes one. `InviteUserCommandRequest` applies the identical
+restriction to its own `Roles` list (`UserAdministrationGuard.DelegableRoles = ["Member", "Approver",
+"TenantAdmin"]`) - an invitation can never grant `SysAdmin` either.
 
 **Deliberately not a constraint**: a user can end up holding zero roles (e.g. an admin removes someone's
 only role). This is allowed - a roleless user simply can't perform role-gated actions, which is the
@@ -81,7 +88,7 @@ centralizes the "Archived is terminal" check across four handlers.
 
 `UserAdministrationGuard.EnsureNotActingOnOwnAccount(targetUserId, currentUserContext.UserId, action)` -
 checked first, before anything else, in both `DeactivateUserCommandHandler` and
-`RemoveUserRoleCommandHandler` (only when the role being removed is `TenantAdmin`/`SysAdmin` - removing your
+`RemoveUserRoleCommandHandler` (only when the role being removed is `TenantAdmin` - removing your
 own `Member`/`Approver` role is never a lockout concern). Throws `ConflictException` /
 `User.SelfLockout` if `targetUserId == currentUserContext.UserId`.
 
@@ -89,15 +96,18 @@ own `Member`/`Approver` role is never a lockout concern). Throws `ConflictExcept
 
 `UserAdministrationGuard.EnsureTenantRetainsAnActiveAdministratorAsync(targetCountsBeforeChange,
 targetCountsAfterChange, ...)` - only queries `IUserRepository.CountActiveAdministratorsAsync` (a
-tenant-scoped count of distinct `Status == Active` users holding `TenantAdmin` and/or `SysAdmin`) when the
+tenant-scoped count of distinct `Status == Active` users holding `TenantAdmin` - `SysAdmin` is
+deliberately not included in this count any more: a tenant user can never hold it, and the global
+SysAdmin's own row can never match this already tenant-filtered query anyway, since it has no
+`TenantId`) when the
 target is actually *leaving* the active-administrator set as a result of this specific change; a target who
-never counted, or who still counts afterward (e.g. holds both `TenantAdmin` and `SysAdmin` and is only
-losing one), can never be the one tipping the count to zero, so no query runs for either case. If the count
+never counted, or who still counts afterward, can never be the one tipping the count to zero, so no query
+runs for either case. If the count
 would be `<= 1` right before the target stops counting, throws `ConflictException` / `User.LastAdminRemaining`.
 
 **A genuine structural finding, verified rather than assumed**: because every caller of `DeactivateUser`/
-`RemoveUserRole` must hold a currently-valid `TenantAdmin`/`SysAdmin` JWT claim just to reach the handler at
-all (the controller-level `[Authorize]` gate), and the caller can never be the target (self-lockout rejects
+`RemoveUserRole` must hold a currently-valid `TenantAdmin` JWT claim just to reach the handler at
+all (the controller-level `[Authorize]` gate - the global SysAdmin cannot reach it at all), and the caller can never be the target (self-lockout rejects
 that first), any *different*, successfully-authorized caller necessarily counts as an active administrator
 themselves in the ordinary case - keeping `CountActiveAdministratorsAsync()` at 2 or more for as long as
 they're the one calling it. This makes "the count would drop to zero via two distinct HTTP callers" not
@@ -119,11 +129,12 @@ handling against the real backend contract, not a change requested by the fronte
 user's global `Approver` role while they still hold one or more `ResourceApprover` assignments
 (`IResourceApproverRepository.GetResourceIdsByUserAsync`) throws `ConflictException` /
 `User.ApproverAssignmentsExist`. Without this guard, an admin could remove the role that
-`AssignResourceApproverCommandHandler`'s own eligibility check requires (`Approver`, `TenantAdmin`, or
-`SysAdmin`) while leaving the now-ineligible user still listed as an approver on every resource they were
-assigned to - a silently stranded assignment, invisible until someone tries to route an approval to them.
-Scoped to the `Approver` role specifically, not every role removal: `TenantAdmin`/`SysAdmin` are separately
-guarded administrative roles, not the role this specific assignment depends on. The assignments themselves
+`AssignResourceApproverCommandHandler`'s own eligibility check requires (`Approver` or `TenantAdmin` -
+`SysAdmin` is deliberately excluded, see [tenant-onboarding.md](tenant-onboarding.md)) while leaving the
+now-ineligible user still listed as an approver on every resource they were assigned to - a silently
+stranded assignment, invisible until someone tries to route an approval to them. Scoped to the `Approver`
+role specifically, not every role removal: `TenantAdmin` is a separately guarded administrative role, not
+the role this specific assignment depends on. The assignments themselves
 are never removed automatically - the error message directs the admin to each resource's own "Manage
 approvers" page, the same as `ResourceApprover.LastRemaining` already does for the reverse direction (see
 [recurring-bookings-and-approvals.md](recurring-bookings-and-approvals.md)). Proven at the handler level
@@ -137,7 +148,8 @@ task's own stated preference; no equally-secure existing onboarding mechanism ex
 
 ### Creating an invitation - `POST /api/users/invitations`
 
-`InviteUserCommandRequest(Email, FirstName, LastName, Roles)`, `TenantAdmin`/`SysAdmin` only.
+`InviteUserCommandRequest(Email, FirstName, LastName, Roles)`, `TenantAdmin` only - never the global
+SysAdmin, which is not a member of any tenant and must not invite users into one.
 
 1. `Email` is looked up globally (`IUserRepository.FindByEmailAsync`, the same pre-authentication,
    `IgnoreQueryFilters()` exception documented in [tenant-isolation.md](tenant-isolation.md)) - not
@@ -294,8 +306,12 @@ Out of scope by explicit instruction, not oversight:
 - **Physically deleting a user row.** Deactivation is the only "removal" action; see §6.
 - **`ResourceApprover` assignment changes.** Unaffected by this batch entirely - still managed exactly as
   documented in [recurring-bookings-and-approvals.md](recurring-bookings-and-approvals.md).
-- **Cross-tenant `SysAdmin` administration, or Tenant CRUD.** Neither exists; `SysAdmin` remains
-  tenant-scoped (§2), matching the already-resolved "SysAdmin Scope" open question.
+- **Cross-tenant `SysAdmin` administration of a tenant's own users.** `SysAdmin` is now the global
+  platform administrator (see [tenant-onboarding.md](tenant-onboarding.md)) and manages tenant
+  *lifecycle* through `TenantsController` (list/detail/rename/suspend/reactivate/soft-delete, and a
+  tenant's TenantAdmin-invitation contacts specifically), never a tenant's ordinary member roster - that
+  stays exclusively `TenantAdmin`'s own concern, exactly as this section originally intended, just no
+  longer because `SysAdmin` happened to be tenant-scoped too.
 - **Rate-limiting `POST /api/auth/accept-invitation`.** Considered and deliberately declined: the presented
   token is 512 bits of cryptographically secure randomness (`RandomNumberGenerator.GetBytes(64)`) - brute-
   forcing it is not achievable at any HTTP-reachable rate, so a rate limit here would be pure
@@ -339,8 +355,9 @@ Out of scope by explicit instruction, not oversight:
 
 Existing-user management is now available in the Angular app, extending the pre-existing Users feature
 (`frontend/src/app/features/users/`) rather than creating a second, parallel user list. Both admin routes -
-`/users` (list) and `/users/:id` (detail/edit/lifecycle/roles) - are gated by
-`roleGuard('TenantAdmin', 'SysAdmin')`, matching every other admin-only route in the app.
+`/users` (list) and `/users/:id` (detail/edit/lifecycle/roles) - are gated by `roleGuard('TenantAdmin')`
+only (the global SysAdmin sees platform tenant-management nav instead - see
+[tenant-onboarding.md](tenant-onboarding.md)).
 
 **Explicitly deferred, not implemented**: no invite-user form, no invitation-token display, no copyable
 invitation link, no accept-invitation page, and no invitation-reissue control exist anywhere in this UI. The

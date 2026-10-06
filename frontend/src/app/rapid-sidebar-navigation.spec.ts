@@ -262,7 +262,7 @@ describe('rapid sidebar navigation (overlapping, unawaited navigateByUrl calls)'
   // Landing directly on /approvals as the first navigation of a session (a deep link, or a page reload
   // while already there) constructs Shell and ApprovalQueue in the same navigation, firing both.
   it('explains the duplicate /bookings/pending-approval request: Shell (badge) and ApprovalQueue (list) each fire their own, independent, uncached request when landing directly on /approvals', async () => {
-    configure(['TenantAdmin']); // hasAnyRole('Approver','TenantAdmin','SysAdmin') is true, so Shell's badge fetch runs
+    configure(['TenantAdmin']); // hasAnyRole('Approver','TenantAdmin') is true, so Shell's badge fetch runs
 
     const harness = await RouterTestingHarness.create('/approvals');
     harness.detectChanges();
@@ -411,7 +411,11 @@ describe('real click events on the actual sidebar anchors (not programmatic navi
 
   const authServiceStub = {
     isAuthenticated: () => true,
-    hasAnyRole: () => true,
+    // Reflects the ['TenantAdmin'] role below, not a blanket true - a blanket true would also make
+    // isSysAdmin true, which hides the entire tenant-business nav block these tests click through (see
+    // shell.html) and defeats the whole point of this describe block (clicking real tenant-business
+    // sidebar anchors).
+    hasAnyRole: (...roles: string[]) => roles.includes('TenantAdmin'),
     currentUser: () => ({ userId: 'user-1', email: 'admin@bookspace.test', tenantId: 'tenant-1', roles: ['TenantAdmin'] }) satisfies CurrentUser,
     displayName: () => 'Admin',
     logout: () => undefined,
