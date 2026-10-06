@@ -376,7 +376,7 @@ public sealed class NotificationOutboxJobCycleTests
     // of the other two steps ever starts ---
 
     [Fact]
-    public async Task RunCycleAsync_CallsTheStaleApprovalProcessorBeforeTheReminderProducerAndTheDispatchReader()
+    public async Task RunCycleAsync_CallsTheStaleApprovalProcessorThenNoShowThenTheReminderProducerAndTheDispatchReader()
     {
         var callOrder = new List<string>();
         var processor = new FakeProcessor((_, _) => throw new InvalidOperationException("must not be called for an empty batch"));
@@ -385,17 +385,108 @@ public sealed class NotificationOutboxJobCycleTests
             callOrder.Add("stale-approval");
             return Task.FromResult(StaleApprovalCycleResult.Empty);
         });
+        var noShowProcessor = new FakeNoShowProcessor(_ =>
+        {
+            callOrder.Add("no-show");
+            return Task.FromResult(NoShowCycleResult.Empty);
+        });
         var reminderProducer = new FakeReminderProducer(_ =>
         {
             callOrder.Add("reminder");
             return Task.FromResult(ReminderProducerResult.Empty);
         });
         var reader = new FakeReader([], onCalled: () => callOrder.Add("dispatch"));
-        var (cycle, _) = CreateCycle(reader, processor, batchSize: 50, reminderProducer: reminderProducer, staleApprovalProcessor: staleApprovalProcessor);
+        var (cycle, _) = CreateCycle(
+            reader, processor, batchSize: 50, reminderProducer: reminderProducer, staleApprovalProcessor: staleApprovalProcessor,
+            noShowProcessor: noShowProcessor);
 
         await cycle.RunCycleAsync(CancellationToken.None);
 
-        Assert.Equal(["stale-approval", "reminder", "dispatch"], callOrder);
+        Assert.Equal(["stale-approval", "no-show", "reminder", "dispatch"], callOrder);
+    }
+
+    // --- H2: no-show step - same ordering/isolation/summary/email-disabled/cancellation proof as the
+    // stale-approval step above, since both share the identical RunXxxSafelyAsync isolation shape ---
+
+    [Fact]
+    public async Task RunCycleAsync_IncludesTheNoShowProcessorsCountsInTheSummary()
+    {
+        var reader = new FakeReader([]);
+        var processor = new FakeProcessor((_, _) => throw new InvalidOperationException("must not be called for an empty batch"));
+        var noShowProcessor = new FakeNoShowProcessor(
+            _ => Task.FromResult(new NoShowCycleResult(
+                CandidateCount: 5, MarkedNoShowCount: 2, AlreadyCompletedCount: 1, CheckedInCount: 1, NotYetDueCount: 0,
+                ConflictCount: 1, FailedCount: 0, NotificationEnqueuedCount: 2)));
+        var (cycle, fakeLogger) = CreateCycle(reader, processor, batchSize: 50, noShowProcessor: noShowProcessor);
+
+        await cycle.RunCycleAsync(CancellationToken.None);
+
+        var summary = GetSummaryRecord(fakeLogger);
+        AssertState(summary, "NoShowCandidateCount", "5");
+        AssertState(summary, "NoShowMarkedCount", "2");
+        AssertState(summary, "NoShowAlreadyCompletedCount", "1");
+        AssertState(summary, "NoShowCheckedInCount", "1");
+        AssertState(summary, "NoShowNotYetDueCount", "0");
+        AssertState(summary, "NoShowConflictCount", "1");
+        AssertState(summary, "NoShowFailedCount", "0");
+        AssertState(summary, "NoShowNotificationEnqueuedCount", "2");
+    }
+
+    [Fact]
+    public async Task RunCycleAsync_RunsTheNoShowProcessorEvenWhenEmailIsDisabled()
+    {
+        var reader = new FakeReader([MakeItem()]);
+        var processor = new FakeProcessor((_, _) => throw new InvalidOperationException("dispatch must not run when Email:Enabled is false"));
+        var noShowProcessor = new FakeNoShowProcessor(_ => Task.FromResult(new NoShowCycleResult(1, 1, 0, 0, 0, 0, 0, 1)));
+        var (cycle, fakeLogger) = CreateCycle(reader, processor, batchSize: 50, emailEnabled: false, noShowProcessor: noShowProcessor);
+
+        await cycle.RunCycleAsync(CancellationToken.None);
+
+        Assert.Equal(1, noShowProcessor.CallCount);
+        var summary = GetSummaryRecord(fakeLogger);
+        AssertState(summary, "NoShowMarkedCount", "1");
+        AssertState(summary, "PickedCount", "0"); // dispatch itself still fully skipped
+    }
+
+    [Fact]
+    public async Task RunCycleAsync_WhenTheNoShowProcessorFailsUnexpectedly_StillRunsTheReminderProducerAndDispatch()
+    {
+        var items = new[] { MakeItem() };
+        var reader = new FakeReader(items);
+        var processor = new FakeProcessor((batch, _) => Task.FromResult<IReadOnlyList<NotificationOutboxBatchItemResult>>(
+            [new NotificationOutboxBatchItemResult(batch[0].Id, NotificationOutboxItemOutcome.Sent)]));
+        var reminderProducer = new FakeReminderProducer(_ => Task.FromResult(new ReminderProducerResult(1, 1, 0)));
+        var noShowProcessor = new FakeNoShowProcessor(_ => throw new InvalidOperationException("no-show query exploded"));
+        var (cycle, fakeLogger) = CreateCycle(reader, processor, batchSize: 50, reminderProducer: reminderProducer, noShowProcessor: noShowProcessor);
+
+        await cycle.RunCycleAsync(CancellationToken.None); // must not throw - isolated from the rest of the cycle
+
+        Assert.True(processor.WasCalled);
+        var summary = GetSummaryRecord(fakeLogger);
+        AssertState(summary, "SucceededCount", "1");
+        AssertState(summary, "ReminderEnqueuedCount", "1");
+        Assert.Contains(fakeLogger.Collector.GetSnapshot(), record => record.Message.Contains("No-show processor failed"));
+    }
+
+    [Fact]
+    public async Task RunCycleAsync_WhenTheNoShowProcessorIsCancelled_PropagatesAndNeverRunsReminderOrDispatch()
+    {
+        var reader = new FakeReader([MakeItem()]);
+        var processor = new FakeProcessor((_, _) => throw new InvalidOperationException("dispatch must never start"));
+        var reminderProducer = new FakeReminderProducer(_ => throw new InvalidOperationException("reminder producer must never start"));
+        var noShowProcessor = new FakeNoShowProcessor(ct =>
+        {
+            ct.ThrowIfCancellationRequested();
+            throw new OperationCanceledException(ct);
+        });
+        var (cycle, _) = CreateCycle(reader, processor, batchSize: 50, reminderProducer: reminderProducer, noShowProcessor: noShowProcessor);
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cycle.RunCycleAsync(cts.Token));
+
+        Assert.Equal(0, reader.CallCount);
+        Assert.False(processor.WasCalled);
     }
 
     [Fact]
@@ -505,11 +596,13 @@ public sealed class NotificationOutboxJobCycleTests
 
     private static (NotificationOutboxJobCycle Cycle, FakeLogger<NotificationOutboxJobCycle> Logger) CreateCycle(
         FakeReader reader, FakeProcessor processor, int batchSize, bool emailEnabled = true, TimeProvider? timeProvider = null,
-        FakeReminderProducer? reminderProducer = null, FakeStaleApprovalProcessor? staleApprovalProcessor = null)
+        FakeReminderProducer? reminderProducer = null, FakeStaleApprovalProcessor? staleApprovalProcessor = null,
+        FakeNoShowProcessor? noShowProcessor = null)
     {
         var fakeLogger = new FakeLogger<NotificationOutboxJobCycle>();
         var cycle = new NotificationOutboxJobCycle(
             staleApprovalProcessor ?? new FakeStaleApprovalProcessor(_ => Task.FromResult(StaleApprovalCycleResult.Empty)),
+            noShowProcessor ?? new FakeNoShowProcessor(_ => Task.FromResult(NoShowCycleResult.Empty)),
             reminderProducer ?? new FakeReminderProducer(_ => Task.FromResult(ReminderProducerResult.Empty)),
             reader,
             processor,
@@ -575,6 +668,17 @@ public sealed class NotificationOutboxJobCycleTests
         public int CallCount { get; private set; }
 
         public Task<StaleApprovalCycleResult> ProcessDueApprovalsAsync(CancellationToken cancellationToken)
+        {
+            CallCount++;
+            return onProcess(cancellationToken);
+        }
+    }
+
+    private sealed class FakeNoShowProcessor(Func<CancellationToken, Task<NoShowCycleResult>> onProcess) : INoShowProcessor
+    {
+        public int CallCount { get; private set; }
+
+        public Task<NoShowCycleResult> ProcessDueNoShowsAsync(CancellationToken cancellationToken)
         {
             CallCount++;
             return onProcess(cancellationToken);

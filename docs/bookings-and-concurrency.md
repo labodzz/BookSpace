@@ -647,3 +647,79 @@ through first; two concurrent plain cancels still produce exactly one outbox row
 already-cancelled token propagates as `OperationCanceledException`, never a business conflict.
 `NotificationOutboxCascadeAtomicityTests`'s existing Cancel-cascade atomicity tests were updated only to
 construct the handler with the new lock argument and remain green.
+
+## 13. No-show processing
+
+The background counterpart to §12's check-in: `NoShowProcessor` (`BookSpace.Infrastructure.Persistence`,
+see `docs/background-jobs.md` for the full orchestration/cycle/notification/query-plan design) finds
+`Confirmed` bookings nobody checked in once their deadline has passed, marks them `NoShow`, and releases
+their capacity - the system's own answer to "what happens if nobody ever checks in."
+
+**Definition**: `Status == Confirmed`, `CheckedInAtUtc == null`, and
+`DateTimeOffset.UtcNow > StartUtc + Tenant.NoShowGraceMinutes` - the SAME `NoShowGraceMinutes` column §12's
+`CheckInEligibilityChecker` already uses for the check-in window's own closing edge. The boundary is
+strictly `>`, never `>=`: at the exact deadline instant, check-in is still allowed (§12's own boundary is
+inclusive, `nowUtc <= deadline`), so no-show must never be able to win that same instant - the two rules
+share one boundary, and that boundary belongs to check-in until the instant it doesn't. `NoShowGraceMinutes`
+is the sole source of truth for this cutoff; no second, independent grace-period setting was introduced (see
+`docs/background-jobs.md`, "No-show job - why there is no new grace-period setting").
+
+**Why all three flows - check-in, cancel, and no-show - share one resource lock.** §12 already established
+that `CheckInBookingCommandHandler` and `CancelBookingCommandHandler` share `IResourceBookingLock` to
+coordinate two concurrent WRITERS of the same `Booking` row. `NoShowProcessor` is the THIRD writer of that
+same row (`Status`, implicitly `CheckedInAtUtc` by virtue of checking it), so it joins the identical
+protocol rather than inventing a fourth, separate one: pre-lock `FindResourceIdAsync`-style projection (here,
+the reader's own untracked candidate), `RunExclusiveAsync(candidate.ResourceId, ...)`, then a tracked,
+genuinely fresh re-read of both the `Booking` row AND `Tenant.NoShowGraceMinutes` - never trusting the
+pre-lock candidate for either. All three pairwise race orderings resolve cleanly, proven against real
+LocalDB (`NoShowVsCheckInVsCancelConcurrencyTests`):
+
+- **Check-in wins** -> `CheckedInAtUtc` is set; no-show's re-read sees it and skips (the `CheckedIn`
+  outcome) - never marked, never notified.
+- **No-show wins** -> `Status` becomes `NoShow`; a subsequent check-in attempt is refused by the
+  ALREADY-EXISTING `Booking.CheckInNotAllowed` conflict (`Status != Confirmed`) - no new rule needed.
+- **Cancel wins** -> `Status` becomes `Cancelled`; no-show's re-read sees it and skips (`AlreadyCompleted`).
+  The reverse order (no-show wins first) leaves a subsequent cancel refused by the ALREADY-EXISTING
+  `Booking.CancellationNotAllowed` conflict (`NoShow` isn't in `CancellableStatuses`) - again, no new rule.
+
+A genuinely concurrent race (shared `SemaphoreSlim` start gate, not just a sequential ordering) between
+check-in and no-show, and separately between cancel and no-show, confirms the booking always ends in exactly
+one of the two valid states - never `NoShow` while also bearing a `CheckedInAtUtc` value. **Any future
+mutator of `Booking.Status`/`CheckedInAtUtc` (a manual admin correction tool, say) must join this same lock
+or it reopens the exact class of race this protocol exists to close.**
+
+**Atomic boundary**: identical shape to every other lock-protected transition in this document - the
+`Status = NoShow` mutation and the `Booking.NoShow` notification enqueue commit together inside the lock's
+one transaction (`INotificationOutboxWriter.EnqueueAsync`'s own `SaveChangesAsync`), or neither does. Proven
+via the same `SaveChangesInterceptor` failure-injection technique used throughout this codebase.
+
+**Recurring bookings**: each occurrence is an independent `Booking` row with its own `StartUtc`/
+`CheckedInAtUtc` - marking one occurrence `NoShow` never touches a sibling occurrence in the same series,
+and there is no cascade (a no-show on one occurrence says nothing about a member's intent for any other).
+
+**Capacity release**: `BookingAvailabilityRepository.ActiveStatuses` is `[Pending, Confirmed]` - `NoShow`
+was never added to it, so capacity releases the instant `Status` flips, with zero additional code. Proven
+for a booking marked PARTWAY through its own window (e.g. a 10:00-12:00 booking processed at 10:15): the
+already-elapsed portion cannot be un-elapsed, but the remainder of the window - and the resource's capacity
+for the rest of the overlap - becomes bookable again immediately.
+
+**`IgnoreQueryFilters()` and `TenantId` retention**: `NoShowReader`'s due query is a system-wide background
+read with no HTTP request/JWT claim to scope it by - the same narrow, already-established exception to the
+global tenant filter `NotificationOutboxReader`/`BookingReminderReader`/`StaleApprovalReader` already use.
+Every projected `DueNoShowBooking` row keeps its own `TenantId` explicitly, and `NoShowProcessor`'s
+per-candidate re-read re-applies an exact `TenantId` + `Id` match under `IgnoreQueryFilters()` rather than
+ever trusting that the bypass alone is safe - a row can never be acted on under the wrong tenant's identity.
+
+**Self-check-in's limits still apply**: see §12, "Why check-in is useful even though it isn't proof of
+physical presence" - no-show processing inherits the exact same limitation, since it is simply the absence
+of that same self-reported signal. QR/NFC/geolocation-based verification remains out of scope.
+
+**The SMTP crash window is unchanged, not newly introduced**: as with every other notification type in this
+system (`docs/background-jobs.md`, "Per-item processing and retry"), a crash between a successful send and
+marking the outbox item `Sent` could theoretically cause a member to receive the same `Booking.NoShow` email
+twice - never zero times silently dropped, and never a duplicate `Booking` status transition or a duplicate
+outbox row (those two guarantees are what this task's atomicity/idempotency actually cover; physical,
+exactly-once email delivery was never a guarantee any part of this system makes).
+
+See `docs/background-jobs.md` ("No-show job") for configuration, the due-query/index/query-plan evidence,
+the notification/email template, cycle ordering, and the full test inventory.

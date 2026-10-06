@@ -121,6 +121,22 @@ public sealed class BackgroundJobsOptionsValidator : IValidateOptions<Background
             }
         }
 
+        // NoShow:Enabled=false (the default) needs none of these checked.
+        if (options.NoShow.Enabled)
+        {
+            if (options.NoShow.BatchSize <= 0)
+            {
+                return ValidateOptionsResult.Fail("BackgroundJobs:NoShow:BatchSize must be a positive number of items.");
+            }
+
+            if (options.NoShow.BatchSize > NoShowOptions.MaxBatchSize)
+            {
+                return ValidateOptionsResult.Fail(
+                    $"BackgroundJobs:NoShow:BatchSize must not exceed {NoShowOptions.MaxBatchSize} - "
+                    + "a misconfigured value should never let one poll pull an unbounded number of candidate bookings into memory.");
+            }
+        }
+
         return ValidateOptionsResult.Success;
     }
 }

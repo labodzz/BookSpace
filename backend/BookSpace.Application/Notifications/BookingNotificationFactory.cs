@@ -13,6 +13,7 @@ public static class BookingNotificationTypes
     public const string Cancellation = "Booking.Cancellation";
     public const string Reminder = "Booking.Reminder";
     public const string ApprovalExpired = "Booking.ApprovalExpired";
+    public const string NoShow = "Booking.NoShow";
 }
 
 // Exactly what a future sender/template needs to render a booking lifecycle notification - booking id,
@@ -41,6 +42,12 @@ public static class BookingNotificationFactory
     public static NotificationOutboxRequest Rejection(Booking booking) => Build(booking, BookingNotificationTypes.Rejection, "rejection");
 
     public static NotificationOutboxRequest Cancellation(Booking booking) => Build(booking, BookingNotificationTypes.Cancellation, "cancellation");
+
+    // Takes a tracked Booking (already re-read and transitioned to NoShow under the resource lock by
+    // NoShowProcessor). Same BookingNotificationPayload shape as Confirmation/Rejection/Cancellation - no
+    // extra field is needed (unlike ApprovalExpired's ApprovalRequestId), since a no-show is purely a fact
+    // about the booking itself, not about some other entity.
+    public static NotificationOutboxRequest NoShow(Booking booking) => Build(booking, BookingNotificationTypes.NoShow, "noshow");
 
     // Takes a DueBookingReminder projection, not a tracked Booking entity: IBookingReminderReader's
     // system-wide due query (see docs/background-jobs.md, "Reminder job") is a narrow, untracked

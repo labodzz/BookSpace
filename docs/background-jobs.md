@@ -1666,11 +1666,240 @@ status code), and without a matching 6th entry in that array, `toBookingStatus(6
 fallen back to `'Pending'` - showing an auto-expired booking as if it were still awaiting approval. Caught
 and fixed as part of this same change, with a regression test.
 
+## No-show job
+
+`NoShowProcessor` (`BookSpace.Infrastructure.Persistence`) is the second step `NotificationOutboxJobCycle`
+runs every cycle - right after stale-approval expiry and before reminder production. It finds `Confirmed`
+bookings nobody checked in whose deadline has passed and, for each one, atomically marks it `NoShow` and
+enqueues a `Booking.NoShow` notification - closing the loop `docs/bookings-and-concurrency.md` ("Booking
+check-in") opened: check-in gives a member a way to prove they showed up; this job is what actually acts on
+the absence of that signal.
+
+### Definition and deadline
+
+A booking is due for no-show processing when ALL of the following hold: `Status == Confirmed`,
+`CheckedInAtUtc == null`, and `DateTimeOffset.UtcNow > Booking.StartUtc + Tenant.NoShowGraceMinutes` (the
+SAME `NoShowGraceMinutes` column `CheckInEligibilityChecker` already uses for the check-in window's closing
+edge - see "Why there is no new grace-period setting" below). The boundary is deliberately **strict**
+(`>`, not `>=`): `CheckInEligibilityChecker`'s own window closes at `nowUtc <= deadline` (inclusive), so at
+the exact deadline instant check-in is still allowed - no-show must never be able to win that same instant,
+or the two rules would contradict each other for one specific moment in time. `NoShowReader.GetDueNoShowsAsync`
+enforces this with `DATEADD(minute, NoShowGraceMinutes, StartUtc) < SYSUTCDATETIME()` - strict `<` on the
+database side, never `<=`.
+
+Marking a booking `NoShow`: sets `Status = NoShow` (an enum member that already existed, unused by any
+handler before this job); leaves `CheckedInAtUtc` as `null` - its absence IS the no-show signal, so it is
+never fabricated or backfilled; frees the resource's capacity immediately (see "Availability" below); and
+enqueues a `Booking.NoShow` notification to the booking owner, atomically with the status change (see
+"Atomicity" below). `BookingStatus.Cancelled` was deliberately NOT reused: a member who actively cancels and
+a member who simply never shows up are different facts a tenant administrator or a future analytics view
+would want to tell apart - conflating them would erase that distinction the same way reusing `Rejected` for
+an automatic approval timeout would have (see "Stale-approval job" above).
+
+### Why there is no new grace-period setting
+
+`BackgroundJobs:NoShow` only configures `Enabled` and `BatchSize` - the orchestration knobs, not the
+business cutoff. `Tenant.NoShowGraceMinutes` already existed (added for the check-in window's closing
+edge, before this job existed) and is already the authoritative, per-tenant answer to "how late is too
+late." Introducing a second, independent `BackgroundJobs:NoShow:MaxGraceMinutes`-style setting would create
+two different, potentially disagreeing answers to the same question - exactly the duplicate-source-of-truth
+problem `StaleApprovalOptions` already rejected for `ApprovalExpiryHours`, and `CheckInLeadMinutes` already
+avoided by living on `Tenant` rather than in `BackgroundJobsOptions`.
+
+### Configuration
+
+```
+BackgroundJobs:
+  NoShow:
+    Enabled: false   # off by default, same reasoning as BackgroundJobs:Enabled/Email:Enabled/Reminder:Enabled/StaleApproval:Enabled
+    BatchSize: 50
+```
+
+No-show marking runs **independently of `Email:Enabled`**: like stale-approval expiry, releasing a
+no-show's capacity is a business-level state transition, not an email-delivery concern. With `Email:Enabled
+= false`, the `Booking.NoShow` notification is still enqueued (so it is ready to send the moment email is
+turned on) - only the SMTP dispatch step is skipped, exactly as already established for the reminder and
+stale-approval steps.
+
+### Due reader and database UTC
+
+`NoShowReader.GetDueNoShowsAsync` joins `Bookings` (`IgnoreQueryFilters()`, `Status = Confirmed`,
+`CheckedInAtUtc IS NULL`) to `Tenants` (no `IgnoreQueryFilters()` needed - `Tenant` carries no `TenantId` of
+its own to filter by, it IS the tenant) to pull each row's own `NoShowGraceMinutes`, filters by the deadline
+expression above, and projects only `BookingId, TenantId, ResourceId, UserId, StartUtc, EndUtc, Quantity` -
+`DueNoShowBooking`, the exact shape `NoShowProcessor`/`BookingNotificationFactory.NoShow` need and nothing
+more. Every projected row keeps its own `TenantId` explicitly (never implied), so `NoShowProcessor`'s
+per-item re-read can re-apply an explicit tenant match even though the read that found it bypassed the
+filter. Ordered by the computed deadline (not raw `StartUtc` - two tenants with different
+`NoShowGraceMinutes` can disagree on which of two similarly-timed bookings became due first), then
+`CreatedAtUtc`, then `Id` as stable tie-breakers, bounded by `Take(batchSize)`.
+
+Confirmed via EF's own command logging against real LocalDB (`NoShowReaderTests.
+GetDueNoShowsAsync_GeneratesASqlTopLimitedQueryUsingDatabaseUtcAndServerSideDeadlineArithmetic`) that the
+generated SQL is a single `SELECT TOP(@p)`, that `DateTimeOffset.UtcNow` becomes `SYSUTCDATETIME()`
+evaluated by the database, and that the per-tenant deadline arithmetic becomes a server-side `DATEADD` -
+never fetched and compared in application code. The "exactly at the deadline" boundary cannot be
+deterministically hit against a *live* database clock (by the time a query runs, the clock has always
+advanced at least a little past whatever instant a row was seeded with) - that exact boundary is instead
+proven deterministically at `NoShowProcessor`'s own re-check, against an injectable `TimeProvider` (see
+"Processor and resource lock" below), the same reasoning `StaleApprovalReaderTests` already established for
+not attempting a live-clock boundary test at the reader level.
+
+### Index
+
+Reuses the EXACT index `IX_Bookings_StartUtc_NoShowCandidate` the check-in task already added (`StartUtc`
+key, filtered `Status = 'Confirmed' AND CheckedInAtUtc IS NULL`, covering `TenantId, UserId, ResourceId,
+EndUtc, Quantity, CreatedAtUtc`) - no new or duplicate index was created. That index's own doc comment in
+`BookSpaceModelConfiguration.cs` already anticipated this exact query shape and already documented that the
+per-tenant grace arithmetic can never be baked into the filter itself (a SQL Server filtered-index predicate
+must be a constant expression, and can never reference another table's column).
+
+**Query plan, reported exactly as measured**: verified against real SQL Server/LocalDB with ~200,000 noise
+rows (a realistic mix of every `BookingStatus`) plus 5 genuine due candidates, using the EXACT SQL text
+`NoShowReaderTests` proved the reader actually generates. Under SET options matching what .NET's `SqlClient`
+actually establishes on every connection (`ANSI_NULLS`, `ANSI_PADDING`, `ANSI_WARNINGS`, `ARITHABORT`,
+`CONCAT_NULL_YIELDS_NULL`, `QUOTED_IDENTIFIER`, `NUMERIC_ROUNDABORT`) - confirmed reproducible after
+`DBCC FREEPROCCACHE` - the optimizer chooses `Index Scan` against `IX_Bookings_StartUtc_NoShowCandidate`
+(`EstimateRows`/`ActualRows` = 5, not 200,000), joined via `Nested Loops` to a small `Clustered Index Seek`
+key lookup back into `Bookings` (also touching only 1-5 actual rows) and a trivial `Clustered Index Scan` of
+`Tenants` (1 row). **No `Clustered Index Scan` of `Bookings` occurs under these conditions.** A `WITH
+(INDEX(IX_Bookings_StartUtc_NoShowCandidate))` hint was used ONLY as a diagnostic comparison (never in
+production code, per this task's own instruction) and produced an IDENTICAL plan - confirming the natural
+choice already matches the best available one.
+
+This is worth contrasting honestly with an earlier, less careful verification attempt: running the exact
+same SQL text through a bare `sqlcmd -Q`/`-i` session (without first setting those same SET options)
+reproducibly fell back to a full `Clustered Index Scan` of `Bookings` instead - SQL Server's well-documented
+rule that a filtered index is only eligible for the optimizer's consideration when the session's SET options
+match specific required values (`QUOTED_IDENTIFIER`/`ANSI_NULLS` chief among them). This is almost certainly
+also the explanation for the less favorable finding recorded against this same index during the check-in
+task's own verification - a `sqlcmd` session-options artifact, not a genuine SQL Server optimizer
+limitation, and not something the real application (whose ADO.NET connections always carry the correct SET
+options) was ever actually exposed to.
+
+### Processor and resource lock
+
+`NoShowProcessor` mirrors `StaleApprovalProcessor`'s shape exactly: holds only `IServiceScopeFactory`,
+creates a fresh `IServiceScope` - and therefore a fresh `BookSpaceDbContext` - for every individual
+candidate, and for each one: resolves `IResourceBookingLock`/`ITenantRepository`/`INotificationOutboxWriter`
+from that fresh scope, calls `resourceBookingLock.RunExclusiveAsync(candidate.ResourceId, ...)`, and only
+THEN re-reads the real, current `Booking` row (`IgnoreQueryFilters()` + explicit `TenantId` + `Id` match -
+never trusting the pre-lock candidate) and a FRESH `Tenant.NoShowGraceMinutes` (not a value implied by the
+candidate, in case an operator changed it between the due query and this item's turn in the batch).
+
+**No-show now shares the SAME resource lock check-in and cancel already share** (see
+`docs/bookings-and-concurrency.md`, "The check-in/cancel race - now closed") - this is not a new locking
+system, it is the third participant in the protocol that fix established. All three race orderings are
+proven against real LocalDB (`NoShowVsCheckInVsCancelConcurrencyTests`):
+
+- **Check-in wins**: `CheckedInAtUtc` is set; the no-show processor's re-read under the lock finds it
+  already set and returns the `CheckedIn` outcome - skipped, never marked, never notified.
+- **No-show wins**: `Status` becomes `NoShow`; a subsequent check-in attempt re-reads under its OWN lock
+  acquisition, finds `Status != Confirmed`, and is refused by the ALREADY-EXISTING `Booking.CheckInNotAllowed`
+  conflict (`CheckInEligibilityChecker`'s `NotConfirmed` case) - no new rule was needed on the check-in side.
+- **Cancel wins**: `Status` becomes `Cancelled`; the no-show processor's re-read finds `Status != Confirmed`
+  and returns the `AlreadyCompleted` outcome. The reverse order (no-show wins first) leaves a subsequent
+  cancel attempt refused by the ALREADY-EXISTING `Booking.CancellationNotAllowed` conflict (`NoShow` isn't
+  in `CancellableStatuses`) - again, no new rule was needed.
+
+A genuinely concurrent race (not just a sequential ordering) between check-in and no-show processing, and
+separately between cancel and no-show processing, is proven via a shared `SemaphoreSlim` start gate: the
+booking always ends in exactly one of the two valid states, never a hybrid (`NoShow` while also bearing a
+`CheckedInAtUtc` value is asserted impossible in every run).
+
+**A future no-show "undo" or manual-correction feature, if ever built, must use this same lock too** -
+anything that mutates `Booking.Status`/`CheckedInAtUtc` outside of it reopens the exact class of race this
+job's own design just closed against.
+
+### Atomicity and idempotency
+
+`NoShowProcessor` stages `booking.Status = BookingStatus.NoShow`, then calls
+`INotificationOutboxWriter.EnqueueAsync` as the LAST step inside the SAME `IResourceBookingLock`-opened
+transaction - `EnqueueAsync`'s own internal `SaveChangesAsync` commits both changes together. A failure
+anywhere in that operation is caught by the lock's own catch-all rollback - proven by injecting a
+`SaveChangesInterceptor` failure right before commit and confirming, from a separate connection, that
+neither the `Status` change nor any outbox row exist afterward.
+
+Idempotency key: `booking:{bookingId}:noshow` - deliberately in the SAME `booking:{bookingId}:{type}` family
+every other booking notification already uses. The `(TenantId, IdempotencyKey)` unique constraint remains
+the sole final authority against a duplicate outbox row; a job restart or a retried candidate is
+additionally protected by the resource lock re-check above, which stops a second marking from ever being
+attempted once the first already committed - proven directly by forcing the SAME already-processed
+candidate through the processor twice, and by two genuinely concurrent attempts on the same candidate
+(`Barrier`-synchronized), both of which leave exactly one `NoShow` transition and exactly one outbox row.
+As with every other notification in this subsystem, this guarantees the booking transition and the outbox
+row are never duplicated - it does **not** claim SMTP delivery itself is exactly-once; a crash between a
+successful send and marking the outbox item `Sent` remains the same, already-documented, already-accepted
+at-least-once delivery window every other notification type in this system has (see "Per-item processing
+and retry" above) - a member could theoretically receive the same no-show email twice, never zero times
+silently dropped, and never a duplicate *Booking* transition.
+
+### Per-candidate failure isolation and logging
+
+Same three-way outcome isolation as `StaleApprovalProcessor`, with two no-show-specific additions
+(`CheckedIn` and `NotYetDue`, both described under "Processor and resource lock" above) alongside the
+shared `AlreadyCompleted`/`Conflict`/`Failed` shapes: an unexpected exception for one candidate is logged
+and isolated, never stopping the rest of the batch; a `ConflictException` from the resource lock itself
+(a SQL Server deadlock/lock-timeout) is transient and simply retried on the next poll; `OperationCanceledException`
+always propagates immediately (application shutdown or a lost job lease), aborting the whole batch before
+the next candidate starts - never swallowed, never logged as an ordinary failure.
+
+`NotificationOutboxJobCycle`'s summary line gains `NoShowCandidateCount`, `NoShowMarkedCount`,
+`NoShowAlreadyCompletedCount`, `NoShowCheckedInCount`, `NoShowNotYetDueCount`, `NoShowConflictCount`,
+`NoShowFailedCount`, and `NoShowNotificationEnqueuedCount` (always equal to `NoShowMarkedCount`, for the
+same atomicity reason `StaleApprovalNotificationEnqueuedCount` always equals `StaleApprovalExpiredCount`).
+Uses the same `CorrelationId`/`JobName`/`JobOwnerId` `BeginScope` as every other step in this cycle. Never
+logs the recipient's email, `PayloadJson`, or any other PII - proven by
+`NoShowProcessorTests.ProcessDueNoShowsAsync_NeverLogsTheRecipientEmailOrAnyPayloadContent`, which asserts
+the booking owner's real seeded email never appears in any captured log line. An unexpected failure in this
+step is caught by `NotificationOutboxJobCycle`'s own `RunNoShowProcessorSafelyAsync` wrapper and swallowed
+into an empty result - it can never kill `BackgroundJobsWorker`'s hosted service or block the reminder
+producer/dispatch steps that follow, and a genuine `OperationCanceledException` is never converted into that
+empty "nothing happened" result; it propagates and aborts the cycle, exactly like every other step here.
+
+### Notification and availability
+
+`Booking.NoShow`, addressed to the booking's owner (`Booking.UserId`), never an approver or admin - the
+same `BookingNotificationPayload` shape (`BookingId, ResourceId, StartUtc, EndUtc, Quantity`) every other
+booking lifecycle notification already uses, since a no-show is purely a fact about the booking itself.
+Subject: "Your BookSpace booking was marked as a no-show." The plain-text/HTML bodies explain, in plain
+language: no check-in was recorded before the grace period ended, the booking was therefore marked as a
+no-show, and its reserved capacity has been released - rendered through the EXISTING
+`BookingEmailTemplateRenderer` (no new template engine, no new payload type - `NoShow` reuses
+`BookingNotificationPayload`/`ParsePayload` exactly like Confirmation/Rejection/Cancellation already do).
+
+`BookingAvailabilityRepository.ActiveStatuses` is `[Pending, Confirmed]` - `NoShow` was never added to it,
+so the moment `Status` flips, this booking's capacity is released automatically, with **zero** additional
+code required - proven directly (`NoShowProcessorTests.ProcessDueNoShowsAsync_ThenAvailability_ShowsCapacityRestoredForThatSlot`)
+against a booking that is only PARTWAY through its own time window when marked: the already-elapsed portion
+of a no-show's slot cannot be un-elapsed, but the remainder of that window (and the rest of the resource's
+capacity for the overlapping period) becomes bookable again immediately, exactly like a `Cancelled` or
+`Rejected` booking already does.
+
+### Recurring bookings
+
+Every occurrence already has its own independent `Booking` row with its own `StartUtc`/`CheckedInAtUtc` -
+marking one occurrence `NoShow` touches nothing about any sibling occurrence in the same series, proven
+directly (`NoShowProcessorTests.ProcessDueNoShowsAsync_WithTwoOccurrencesInASeries_OnlyMarksTheDueOneNeverTheOther`).
+There is no cascade, by design: a member who no-shows one occurrence of a recurring booking has told this
+system nothing about their intent for any OTHER occurrence - automatically cancelling or pre-judging the
+rest of the series is explicitly out of this task's scope (and would be a significant, undiscussed product
+decision, not an infrastructure one).
+
+### What this task does not implement
+
+QR/NFC/geolocation-based check-in verification (self-check-in remains purely a self-reported attendance
+signal - see `docs/bookings-and-concurrency.md`, "Booking check-in - why check-in is useful even though it
+isn't proof of physical presence"); a staff/admin UI for viewing or manually correcting no-show status; any
+penalty, suspension, or reputation system tied to a member's no-show history; automatic cancellation of a
+recurring series after one occurrence's no-show; an ICS feed; Gmail OAuth; a new job-scheduling library; or
+any new distributed-lock mechanism (`NoShowProcessor` uses the exact same `IResourceBookingLock` and the
+exact same cycle-level `IJobLeaseCoordinator` lease every other WP-8 background job in this cycle already
+shares).
+
 ## What the earlier WP-8 branches did not implement
 
-No-show processing (the background job itself - its prerequisite, `Booking.CheckedInAtUtc` and the
-check-in endpoint, now exist; see `docs/bookings-and-concurrency.md`, "Booking check-in"), an ICS feed, and
-any new booking business logic beyond
+An ICS feed, Gmail OAuth, and any new booking business logic beyond
 enqueuing a notification at the point a lifecycle transition is already decided (or, for the reminder job,
 at the point one is approaching), all remain future WP-8 work. In particular: the notification outbox is
 infrastructure for *durable,

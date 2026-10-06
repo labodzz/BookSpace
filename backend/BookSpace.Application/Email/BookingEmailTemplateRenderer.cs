@@ -26,6 +26,9 @@ public sealed class BookingEmailTemplateRenderer : IEmailTemplateRenderer
             BookingNotificationTypes.Rejection => ("Your BookSpace booking was not approved", "Your booking has been not approved."),
             BookingNotificationTypes.Cancellation => ("Your BookSpace booking has been cancelled", "Your booking has been cancelled."),
             BookingNotificationTypes.Reminder => ("Reminder: your BookSpace booking starts soon", "This is a reminder that your booking is starting soon."),
+            BookingNotificationTypes.NoShow => (
+                "Your BookSpace booking was marked as a no-show",
+                "No check-in was recorded before the grace period ended, so this booking was marked as a no-show and its reserved capacity has been released."),
             _ => throw new EmailTemplateException($"Unrecognized notification type '{notificationType}'."),
         };
 

@@ -63,6 +63,9 @@ public sealed class BackgroundJobsOptions
 
     // See docs/background-jobs.md ("Stale-approval job") for the full design.
     public StaleApprovalOptions StaleApproval { get; init; } = new();
+
+    // See docs/background-jobs.md ("No-show job") for the full design.
+    public NoShowOptions NoShow { get; init; } = new();
 }
 
 // Bound from "BackgroundJobs:Reminder" - a nested section of BackgroundJobsOptions, not a sibling
@@ -108,6 +111,27 @@ public sealed class StaleApprovalOptions
 {
     // Same reasoning as ReminderOptions.MaxBatchSize - its own cap because this bounds a genuinely
     // different query (due ApprovalRequests) than BackgroundJobs:BatchSize (due notification-outbox rows).
+    public const int MaxBatchSize = 1000;
+
+    // Off by default, same reasoning as every other per-job Enabled flag in this subsystem.
+    public bool Enabled { get; init; }
+
+    public int BatchSize { get; init; } = 50;
+}
+
+// Bound from "BackgroundJobs:NoShow" - a nested section, same reasoning as ReminderOptions/
+// StaleApprovalOptions. Deliberately has NO grace-period setting of its own: Tenant.NoShowGraceMinutes
+// already exists (added for the check-in window's closing edge - see CheckInEligibilityChecker) and is
+// already the authoritative "how late is too late" answer for this exact tenant. Introducing a second,
+// independent global grace period here would create two different, potentially disagreeing answers to the
+// same question - exactly the duplicate-source-of-truth problem StaleApprovalOptions' own doc comment
+// already rejected for ApprovalExpiryHours. This job only decides whether, and how many at a time, to act
+// on bookings already past that existing per-tenant deadline.
+public sealed class NoShowOptions
+{
+    // Same reasoning as ReminderOptions.MaxBatchSize/StaleApprovalOptions.MaxBatchSize - its own cap because
+    // this bounds a genuinely different query (due Confirmed-but-not-checked-in bookings) than
+    // BackgroundJobs:BatchSize or BackgroundJobs:StaleApproval:BatchSize.
     public const int MaxBatchSize = 1000;
 
     // Off by default, same reasoning as every other per-job Enabled flag in this subsystem.

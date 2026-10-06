@@ -38,10 +38,30 @@ public sealed class JobLeaseCoordinatorIntegrationTests : IAsyncLifetime
     [Fact]
     public async Task TryAcquireAsync_HeartbeatKeepsTheLeaseAliveAcrossSeveralLeaseDurations_ThenDisposeReleasesItForAnotherOwner()
     {
-        // Lease duration deliberately shorter than the total time this test holds it for - without a
-        // working heartbeat renewing it, the lease would expire mid-test and the competing acquire below
-        // would wrongly succeed too early.
-        var coordinatorA = CreateCoordinator("owner-a", leaseDurationSeconds: 2, heartbeatIntervalSeconds: 1);
+        // Root-caused a full-suite-only (never isolated) flake here: JobLeaseStore.TryRenewAsync's WHERE
+        // clause only succeeds while `LeaseExpiresAtUtc > SYSUTCDATETIME()` (see JobLeaseStore.cs) - with
+        // the previous 1s heartbeat against a 2s lease, a renewal only had ONE second of margin (leaseDuration
+        // - heartbeatInterval) before the PREVIOUS lease's own expiry. That is exactly the documented bare
+        // minimum (docs/background-jobs.md, "Heartbeat": "BackgroundJobsOptionsValidator enforces
+        // HeartbeatIntervalSeconds < LeaseDurationSeconds... there is always at least one full heartbeat
+        // interval of margin"), not the documented RECOMMENDED margin (the shipped 20s/60s defaults leave a
+        // 3x margin specifically so "one occasional delayed heartbeat isn't itself a lease loss"). Running
+        // this one test in isolation, that 1-second margin was never actually exercised - Task.Delay's
+        // continuation and the renewal's own new-DbContext-scope/SQL round trip reliably completed in low
+        // single-digit milliseconds with LocalDB otherwise idle. Under the FULL Infrastructure.Tests suite,
+        // dozens of other LocalDB-backed tests in this same process (several themselves multi-threaded,
+        // Barrier-synchronized races) compete for the SAME finite .NET ThreadPool and the SAME single LocalDB
+        // server process; an occasional renewal's continuation sitting queued, or LocalDB itself being busy
+        // servicing another test's connection, for just over that 1-second margin is enough for ONE renewal
+        // to miss its own lease's expiry - genuinely losing the lease by the store's own authoritative
+        // database-clock comparison, correctly reported as lost (JobLeaseStore/JobLeaseCoordinator are both
+        // behaving exactly as documented here - this was never a lease-protocol bug, never a test-isolation
+        // bug, and never a false positive worth masking by weakening the assertion). The fix is to give the
+        // test the SAME proportional margin production's own defaults already recommend: a 3x ratio
+        // (6s lease / 2s heartbeat = 4 full seconds of margin per renewal, instead of 1) comfortably absorbs
+        // the scheduling jitter a fully-parallel test run introduces, while still keeping this test's own
+        // runtime short.
+        var coordinatorA = CreateCoordinator("owner-a", leaseDurationSeconds: 6, heartbeatIntervalSeconds: 2);
 
         await using (var lease = await coordinatorA.TryAcquireAsync(JobName, CancellationToken.None))
         {
@@ -49,17 +69,17 @@ public sealed class JobLeaseCoordinatorIntegrationTests : IAsyncLifetime
 
             // Longer than one lease duration - only survives without the lease being stolen if the
             // heartbeat actually renewed it at least once in the meantime.
-            await Task.Delay(TimeSpan.FromSeconds(5));
+            await Task.Delay(TimeSpan.FromSeconds(8));
 
             Assert.False(lease!.LeaseLostToken.IsCancellationRequested);
 
-            var competingCoordinator = CreateCoordinator("owner-b", leaseDurationSeconds: 2, heartbeatIntervalSeconds: 1);
+            var competingCoordinator = CreateCoordinator("owner-b", leaseDurationSeconds: 6, heartbeatIntervalSeconds: 2);
             var competingAttempt = await competingCoordinator.TryAcquireAsync(JobName, CancellationToken.None);
             Assert.Null(competingAttempt); // still held and kept alive by owner-a's heartbeat
         }
 
         // Disposing owner-a's lease released it - owner-b can now acquire immediately, with no expiry wait.
-        var afterReleaseCoordinator = CreateCoordinator("owner-b", leaseDurationSeconds: 2, heartbeatIntervalSeconds: 1);
+        var afterReleaseCoordinator = CreateCoordinator("owner-b", leaseDurationSeconds: 6, heartbeatIntervalSeconds: 2);
         await using var afterRelease = await afterReleaseCoordinator.TryAcquireAsync(JobName, CancellationToken.None);
         Assert.NotNull(afterRelease);
     }

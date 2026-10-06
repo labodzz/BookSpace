@@ -74,6 +74,16 @@ describe('BookingRowComponent', () => {
     expect([...root().querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Cancel')).toBe(false);
   });
 
+  // Regression: a booking the background no-show job (docs/background-jobs.md, "No-show job") already
+  // marked NoShow is terminal - neither action must ever be offered on it.
+  it('offers neither Cancel nor Check-in for a NoShow booking', () => {
+    configure({ booking: wireBooking({ status: 'NoShow' }) });
+
+    const buttonLabels = [...root().querySelectorAll('button')].map((b) => b.textContent?.trim());
+    expect(buttonLabels).not.toContain('Cancel');
+    expect(buttonLabels.some((label) => label?.startsWith('Check in'))).toBe(false);
+  });
+
   it('shows the cancellation reason for a cancelled booking', () => {
     configure({
       booking: wireBooking({ status: 'Cancelled', cancelledAtUtc: '2026-12-19T10:00:00Z', cancellationReason: 'Plans changed' }),

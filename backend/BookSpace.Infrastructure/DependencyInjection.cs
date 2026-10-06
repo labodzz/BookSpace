@@ -67,6 +67,10 @@ public static class DependencyInjection
         // creates its own fresh per-candidate scope internally.
         services.AddScoped<IStaleApprovalReader, StaleApprovalReader>();
         services.AddScoped<IStaleApprovalProcessor, StaleApprovalProcessor>();
+        // No-show job - see docs/background-jobs.md ("No-show job"). Same Scoped shape as the stale-approval
+        // registrations above, for the identical reasons.
+        services.AddScoped<INoShowReader, NoShowReader>();
+        services.AddScoped<INoShowProcessor, NoShowProcessor>();
         // Scoped, not singleton: it only ever holds IServiceScopeFactory itself (safe at any lifetime),
         // but letting it be Scoped avoids ever forcing a future INotificationSender implementation that
         // needs its own scoped dependencies (a scoped HttpClient, say) into a captive-dependency problem.

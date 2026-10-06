@@ -27,10 +27,25 @@ public sealed class BookingNotificationFactoryTests
         Assert.Equal(BookingNotificationTypes.Confirmation, request.NotificationType);
     }
 
+    [Fact]
+    public void NoShow_BuildsARequestWithTheBookingsOwnTenantAndOwnerAsRecipient()
+    {
+        // The recipient is always the booking OWNER, never an approver or admin - a no-show is a fact
+        // about the owner's own attendance.
+        var booking = CreateBooking();
+
+        var request = BookingNotificationFactory.NoShow(booking);
+
+        Assert.Equal(booking.TenantId, request.TenantId);
+        Assert.Equal(booking.UserId, request.RecipientUserId);
+        Assert.Equal(BookingNotificationTypes.NoShow, request.NotificationType);
+    }
+
     [Theory]
     [InlineData("confirmation")]
     [InlineData("rejection")]
     [InlineData("cancellation")]
+    [InlineData("noshow")]
     public void EachNotificationType_UsesTheDocumentedIdempotencyKeyFormat(string suffix)
     {
         var booking = CreateBooking();
@@ -39,7 +54,8 @@ public sealed class BookingNotificationFactoryTests
         {
             "confirmation" => BookingNotificationFactory.Confirmation(booking),
             "rejection" => BookingNotificationFactory.Rejection(booking),
-            _ => BookingNotificationFactory.Cancellation(booking),
+            "cancellation" => BookingNotificationFactory.Cancellation(booking),
+            _ => BookingNotificationFactory.NoShow(booking),
         };
 
         Assert.Equal($"booking:{booking.Id}:{suffix}", request.IdempotencyKey);
@@ -70,8 +86,9 @@ public sealed class BookingNotificationFactoryTests
         var confirmation = BookingNotificationFactory.Confirmation(booking);
         var rejection = BookingNotificationFactory.Rejection(booking);
         var cancellation = BookingNotificationFactory.Cancellation(booking);
+        var noShow = BookingNotificationFactory.NoShow(booking);
 
-        var keys = new[] { confirmation.IdempotencyKey, rejection.IdempotencyKey, cancellation.IdempotencyKey };
+        var keys = new[] { confirmation.IdempotencyKey, rejection.IdempotencyKey, cancellation.IdempotencyKey, noShow.IdempotencyKey };
         Assert.Equal(keys.Length, keys.Distinct().Count());
     }
 
