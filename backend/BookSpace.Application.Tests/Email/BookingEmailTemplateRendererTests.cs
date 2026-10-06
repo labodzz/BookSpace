@@ -49,6 +49,28 @@ public sealed class BookingEmailTemplateRendererTests
     }
 
     [Fact]
+    public void Render_ForNoShow_ProducesANoShowSubjectAndBody()
+    {
+        var content = _renderer.Render(BookingNotificationTypes.NoShow, PayloadJson(), "Ana Anic");
+
+        Assert.Equal("Your BookSpace booking was marked as a no-show", content.Subject);
+        Assert.Contains("no-show", content.PlainTextBody);
+        Assert.Contains("no-show", content.HtmlBody);
+        Assert.Contains("released", content.PlainTextBody);
+    }
+
+    [Fact]
+    public void Render_ForNoShow_IncludesBookingIdResourceIdTimesAndQuantity()
+    {
+        var content = _renderer.Render(BookingNotificationTypes.NoShow, PayloadJson(), "Ana Anic");
+
+        Assert.Contains(SamplePayload.BookingId.ToString(), content.PlainTextBody);
+        Assert.Contains(SamplePayload.ResourceId.ToString(), content.PlainTextBody);
+        Assert.Contains("2026-03-01 09:00 UTC", content.PlainTextBody);
+        Assert.Contains("2026-03-01 10:00 UTC", content.PlainTextBody);
+    }
+
+    [Fact]
     public void Render_ForReminder_ProducesAReminderSubjectAndBody()
     {
         var content = _renderer.Render(BookingNotificationTypes.Reminder, PayloadJson(), "Ana Anic");

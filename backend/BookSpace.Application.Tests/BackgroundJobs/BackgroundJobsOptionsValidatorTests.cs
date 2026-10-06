@@ -283,4 +283,45 @@ public sealed class BackgroundJobsOptionsValidatorTests
 
         Assert.True(result.Succeeded);
     }
+
+    // --- NoShow (nested BackgroundJobs:NoShow section) - disabled by default, so none of these fields are
+    // required until NoShow:Enabled is explicitly true ---
+
+    [Fact]
+    public void Validate_WithNoShowDisabledAndAnInvalidBatchSize_StillSucceeds()
+    {
+        var result = _validator.Validate(
+            name: null, new BackgroundJobsOptions { NoShow = new NoShowOptions { Enabled = false, BatchSize = -1 } });
+
+        Assert.True(result.Succeeded);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Validate_WithNoShowEnabledAndAZeroOrNegativeBatchSize_Fails(int batchSize)
+    {
+        var result = _validator.Validate(
+            name: null, new BackgroundJobsOptions { NoShow = new NoShowOptions { Enabled = true, BatchSize = batchSize } });
+
+        Assert.True(result.Failed);
+    }
+
+    [Fact]
+    public void Validate_WithNoShowEnabledAndBatchSizeAboveTheAllowedMaximum_Fails()
+    {
+        var result = _validator.Validate(
+            name: null,
+            new BackgroundJobsOptions { NoShow = new NoShowOptions { Enabled = true, BatchSize = NoShowOptions.MaxBatchSize + 1 } });
+
+        Assert.True(result.Failed);
+    }
+
+    [Fact]
+    public void Validate_WithNoShowEnabledAndTheDefaultBatchSize_Succeeds()
+    {
+        var result = _validator.Validate(name: null, new BackgroundJobsOptions { NoShow = new NoShowOptions { Enabled = true } });
+
+        Assert.True(result.Succeeded);
+    }
 }

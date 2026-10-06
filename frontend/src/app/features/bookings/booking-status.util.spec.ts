@@ -22,11 +22,22 @@ describe('statusPillClass', () => {
   it('builds a lowercased status-pill class for Expired, same pattern as every other status', () => {
     expect(statusPillClass('Expired')).toBe('status-pill status-pill--expired');
   });
+
+  it('builds a lowercased status-pill class for NoShow (the no-show job - WP-8)', () => {
+    expect(statusPillClass('NoShow')).toBe('status-pill status-pill--noshow');
+  });
 });
 
 describe('canCancelBooking', () => {
   it('never allows cancelling an Expired booking - it is already terminal', () => {
     expect(canCancelBooking('Expired')).toBe(false);
+  });
+
+  // Regression: NoShow (set by the background no-show job - see docs/background-jobs.md, "No-show job")
+  // is a terminal status - a member must never be offered a Cancel action on a booking the system already
+  // closed out.
+  it('never allows cancelling a NoShow booking - it is already terminal', () => {
+    expect(canCancelBooking('NoShow')).toBe(false);
   });
 });
 
@@ -63,5 +74,11 @@ describe('canCheckInBooking', () => {
 
   it('refuses check-in for a booking already checked in, even within the window', () => {
     expect(canCheckInBooking(confirmedBooking({ checkedInAtUtc: '2026-09-02T09:50:00Z' }), new Date('2026-09-02T10:00:00Z'))).toBe(false);
+  });
+
+  // Regression: a booking the no-show job already closed out must never offer check-in again, even if the
+  // (now purely informational) window timestamps would otherwise still straddle "now".
+  it('refuses check-in for a NoShow booking, even within what would have been its window', () => {
+    expect(canCheckInBooking(confirmedBooking({ status: 'NoShow' }), new Date('2026-09-02T10:00:00Z'))).toBe(false);
   });
 });

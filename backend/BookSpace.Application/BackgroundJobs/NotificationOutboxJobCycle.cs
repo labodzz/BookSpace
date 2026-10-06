@@ -20,12 +20,13 @@ namespace BookSpace.Application.BackgroundJobs;
 // short-circuit around dispatch only, job-run correlation, and the one summary log line a cycle emits when
 // it completes normally.
 //
-// Kept this name rather than renamed despite now owning three phases (expire stale approvals, produce
-// reminders, then dispatch the outbox): all three exist in service of the same one job - making sure the
-// notification outbox gets populated (by whichever business event decided a notification is needed) and
-// drained - so "NotificationOutboxJobCycle" still describes the whole of what this class does, not just a
-// third of it. See docs/background-jobs.md ("Reminder job - cycle ordering" and "Stale-approval job -
-// cycle ordering") for why this was a deliberate decision, not an oversight.
+// Kept this name rather than renamed despite now owning four phases (expire stale approvals, mark
+// no-shows, produce reminders, then dispatch the outbox): all four exist in service of the same one job -
+// making sure the notification outbox gets populated (by whichever business event decided a notification
+// is needed) and drained - so "NotificationOutboxJobCycle" still describes the whole of what this class
+// does, not just a quarter of it. See docs/background-jobs.md ("Reminder job - cycle ordering", "Stale-
+// approval job - cycle ordering", and "No-show job - cycle ordering") for why this was a deliberate
+// decision, not an oversight.
 //
 // Safe to register Scoped as before: every dependency here (the reader, the processor, the reminder
 // producer, IOptions<T>, IBackgroundJobInstanceIdentity, ICorrelationIdContext, TimeProvider, ILogger) is
@@ -33,6 +34,7 @@ namespace BookSpace.Application.BackgroundJobs;
 // scope BackgroundJobsWorker already creates - it is never held by that singleton worker itself.
 public sealed class NotificationOutboxJobCycle(
     IStaleApprovalProcessor staleApprovalProcessor,
+    INoShowProcessor noShowProcessor,
     IReminderProducer reminderProducer,
     INotificationOutboxReader reader,
     INotificationOutboxProcessor processor,
@@ -76,12 +78,22 @@ public sealed class NotificationOutboxJobCycle(
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Runs first, and - like the reminder producer below - regardless of Email:Enabled: expiring a
-        // stale approval (and releasing the booking's capacity) is a business-level state transition
-        // independent of whether the email transport happens to be configured right now. Isolated with its
-        // own try/catch: an unexpected failure here must never block the reminder producer or the dispatch
-        // step that follow - see docs/background-jobs.md ("Stale-approval job - cycle ordering").
+        // Runs first, and - like the steps below - regardless of Email:Enabled: expiring a stale approval
+        // (and releasing the booking's capacity) is a business-level state transition independent of
+        // whether the email transport happens to be configured right now. Isolated with its own try/catch:
+        // an unexpected failure here must never block the no-show step, the reminder producer, or the
+        // dispatch step that follow - see docs/background-jobs.md ("Stale-approval job - cycle ordering").
         var staleApprovalResult = await RunStaleApprovalProcessorSafelyAsync(cancellationToken);
+
+        // Runs second, immediately after stale-approval expiry and before reminder production - see
+        // docs/background-jobs.md ("No-show job - cycle ordering") for why this exact position: a booking
+        // already past its no-show deadline has no business being reminded about a start time that has
+        // already come and gone, so no-show marking must happen before the reminder producer's own due
+        // query runs. Also runs regardless of Email:Enabled, for the identical reason stale-approval does -
+        // marking a booking NoShow (and releasing its capacity) is a business-level transition, not an
+        // email-delivery concern. Isolated with its own try/catch: an unexpected failure here must never
+        // block the reminder producer or the dispatch step that follow.
+        var noShowResult = await RunNoShowProcessorSafelyAsync(cancellationToken);
 
         // Runs regardless of Email:Enabled, deliberately - producing a reminder (a row in the
         // notification outbox) is a business-level decision independent of whether the email TRANSPORT
@@ -100,7 +112,7 @@ public sealed class NotificationOutboxJobCycle(
             // mark real due items DeadLettered the first time this cycle ever ran with items present -
             // see docs/background-jobs.md ("Email disabled behavior").
             logger.LogInformation("Notification outbox cycle dispatch skipped - Email:Enabled is false.");
-            LogSummary(correlationId, staleApprovalResult, reminderResult, jobOptions.Value.BatchSize, pickedCount: 0, results: [], timeProvider.GetElapsedTime(startTimestamp));
+            LogSummary(correlationId, staleApprovalResult, noShowResult, reminderResult, jobOptions.Value.BatchSize, pickedCount: 0, results: [], timeProvider.GetElapsedTime(startTimestamp));
             return;
         }
 
@@ -109,7 +121,7 @@ public sealed class NotificationOutboxJobCycle(
 
         if (batch.Count == 0)
         {
-            LogSummary(correlationId, staleApprovalResult, reminderResult, batchSize, pickedCount: 0, results: [], timeProvider.GetElapsedTime(startTimestamp));
+            LogSummary(correlationId, staleApprovalResult, noShowResult, reminderResult, batchSize, pickedCount: 0, results: [], timeProvider.GetElapsedTime(startTimestamp));
             return;
         }
 
@@ -130,7 +142,7 @@ public sealed class NotificationOutboxJobCycle(
             cancellationToken.ThrowIfCancellationRequested();
         }
 
-        LogSummary(correlationId, staleApprovalResult, reminderResult, batchSize, batch.Count, results, timeProvider.GetElapsedTime(startTimestamp));
+        LogSummary(correlationId, staleApprovalResult, noShowResult, reminderResult, batchSize, batch.Count, results, timeProvider.GetElapsedTime(startTimestamp));
     }
 
     // Same isolation shape as RunReminderProducerSafelyAsync below: cancellation always propagates (a lost
@@ -152,6 +164,29 @@ public sealed class NotificationOutboxJobCycle(
             logger.LogError(
                 ex, "Stale-approval processor failed unexpectedly for this cycle; continuing to the reminder producer and dispatch.");
             return StaleApprovalCycleResult.Empty;
+        }
+    }
+
+    // Same isolation shape as RunStaleApprovalProcessorSafelyAsync/RunReminderProducerSafelyAsync:
+    // cancellation always propagates (a lost lease or application shutdown must abort the whole cycle,
+    // including the reminder producer and dispatch steps that haven't run yet), but an unexpected exception
+    // is logged and swallowed into an empty result so one job's bug can never block the others sharing this
+    // cycle.
+    private async Task<NoShowCycleResult> RunNoShowProcessorSafelyAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await noShowProcessor.ProcessDueNoShowsAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex, "No-show processor failed unexpectedly for this cycle; continuing to the reminder producer and dispatch.");
+            return NoShowCycleResult.Empty;
         }
     }
 
@@ -192,6 +227,7 @@ public sealed class NotificationOutboxJobCycle(
     private void LogSummary(
         string correlationId,
         StaleApprovalCycleResult staleApprovalResult,
+        NoShowCycleResult noShowResult,
         ReminderProducerResult reminderResult,
         int requestedBatchSize,
         int pickedCount,
@@ -209,6 +245,10 @@ public sealed class NotificationOutboxJobCycle(
             + "StaleApprovalCandidateCount={StaleApprovalCandidateCount} StaleApprovalExpiredCount={StaleApprovalExpiredCount} "
             + "StaleApprovalAlreadyCompletedCount={StaleApprovalAlreadyCompletedCount} StaleApprovalConflictCount={StaleApprovalConflictCount} "
             + "StaleApprovalFailedCount={StaleApprovalFailedCount} StaleApprovalNotificationEnqueuedCount={StaleApprovalNotificationEnqueuedCount} "
+            + "NoShowCandidateCount={NoShowCandidateCount} NoShowMarkedCount={NoShowMarkedCount} "
+            + "NoShowAlreadyCompletedCount={NoShowAlreadyCompletedCount} NoShowCheckedInCount={NoShowCheckedInCount} "
+            + "NoShowNotYetDueCount={NoShowNotYetDueCount} NoShowConflictCount={NoShowConflictCount} "
+            + "NoShowFailedCount={NoShowFailedCount} NoShowNotificationEnqueuedCount={NoShowNotificationEnqueuedCount} "
             + "ReminderCandidateCount={ReminderCandidateCount} ReminderEnqueuedCount={ReminderEnqueuedCount} "
             + "ReminderDuplicateCount={ReminderDuplicateCount} "
             + "RequestedBatchSize={RequestedBatchSize} PickedCount={PickedCount} SucceededCount={SucceededCount} "
@@ -223,6 +263,14 @@ public sealed class NotificationOutboxJobCycle(
             staleApprovalResult.ConflictCount,
             staleApprovalResult.FailedCount,
             staleApprovalResult.NotificationEnqueuedCount,
+            noShowResult.CandidateCount,
+            noShowResult.MarkedNoShowCount,
+            noShowResult.AlreadyCompletedCount,
+            noShowResult.CheckedInCount,
+            noShowResult.NotYetDueCount,
+            noShowResult.ConflictCount,
+            noShowResult.FailedCount,
+            noShowResult.NotificationEnqueuedCount,
             reminderResult.CandidateCount,
             reminderResult.EnqueuedCount,
             reminderResult.DuplicateCount,
