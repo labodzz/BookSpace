@@ -23,11 +23,24 @@
         }
       </p>
     }
+    @if (booking().checkedInAtUtc) {
+      <p class="booking-row__checkin">Checked in at {{ checkedInAtLocalTime() }}</p>
+    } @else if (showCheckIn()) {
+      <p class="booking-row__checkin field-hint">
+        Check-in window: {{ checkInWindowLocalRange() }}. If you don't check in by the end of that window, this
+        booking may be released.
+      </p>
+    }
   </div>
   <div class="booking-row__end">
     <span [class]="statusPillClass(booking().status)">{{ statusLabel(booking().status) }}</span>
     @if (canCancel()) {
       <button type="button" class="btn btn-secondary" (click)="requestCancel()">Cancel</button>
+    }
+    @if (showCheckIn()) {
+      <button type="button" class="btn btn-primary" [disabled]="!canCheckIn() || checkInSubmitting()" (click)="requestCheckIn()">
+        {{ checkInSubmitting() ? 'Checking in…' : 'Check in' }}
+      </button>
     }
   </div>
 </div>

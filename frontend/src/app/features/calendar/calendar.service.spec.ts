@@ -21,6 +21,9 @@ function booking(id: string, startUtc: string): OwnBookingWire {
     cancellationReason: null,
     seriesId: null,
     timeZoneId: 'UTC',
+    checkedInAtUtc: null,
+    checkInWindowOpensAtUtc: startUtc,
+    checkInWindowClosesAtUtc: startUtc,
   };
 }
 

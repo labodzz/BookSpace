@@ -1,7 +1,7 @@
 import { Component, input, output } from '@angular/core';
-import { canCancelBooking, statusLabel, statusPillClass } from '../../booking-status.util';
+import { canCancelBooking, canCheckInBooking, statusLabel, statusPillClass } from '../../booking-status.util';
 import { OwnBooking } from '../../booking.models';
-import { DualZoneRange, detectViewerTimeZone, formatDualZoneRange } from '../../local-time.util';
+import { DualZoneRange, detectViewerTimeZone, formatDualZoneRange, toLocalDateTime } from '../../local-time.util';
 
 // One booking's row, shared by My Bookings' plain (one-off) rows and by each occurrence listed inside an
 // expanded recurring-series group - `compact` hides the resource name and the "recurring" badge for the
@@ -17,8 +17,12 @@ export class BookingRowComponent {
   readonly booking = input.required<OwnBooking>();
   readonly resourceName = input.required<string>();
   readonly compact = input(false);
+  // True while a check-in request for THIS booking is in flight - set by the parent, which tracks it per
+  // booking id so checking in one row never disables another's button.
+  readonly checkInSubmitting = input(false);
 
   readonly cancelRequested = output<OwnBooking>();
+  readonly checkInRequested = output<OwnBooking>();
 
   protected readonly statusPillClass = statusPillClass;
   protected readonly statusLabel = statusLabel;
@@ -41,5 +45,30 @@ export class BookingRowComponent {
 
   protected requestCancel(): void {
     this.cancelRequested.emit(this.booking());
+  }
+
+  // Shown whenever this booking COULD still be checked in today (Confirmed, not yet checked in) -
+  // regardless of whether the window is currently open; canCheckIn() (below) separately decides whether
+  // the button is enabled right now, so the rule hint stays visible even before/after the window.
+  protected showCheckIn(): boolean {
+    return this.booking().status === 'Confirmed' && this.booking().checkedInAtUtc === null;
+  }
+
+  protected canCheckIn(): boolean {
+    return canCheckInBooking(this.booking());
+  }
+
+  protected requestCheckIn(): void {
+    this.checkInRequested.emit(this.booking());
+  }
+
+  protected checkedInAtLocalTime(): string {
+    const checkedInAtUtc = this.booking().checkedInAtUtc;
+    return checkedInAtUtc ? toLocalDateTime(checkedInAtUtc).toFormat('cccc, LLL d, HH:mm') : '';
+  }
+
+  protected checkInWindowLocalRange(): string {
+    const booking = this.booking();
+    return `${toLocalDateTime(booking.checkInWindowOpensAtUtc).toFormat('HH:mm')}–${toLocalDateTime(booking.checkInWindowClosesAtUtc).toFormat('HH:mm')}`;
   }
 }

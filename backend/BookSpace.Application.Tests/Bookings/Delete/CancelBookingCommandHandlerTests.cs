@@ -26,22 +26,31 @@ public sealed class CancelBookingCommandHandlerTests
             .Setup(w => w.EnqueueManyAsync(It.IsAny<IReadOnlyList<NotificationOutboxRequest>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyList<NotificationOutboxRequest> requests, CancellationToken _) =>
                 (IReadOnlyList<EnqueueNotificationResult>)requests.Select(_ => new EnqueueNotificationResult(EnqueueOutcome.Created, Guid.NewGuid())).ToList());
-        return new CancelBookingCommandHandler(_bookingRepository.Object, _currentUserContext.Object, _notificationOutboxWriter.Object);
+        return new CancelBookingCommandHandler(
+            new PassThroughResourceBookingLock(), _bookingRepository.Object, _currentUserContext.Object, _notificationOutboxWriter.Object);
     }
 
-    private static Booking CreateBooking(BookingStatus status = BookingStatus.Confirmed) => new()
+    private static Booking CreateBooking(BookingStatus status = BookingStatus.Confirmed, DateTimeOffset? checkedInAtUtc = null) => new()
     {
         Id = Guid.NewGuid(), TenantId = TenantId, ResourceId = Guid.NewGuid(), UserId = UserId,
         StartUtc = DateTimeOffset.UtcNow.AddHours(1), EndUtc = DateTimeOffset.UtcNow.AddHours(2),
-        Quantity = 1, Status = status, CreatedAtUtc = DateTimeOffset.UtcNow,
+        Quantity = 1, Status = status, CheckedInAtUtc = checkedInAtUtc, CreatedAtUtc = DateTimeOffset.UtcNow,
     };
+
+    // The handler now resolves ResourceId (a pre-lock projection) before ever loading the tracked booking -
+    // see CancelBookingCommandHandler.Handle. Every test exercising a real, found booking must set up both.
+    private void SetupFoundBooking(Booking booking)
+    {
+        _bookingRepository.Setup(r => r.FindResourceIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking.ResourceId);
+        _bookingRepository.Setup(r => r.FindByIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking);
+    }
 
     [Fact]
     public async Task Handle_WithOwnConfirmedBooking_CancelsAndSaves()
     {
         var booking = CreateBooking(BookingStatus.Confirmed);
         _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
-        _bookingRepository.Setup(r => r.FindByIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking);
+        SetupFoundBooking(booking);
         var sut = CreateSut();
 
         var result = await sut.Handle(new CancelBookingCommandRequest(booking.Id), CancellationToken.None);
@@ -69,7 +78,7 @@ public sealed class CancelBookingCommandHandlerTests
         // EnqueueAsync throws, NOTHING in this handler commits anything.
         var booking = CreateBooking(BookingStatus.Confirmed);
         _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
-        _bookingRepository.Setup(r => r.FindByIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking);
+        SetupFoundBooking(booking);
         var sut = CreateSut();
         _notificationOutboxWriter
             .Setup(w => w.EnqueueManyAsync(It.IsAny<IReadOnlyList<NotificationOutboxRequest>>(), It.IsAny<CancellationToken>()))
@@ -87,7 +96,7 @@ public sealed class CancelBookingCommandHandlerTests
         // retried cancel request (the client resending after a timeout, say) must not surface it as one.
         var booking = CreateBooking(BookingStatus.Confirmed);
         _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
-        _bookingRepository.Setup(r => r.FindByIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking);
+        SetupFoundBooking(booking);
         _notificationOutboxWriter
             .Setup(w => w.EnqueueManyAsync(It.IsAny<IReadOnlyList<NotificationOutboxRequest>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyList<NotificationOutboxRequest> requests, CancellationToken _) =>
@@ -107,7 +116,7 @@ public sealed class CancelBookingCommandHandlerTests
         // call. Proven here at the handler boundary: simulating "not found" (what the filtered repository
         // actually returns for a cross-tenant id) must never enqueue anything.
         _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
-        _bookingRepository.Setup(r => r.FindByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync((Booking?)null);
+        _bookingRepository.Setup(r => r.FindResourceIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync((Guid?)null);
         var sut = CreateSut();
 
         await Assert.ThrowsAsync<NotFoundException>(() => sut.Handle(new CancelBookingCommandRequest(Guid.NewGuid()), CancellationToken.None));
@@ -119,7 +128,7 @@ public sealed class CancelBookingCommandHandlerTests
     public async Task Handle_WithUnknownBooking_ThrowsNotFoundException()
     {
         _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
-        _bookingRepository.Setup(r => r.FindByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync((Booking?)null);
+        _bookingRepository.Setup(r => r.FindResourceIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync((Guid?)null);
         var sut = CreateSut();
 
         var exception = await Assert.ThrowsAsync<NotFoundException>(() =>
@@ -137,7 +146,7 @@ public sealed class CancelBookingCommandHandlerTests
         booking.UserId = Guid.NewGuid(); // a different user's booking
         _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
         _currentUserContext.SetupGet(c => c.Roles).Returns([]); // a plain member, no admin override
-        _bookingRepository.Setup(r => r.FindByIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking);
+        SetupFoundBooking(booking);
         var sut = CreateSut();
 
         var exception = await Assert.ThrowsAsync<NotFoundException>(() =>
@@ -157,7 +166,7 @@ public sealed class CancelBookingCommandHandlerTests
         booking.UserId = Guid.NewGuid();
         _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
         _currentUserContext.SetupGet(c => c.Roles).Returns(["Member"]);
-        _bookingRepository.Setup(r => r.FindByIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking);
+        SetupFoundBooking(booking);
         var sut = CreateSut();
 
         var exception = await Assert.ThrowsAsync<NotFoundException>(() =>
@@ -177,7 +186,7 @@ public sealed class CancelBookingCommandHandlerTests
         var booking = CreateBooking(BookingStatus.Confirmed); // owned by UserId, not adminUserId
         _currentUserContext.SetupGet(c => c.UserId).Returns(adminUserId);
         _currentUserContext.SetupGet(c => c.Roles).Returns([role]);
-        _bookingRepository.Setup(r => r.FindByIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking);
+        SetupFoundBooking(booking);
         var sut = CreateSut();
 
         var result = await sut.Handle(
@@ -213,7 +222,7 @@ public sealed class CancelBookingCommandHandlerTests
 
         _currentUserContext.SetupGet(c => c.UserId).Returns(adminUserId);
         _currentUserContext.SetupGet(c => c.Roles).Returns(["TenantAdmin"]);
-        _bookingRepository.Setup(r => r.FindByIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking);
+        SetupFoundBooking(booking);
         _bookingRepository
             .Setup(r => r.GetBySeriesIdAsync(seriesId, It.IsAny<CancellationToken>()))
             .ReturnsAsync([booking, laterOccurrence]);
@@ -244,7 +253,7 @@ public sealed class CancelBookingCommandHandlerTests
         booking.CancelledAtUtc = DateTimeOffset.UtcNow.AddDays(-1);
         booking.CancelledByUserId = UserId;
         _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
-        _bookingRepository.Setup(r => r.FindByIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking);
+        SetupFoundBooking(booking);
         var sut = CreateSut();
 
         var result = await sut.Handle(new CancelBookingCommandRequest(booking.Id), CancellationToken.None);
@@ -263,7 +272,7 @@ public sealed class CancelBookingCommandHandlerTests
     {
         var booking = CreateBooking(status);
         _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
-        _bookingRepository.Setup(r => r.FindByIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking);
+        SetupFoundBooking(booking);
         var sut = CreateSut();
 
         var exception = await Assert.ThrowsAsync<ConflictException>(() =>
@@ -274,6 +283,61 @@ public sealed class CancelBookingCommandHandlerTests
         _notificationOutboxWriter.Verify(w => w.EnqueueManyAsync(It.IsAny<IReadOnlyList<NotificationOutboxRequest>>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    // A checked-in booking is never retroactively cancelled, by anyone - the TenantAdmin/SysAdmin bypass
+    // only ever widens WHO may act (the ownership check), never WHICH states are eligible (the status
+    // check below, unconditional for every caller including admins - confirmed by reading
+    // CancelBookingCommandHandler.CancelUnderLockAsync: CancellableStatuses has no role branch, so this
+    // rule follows that exact, already-existing precedent rather than inventing a new one).
+    [Fact]
+    public async Task Handle_WithAlreadyCheckedInBooking_ThrowsConflictExceptionAndNeverTouchesCheckedInAtUtc()
+    {
+        var checkedInAtUtc = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var booking = CreateBooking(BookingStatus.Confirmed, checkedInAtUtc);
+        _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
+        SetupFoundBooking(booking);
+        var sut = CreateSut();
+
+        var exception = await Assert.ThrowsAsync<ConflictException>(() =>
+            sut.Handle(new CancelBookingCommandRequest(booking.Id), CancellationToken.None));
+
+        Assert.Equal(ErrorCodes.BookingAlreadyCheckedIn, exception.ErrorCode);
+        Assert.Equal(BookingStatus.Confirmed, booking.Status); // never mutated
+        Assert.Equal(checkedInAtUtc, booking.CheckedInAtUtc); // never cleared or changed
+        _notificationOutboxWriter.Verify(w => w.EnqueueManyAsync(It.IsAny<IReadOnlyList<NotificationOutboxRequest>>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData("TenantAdmin")]
+    [InlineData("SysAdmin")]
+    public async Task Handle_WithPrivilegedRoleCancellingAnAlreadyCheckedInBooking_StillThrowsConflictException(string role)
+    {
+        var adminUserId = Guid.NewGuid();
+        var booking = CreateBooking(BookingStatus.Confirmed, DateTimeOffset.UtcNow.AddMinutes(-5)); // owned by UserId, not adminUserId
+        _currentUserContext.SetupGet(c => c.UserId).Returns(adminUserId);
+        _currentUserContext.SetupGet(c => c.Roles).Returns([role]);
+        SetupFoundBooking(booking);
+        var sut = CreateSut();
+
+        var exception = await Assert.ThrowsAsync<ConflictException>(() =>
+            sut.Handle(new CancelBookingCommandRequest(booking.Id), CancellationToken.None));
+
+        Assert.Equal(ErrorCodes.BookingAlreadyCheckedIn, exception.ErrorCode);
+    }
+
+    [Fact]
+    public async Task Handle_PropagatesCancellation_WithoutTranslatingItIntoABusinessConflict()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        _bookingRepository
+            .Setup(r => r.FindResourceIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new OperationCanceledException());
+        var sut = CreateSut();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            sut.Handle(new CancelBookingCommandRequest(Guid.NewGuid()), cts.Token));
+    }
+
     [Fact]
     public async Task Handle_CancelRemainingSeriesFalse_OnlyCancelsThisOneOccurrenceLeavingOthersUntouched()
     {
@@ -281,7 +345,7 @@ public sealed class CancelBookingCommandHandlerTests
         var booking = CreateBooking();
         booking.SeriesId = seriesId;
         _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
-        _bookingRepository.Setup(r => r.FindByIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking);
+        SetupFoundBooking(booking);
         var sut = CreateSut();
 
         var result = await sut.Handle(new CancelBookingCommandRequest(booking.Id, CancelRemainingSeries: false), CancellationToken.None);
@@ -318,7 +382,7 @@ public sealed class CancelBookingCommandHandlerTests
         };
 
         _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
-        _bookingRepository.Setup(r => r.FindByIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking);
+        SetupFoundBooking(booking);
         _bookingRepository
             .Setup(r => r.GetBySeriesIdAsync(seriesId, It.IsAny<CancellationToken>()))
             .ReturnsAsync([earlierOccurrence, booking, laterOccurrence, alreadyCompletedLaterOccurrence]);
@@ -369,7 +433,7 @@ public sealed class CancelBookingCommandHandlerTests
         };
 
         _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
-        _bookingRepository.Setup(r => r.FindByIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking);
+        SetupFoundBooking(booking);
         _bookingRepository
             .Setup(r => r.GetBySeriesIdAsync(seriesId, It.IsAny<CancellationToken>()))
             .ReturnsAsync([booking, alreadyRejectedLaterOccurrence, alreadyCancelledLaterOccurrence]);
@@ -382,6 +446,57 @@ public sealed class CancelBookingCommandHandlerTests
         Assert.Equal(BookingStatus.Cancelled, alreadyCancelledLaterOccurrence.Status);
         Assert.DoesNotContain(alreadyRejectedLaterOccurrence.Id, result.CascadedOccurrenceIds);
         Assert.DoesNotContain(alreadyCancelledLaterOccurrence.Id, result.CascadedOccurrenceIds);
+    }
+
+    // Proves no partial/arbitrary cascade state: a checked-in sibling is silently EXCLUDED from the
+    // cascade (same treatment as an already-Cancelled/Rejected/Completed sibling), never causes the loop to
+    // throw or abort - the rest of the series is still cancelled in the same call, in the same commit.
+    [Fact]
+    public async Task Handle_CancelRemainingSeriesTrue_SkipsACheckedInLaterOccurrenceButStillCancelsTheRestOfTheSeries()
+    {
+        var seriesId = Guid.NewGuid();
+        var anchor = DateTimeOffset.UtcNow.AddDays(5);
+        var booking = CreateBooking();
+        booking.SeriesId = seriesId;
+        booking.StartUtc = anchor;
+        booking.EndUtc = anchor.AddHours(1);
+
+        var checkedInLaterOccurrence = new Booking
+        {
+            Id = Guid.NewGuid(), TenantId = TenantId, ResourceId = booking.ResourceId, UserId = UserId, SeriesId = seriesId,
+            StartUtc = anchor.AddDays(1), EndUtc = anchor.AddDays(1).AddHours(1), Quantity = 1, Status = BookingStatus.Confirmed,
+            CheckedInAtUtc = anchor.AddDays(1).AddMinutes(-5), CreatedAtUtc = anchor,
+        };
+        var stillEligibleLaterOccurrence = new Booking
+        {
+            Id = Guid.NewGuid(), TenantId = TenantId, ResourceId = booking.ResourceId, UserId = UserId, SeriesId = seriesId,
+            StartUtc = anchor.AddDays(2), EndUtc = anchor.AddDays(2).AddHours(1), Quantity = 1, Status = BookingStatus.Confirmed, CreatedAtUtc = anchor,
+        };
+
+        _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
+        SetupFoundBooking(booking);
+        _bookingRepository
+            .Setup(r => r.GetBySeriesIdAsync(seriesId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([booking, checkedInLaterOccurrence, stillEligibleLaterOccurrence]);
+        var sut = CreateSut();
+
+        var result = await sut.Handle(new CancelBookingCommandRequest(booking.Id, CancelRemainingSeries: true), CancellationToken.None);
+
+        Assert.Equal(BookingStatus.Cancelled, booking.Status);
+        Assert.Equal(BookingStatus.Cancelled, stillEligibleLaterOccurrence.Status);
+        Assert.Contains(stillEligibleLaterOccurrence.Id, result.CascadedOccurrenceIds);
+        // Never retroactively cancelled, and never even attempted - status/CheckedInAtUtc both untouched.
+        Assert.Equal(BookingStatus.Confirmed, checkedInLaterOccurrence.Status);
+        Assert.NotNull(checkedInLaterOccurrence.CheckedInAtUtc);
+        Assert.DoesNotContain(checkedInLaterOccurrence.Id, result.CascadedOccurrenceIds);
+        // Exactly one notification per ACTUALLY cancelled occurrence - none for the checked-in one.
+        _notificationOutboxWriter.Verify(w => w.EnqueueManyAsync(
+            It.Is<IReadOnlyList<NotificationOutboxRequest>>(requests =>
+                requests.Count == 2 &&
+                requests.Any(req => req.IdempotencyKey == $"booking:{booking.Id}:cancellation") &&
+                requests.Any(req => req.IdempotencyKey == $"booking:{stillEligibleLaterOccurrence.Id}:cancellation") &&
+                requests.All(req => req.IdempotencyKey != $"booking:{checkedInLaterOccurrence.Id}:cancellation")),
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -403,7 +518,7 @@ public sealed class CancelBookingCommandHandlerTests
         };
 
         _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
-        _bookingRepository.Setup(r => r.FindByIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking);
+        SetupFoundBooking(booking);
         _bookingRepository
             .Setup(r => r.GetBySeriesIdAsync(seriesId, It.IsAny<CancellationToken>()))
             .ReturnsAsync([booking, pendingLaterOccurrence]);
@@ -422,7 +537,7 @@ public sealed class CancelBookingCommandHandlerTests
         // exercised by the ordinary single-cancellation tests above (which all default to Confirmed).
         var booking = CreateBooking(BookingStatus.Pending);
         _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
-        _bookingRepository.Setup(r => r.FindByIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking);
+        SetupFoundBooking(booking);
         var sut = CreateSut();
 
         var result = await sut.Handle(new CancelBookingCommandRequest(booking.Id), CancellationToken.None);
@@ -439,7 +554,7 @@ public sealed class CancelBookingCommandHandlerTests
     {
         var booking = CreateBooking(); // SeriesId is null - a one-off booking
         _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
-        _bookingRepository.Setup(r => r.FindByIdAsync(booking.Id, It.IsAny<CancellationToken>())).ReturnsAsync(booking);
+        SetupFoundBooking(booking);
         var sut = CreateSut();
 
         var result = await sut.Handle(new CancelBookingCommandRequest(booking.Id, CancelRemainingSeries: true), CancellationToken.None);

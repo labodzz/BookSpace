@@ -24,9 +24,18 @@ public sealed record GetOwnBookingsQueryRequest(
 // TimeZoneId is the booking's resource's own IANA zone (as of now, not a snapshot from booking time) -
 // lets the client show the booking's local time at the resource alongside the viewer's own local time,
 // without a separate per-booking resource lookup. See GetOwnBookingsQueryHandler for how it's populated.
+// CheckedInAtUtc is null until checked in. CheckInWindowOpensAtUtc/ClosesAtUtc are always computed
+// (regardless of Status) from the CALLER'S OWN tenant settings (Tenant.CheckInLeadMinutes/
+// NoShowGraceMinutes) and this booking's own StartUtc - see CheckInEligibilityChecker, which this query
+// deliberately does NOT reuse (that checker also needs "now" and CheckedInAtUtc to decide pass/fail;
+// listing bookings only needs the two boundary instants themselves, for the client to compute its own
+// enabled/disabled button state and to display the exact window without hardcoding tenant-specific
+// minutes). Exposed on every item, not just Confirmed ones, so the client never has to special-case a
+// missing field.
 public sealed record GetOwnBookingsResponseItem(
     Guid Id, Guid ResourceId, DateTimeOffset StartUtc, DateTimeOffset EndUtc, int Quantity, BookingStatus Status,
-    DateTimeOffset? CancelledAtUtc, bool CancelledByAdmin, string? CancellationReason, Guid? SeriesId, string TimeZoneId);
+    DateTimeOffset? CancelledAtUtc, bool CancelledByAdmin, string? CancellationReason, Guid? SeriesId, string TimeZoneId,
+    DateTimeOffset? CheckedInAtUtc, DateTimeOffset CheckInWindowOpensAtUtc, DateTimeOffset CheckInWindowClosesAtUtc);
 
 public sealed class GetOwnBookingsQueryRequestValidator : AbstractValidator<GetOwnBookingsQueryRequest>
 {
@@ -45,7 +54,8 @@ public sealed class GetOwnBookingsQueryRequestValidator : AbstractValidator<GetO
 // always the caller (ICurrentUserContext.UserId), never client-supplied, so a member can only ever list
 // their own bookings.
 public sealed class GetOwnBookingsQueryHandler(
-    IBookingRepository bookingRepository, IResourceRepository resourceRepository, ICurrentUserContext currentUserContext)
+    IBookingRepository bookingRepository, IResourceRepository resourceRepository, ITenantRepository tenantRepository,
+    ICurrentUserContext currentUserContext)
     : IRequestHandler<GetOwnBookingsQueryRequest, PagedResult<GetOwnBookingsResponseItem>>
 {
     public async Task<PagedResult<GetOwnBookingsResponseItem>> Handle(GetOwnBookingsQueryRequest request, CancellationToken cancellationToken)
@@ -61,11 +71,18 @@ public sealed class GetOwnBookingsQueryHandler(
             : await resourceRepository.GetByIdsAsync(resourceIds, cancellationToken) ?? [];
         var timeZoneByResourceId = resources.ToDictionary(resource => resource.Id, resource => resource.TimeZoneId);
 
+        // One tenant lookup per page (not per booking) - every item on this page belongs to the SAME
+        // caller, so there is only ever one tenant's CheckInLeadMinutes/NoShowGraceMinutes to resolve.
+        var tenant = await tenantRepository.FindByIdAsync(currentUserContext.TenantId!.Value, cancellationToken)
+            ?? throw new InvalidOperationException($"Tenant {currentUserContext.TenantId} for the current request was not found.");
+
         return new PagedResult<GetOwnBookingsResponseItem>(
             paged.Items.Select(booking => new GetOwnBookingsResponseItem(
                 booking.Id, booking.ResourceId, booking.StartUtc, booking.EndUtc, booking.Quantity, booking.Status,
                 booking.CancelledAtUtc, booking.CancelledByUserId is { } cancelledByUserId && cancelledByUserId != booking.UserId,
-                booking.CancellationReason, booking.SeriesId, timeZoneByResourceId.GetValueOrDefault(booking.ResourceId, string.Empty))).ToList(),
+                booking.CancellationReason, booking.SeriesId, timeZoneByResourceId.GetValueOrDefault(booking.ResourceId, string.Empty),
+                booking.CheckedInAtUtc, booking.StartUtc.AddMinutes(-tenant.CheckInLeadMinutes), booking.StartUtc.AddMinutes(tenant.NoShowGraceMinutes)))
+                .ToList(),
             paged.Page,
             paged.PageSize,
             paged.TotalCount);

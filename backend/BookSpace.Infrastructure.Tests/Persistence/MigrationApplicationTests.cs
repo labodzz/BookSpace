@@ -57,7 +57,15 @@ public sealed class MigrationApplicationTests : IAsyncLifetime
             await migrator.MigrateAsync(PreRedesignMigration);
 
             var now = DateTimeOffset.UtcNow;
-            dbContext.Tenants.Add(new Tenant { Id = tenantId, Name = "Migration Test Tenant", DefaultTimeZoneId = "UTC", Status = TenantStatus.Active, CreatedAtUtc = now });
+            // Raw SQL, not dbContext.Tenants.Add(...): the live EF model now maps CheckInLeadMinutes (added
+            // by a migration chronologically AFTER this checkpoint - see AddTenantCheckInLeadMinutesAndBookingCheckInIndex),
+            // so an ordinary tracked insert would try to write a column that doesn't exist in the physical
+            // table yet at this frozen migration point - same reasoning as the Users/RecurringSeries raw-SQL
+            // inserts below, for the same kind of column.
+            await dbContext.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO Tenants (Id, Name, DefaultTimeZoneId, Status, ReminderLeadMinutes, NoShowGraceMinutes, ApprovalExpiryHours, CreatedAtUtc)
+                VALUES ({tenantId}, {"Migration Test Tenant"}, {"UTC"}, {"Active"}, {30}, {15}, {48}, {now})
+                """);
             dbContext.ResourceTypes.Add(new ResourceType { Id = resourceTypeId, TenantId = tenantId, Name = "Meeting Room" });
             dbContext.Resources.Add(new Resource
             {
@@ -111,8 +119,13 @@ public sealed class MigrationApplicationTests : IAsyncLifetime
             await migrator.MigrateAsync(PreUserStatusMigration);
 
             var now = DateTimeOffset.UtcNow;
-            dbContext.Tenants.Add(new Tenant { Id = tenantId, Name = "Backfill Test Tenant", DefaultTimeZoneId = "UTC", Status = TenantStatus.Active, CreatedAtUtc = now });
-            await dbContext.SaveChangesAsync();
+            // Raw SQL, not dbContext.Tenants.Add(...) - same reasoning as the other migration test above:
+            // the live EF model maps CheckInLeadMinutes, which doesn't exist in the physical table yet at
+            // this checkpoint.
+            await dbContext.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO Tenants (Id, Name, DefaultTimeZoneId, Status, ReminderLeadMinutes, NoShowGraceMinutes, ApprovalExpiryHours, CreatedAtUtc)
+                VALUES ({tenantId}, {"Backfill Test Tenant"}, {"UTC"}, {"Active"}, {30}, {15}, {48}, {now})
+                """);
 
             // Users has no Status column yet at this checkpoint - raw SQL, same reasoning as the
             // RecurringSeries/Users seeding above.

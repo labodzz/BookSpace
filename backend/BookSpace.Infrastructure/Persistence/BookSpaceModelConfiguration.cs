@@ -15,7 +15,12 @@ internal static class BookSpaceModelConfiguration
                 table.HasCheckConstraint("CK_Tenants_ReminderLeadMinutes", "[ReminderLeadMinutes] >= 0");
                 table.HasCheckConstraint("CK_Tenants_NoShowGraceMinutes", "[NoShowGraceMinutes] >= 0");
                 table.HasCheckConstraint("CK_Tenants_ApprovalExpiryHours", "[ApprovalExpiryHours] > 0");
+                table.HasCheckConstraint("CK_Tenants_CheckInLeadMinutes", "[CheckInLeadMinutes] >= 0");
             });
+            // Explicit SQL-level default (matching Tenant.CheckInLeadMinutes' C# default): this column is
+            // added to an ALREADY-EXISTING table, so without this every pre-existing tenant would silently
+            // backfill to 0 (no check-in lead time at all) instead of the documented default of 15 minutes.
+            entity.Property(tenant => tenant.CheckInLeadMinutes).HasDefaultValue(15);
             entity.HasKey(tenant => tenant.Id);
             entity.Property(tenant => tenant.Name).HasMaxLength(200).IsRequired();
             entity.Property(tenant => tenant.DefaultTimeZoneId).HasMaxLength(100).IsRequired();
@@ -212,6 +217,28 @@ internal static class BookSpaceModelConfiguration
             // once the query also checks ReminderQueuedAtUtc IS NULL.
             entity.HasIndex(booking => booking.StartUtc)
                 .HasFilter("[Status] = 'Confirmed' AND [ReminderQueuedAtUtc] IS NULL")
+                .IncludeProperties(
+                    booking => new { booking.TenantId, booking.UserId, booking.ResourceId, booking.EndUtc, booking.Quantity, booking.CreatedAtUtc });
+            // Prepared for the future no-show job (not yet implemented - see docs/background-jobs.md,
+            // "What the earlier WP-8 branches did not implement"), which will need "Confirmed bookings
+            // nobody checked in, ordered by StartUtc" as its own due-candidate shape. Deliberately does NOT
+            // bake in the grace-period arithmetic itself (StartUtc + Tenant.NoShowGraceMinutes <= now):
+            // NoShowGraceMinutes is per-tenant, and a SQL Server filtered-index predicate must be a constant
+            // expression, so it can never reference another table's column. This index still narrows that
+            // future query enormously (Status='Confirmed' AND CheckedInAtUtc IS NULL excludes every booking
+            // that already has an outcome), with StartUtc as the key so the eventual per-tenant cutoff check
+            // runs against a small, already-ordered candidate set instead of a full table scan - verified by
+            // query plan (docs/bookings-and-concurrency.md, "Booking check-in - index for the future no-show
+            // job") against a query joining Tenants for the per-tenant grace comparison.
+            // The name MUST be passed directly to HasIndex (not attached afterward via .HasDatabaseName()) -
+            // EF Core's fluent API keys an index builder by its property list, so a later .HasDatabaseName()
+            // call on a second HasIndex(booking => booking.StartUtc) just renames/overwrites the SAME index
+            // metadata object as the reminder index above (both are keyed on StartUtc alone), silently
+            // collapsing two intended indexes into one and making a migration DROP the reminder index
+            // entirely instead of adding a second, independent one - confirmed by inspecting the generated
+            // migration and model snapshot before this fix.
+            entity.HasIndex(booking => booking.StartUtc, "IX_Bookings_StartUtc_NoShowCandidate")
+                .HasFilter("[Status] = 'Confirmed' AND [CheckedInAtUtc] IS NULL")
                 .IncludeProperties(
                     booking => new { booking.TenantId, booking.UserId, booking.ResourceId, booking.EndUtc, booking.Quantity, booking.CreatedAtUtc });
             entity.HasOne<Tenant>().WithMany().HasForeignKey(booking => booking.TenantId).OnDelete(DeleteBehavior.Restrict);

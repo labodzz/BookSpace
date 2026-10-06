@@ -37,6 +37,13 @@ export class MyBookingsComponent {
   protected readonly cancelTarget = signal<OwnBooking | null>(null);
   protected readonly cancelSubmitting = signal(false);
 
+  // The single booking id currently being checked in, or null - scoped to one id (not a plain boolean) so
+  // checking in one row never disables another row's button.
+  protected readonly checkInSubmittingId = signal<string | null>(null);
+  // Per-booking inline check-in error messages - same pattern as the approval queue's rowErrors, since a
+  // check-in failure (too early, too late, booking changed state) is specific to the one row that failed.
+  protected readonly checkInErrors = signal<Record<string, string>>({});
+
   // Every occurrence of a series, keyed by seriesId, fetched separately from the main page (see
   // loadSeriesOccurrences) so an expanded group always shows the series' COMPLETE occurrence list, not
   // just whichever occurrences happened to land on the current page of the flat getOwnBookings listing.
@@ -141,6 +148,48 @@ export class MyBookingsComponent {
         this.cancelSubmitting.set(false);
       },
     });
+  }
+
+  protected checkIn(booking: OwnBooking): void {
+    if (this.checkInSubmittingId()) {
+      return;
+    }
+    this.checkInErrors.update((errors) => {
+      const next = { ...errors };
+      delete next[booking.id];
+      return next;
+    });
+    this.checkInSubmittingId.set(booking.id);
+
+    this.bookingService.checkInBooking(booking.id).subscribe({
+      next: (response) => {
+        this.checkInSubmittingId.set(null);
+        this.patchBookingCheckedIn(booking.id, response.checkedInAtUtc);
+        this.notificationService.showSuccess(response.alreadyCheckedIn ? 'You were already checked in.' : 'Checked in.');
+      },
+      error: (error: unknown) => {
+        this.checkInSubmittingId.set(null);
+        const apiError = error instanceof HttpErrorResponse ? toApiError(error) : { status: 0, title: 'Something went wrong.' };
+        this.checkInErrors.update((errors) => ({ ...errors, [booking.id]: apiError.detail ?? apiError.title }));
+      },
+    });
+  }
+
+  protected checkInErrorFor(bookingId: string): string | null {
+    return this.checkInErrors()[bookingId] ?? null;
+  }
+
+  // Patches the one booking in place (both the flat page and any already-fetched series-occurrence cache)
+  // rather than reloading the whole page - check-in doesn't change paging/ordering/grouping, so a full
+  // reload would just be a slower way to show the exact same list with one field changed.
+  private patchBookingCheckedIn(bookingId: string, checkedInAtUtc: string): void {
+    const patch = (bookings: OwnBooking[]) => bookings.map((b) => (b.id === bookingId ? { ...b, checkedInAtUtc } : b));
+    this.bookings.set(patch(this.bookings()));
+    const seriesOccurrences = this.seriesOccurrences();
+    const seriesId = Object.keys(seriesOccurrences).find((id) => seriesOccurrences[id].some((b) => b.id === bookingId));
+    if (seriesId) {
+      this.seriesOccurrences.set({ ...seriesOccurrences, [seriesId]: patch(seriesOccurrences[seriesId]) });
+    }
   }
 
   private load(): void {

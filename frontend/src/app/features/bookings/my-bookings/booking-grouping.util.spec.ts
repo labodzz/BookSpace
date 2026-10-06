@@ -13,6 +13,9 @@ function booking(overrides: Partial<OwnBooking> & Pick<OwnBooking, 'id'>): OwnBo
     cancellationReason: null,
     seriesId: null,
     timeZoneId: 'UTC',
+    checkedInAtUtc: null,
+    checkInWindowOpensAtUtc: '2026-09-02T09:45:00Z',
+    checkInWindowClosesAtUtc: '2026-09-02T10:15:00Z',
     ...overrides,
   };
 }
