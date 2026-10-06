@@ -7,6 +7,7 @@ import { MyBookingsComponent } from './my-bookings';
 
 const BOOKINGS_URL = `${environment.apiUrl}/bookings`;
 const RESOURCE_URL = `${environment.apiUrl}/resources/resource-1`;
+const CALENDAR_SUBSCRIPTIONS_URL = `${environment.apiUrl}/calendar-subscriptions`;
 
 interface WireBookingOverrides {
   id: string;
@@ -48,6 +49,10 @@ describe('MyBookingsComponent', () => {
     });
     httpTesting = TestBed.inject(HttpTestingController);
     fixture = TestBed.createComponent(MyBookingsComponent);
+    // The embedded calendar-subscription panel (app-calendar-subscription-panel) fires its own status
+    // request from its constructor the moment this fixture is created, same as MyBookingsComponent's own
+    // load() - flushed once here so individual tests below don't each need to know about it.
+    httpTesting.expectOne(CALENDAR_SUBSCRIPTIONS_URL).flush({ hasActiveSubscription: false, createdAtUtc: null });
   });
 
   afterEach(() => httpTesting.verify());
@@ -295,6 +300,7 @@ describe('MyBookingsComponent - dual timezone display', () => {
     });
     httpTesting = TestBed.inject(HttpTestingController);
     fixture = TestBed.createComponent(MyBookingsComponent);
+    httpTesting.expectOne(CALENDAR_SUBSCRIPTIONS_URL).flush({ hasActiveSubscription: false, createdAtUtc: null });
   }
 
   function flushBooking(timeZoneId: string): void {

@@ -1,6 +1,7 @@
 using System.Reflection;
 using BookSpace.Application.Auth;
 using BookSpace.Application.BackgroundJobs;
+using BookSpace.Application.Calendar;
 using BookSpace.Application.Email;
 using BookSpace.Application.Logging;
 using BookSpace.Application.Mediator;
@@ -29,6 +30,9 @@ public static class DependencyInjection
         // Stateless - safe as a singleton. See docs/background-jobs.md ("Email templates").
         services.AddSingleton<IEmailTemplateRenderer, BookingEmailTemplateRenderer>();
         services.AddSingleton<IValidateOptions<EmailOptions>, EmailOptionsValidator>();
+
+        // Calendar subscription feed (WP-8) - see docs/calendar-subscription-feed.md.
+        services.AddSingleton<IValidateOptions<CalendarFeedOptions>, CalendarFeedOptionsValidator>();
 
         // Singleton: one stable OwnerId, and one lease coordinator holding only IServiceScopeFactory, for
         // this instance's entire lifetime - see docs/background-jobs.md ("Job lease lock"). Neither ever

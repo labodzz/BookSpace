@@ -104,6 +104,24 @@ internal static class BookSpaceModelConfiguration
             }
         });
 
+        builder.Entity<CalendarSubscription>(entity =>
+        {
+            entity.ToTable("CalendarSubscriptions");
+            entity.HasKey(subscription => subscription.Id);
+            entity.Property(subscription => subscription.TokenHash).HasMaxLength(200).IsRequired();
+            entity.HasIndex(subscription => subscription.TokenHash).IsUnique();
+            entity.HasIndex(subscription => subscription.TenantId);
+            // At most one ACTIVE (not yet revoked) subscription per user - same filtered-unique-index
+            // shape as Invitation.UserId. Regenerating revokes the previous active row and inserts a new
+            // one (never mutates TokenHash in place), so the history of every subscription this user has
+            // ever had is preserved rather than overwritten.
+            entity.HasIndex(subscription => subscription.UserId)
+                .IsUnique()
+                .HasFilter("[RevokedAtUtc] IS NULL");
+            entity.HasOne<Tenant>().WithMany().HasForeignKey(subscription => subscription.TenantId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<User>().WithMany().HasForeignKey(subscription => subscription.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
+
         builder.Entity<ResourceType>(entity =>
         {
             entity.ToTable("ResourceTypes");

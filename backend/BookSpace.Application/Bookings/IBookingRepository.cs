@@ -42,5 +42,15 @@ public interface IBookingRepository
 
     Task AddAsync(Booking booking, CancellationToken cancellationToken);
 
+    // Explicitly bypasses the tenant query filter and re-applies tenantId/userId itself, exactly like
+    // ICalendarSubscriptionRepository.FindActiveByTokenHashAsync - the anonymous calendar-feed request has
+    // no ICurrentUserContext.TenantId to drive the ambient filter. Confirmed/Completed only (the only
+    // statuses the ICS feed ever surfaces as an active event - see docs/calendar-subscription-feed.md,
+    // "Booking status mapping"), overlapping [windowStartUtc, windowEndUtc). Joined directly against
+    // Resources (also explicitly re-scoped to tenantId) to get each booking's resource name in the SAME
+    // query, avoiding both an N+1 lookup and a second filter-bypass call.
+    Task<IReadOnlyList<CalendarFeedBooking>> GetForCalendarFeedAsync(
+        Guid tenantId, Guid userId, DateTimeOffset windowStartUtc, DateTimeOffset windowEndUtc, CancellationToken cancellationToken);
+
     Task SaveChangesAsync(CancellationToken cancellationToken);
 }

@@ -1,6 +1,7 @@
 using BookSpace.Application.Auth;
 using BookSpace.Application.BackgroundJobs;
 using BookSpace.Application.Bookings;
+using BookSpace.Application.Calendar;
 using BookSpace.Application.Notifications;
 using BookSpace.Application.ResourceTypes;
 using BookSpace.Application.Resources;
@@ -50,6 +51,7 @@ public static class DependencyInjection
         services.AddScoped<IRecurringSeriesRepository, RecurringSeriesRepository>();
         services.AddScoped<IApprovalRequestRepository, ApprovalRequestRepository>();
         services.AddScoped<ITenantRepository, TenantRepository>();
+        services.AddScoped<ICalendarSubscriptionRepository, CalendarSubscriptionRepository>();
         services.AddScoped<IJobLeaseStore, JobLeaseStore>();
         services.AddScoped<INotificationOutboxWriter, NotificationOutboxWriter>();
         services.AddScoped<INotificationOutboxReader, NotificationOutboxReader>();

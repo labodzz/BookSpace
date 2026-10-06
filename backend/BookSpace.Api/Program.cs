@@ -7,6 +7,7 @@ using BookSpace.Api.Logging;
 using BookSpace.Api.Security;
 using BookSpace.Application;
 using BookSpace.Application.BackgroundJobs;
+using BookSpace.Application.Calendar;
 using BookSpace.Application.Email;
 using BookSpace.Application.Logging;
 using BookSpace.Application.Security;
@@ -189,6 +190,13 @@ try
     // credentials just to start.
     builder.Services.AddOptions<EmailOptions>()
         .Bind(builder.Configuration.GetSection("Email"))
+        .ValidateOnStart();
+
+    // Calendar subscription feed (WP-8) - see docs/calendar-subscription-feed.md. Same ValidateOnStart
+    // convention as BackgroundJobsOptions/EmailOptions above: a missing/malformed PublicBaseUrl fails
+    // startup immediately rather than only surfacing once a member tries to create their first subscription.
+    builder.Services.AddOptions<CalendarFeedOptions>()
+        .Bind(builder.Configuration.GetSection("CalendarFeed"))
         .ValidateOnStart();
 
     builder.Services.AddHttpContextAccessor();
