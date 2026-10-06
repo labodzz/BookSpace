@@ -203,6 +203,19 @@ explicitly configured per deployment, not inferred from the request.
 - Not present in the base `appsettings.json` (same treatment as `Auth`'s required-but-secret settings) -
   an unconfigured non-Development deployment fails fast at startup rather than silently building a broken
   URL.
+- **Local Podman/Compose** (`compose.local.yaml`): `CalendarFeed__PublicBaseUrl` is set to
+  `http://localhost:8080`, matching the host port this container is actually published on (the `ports`
+  mapping just below it in the same file) - **found missing and fixed during the WP-8 final audit** (see
+  that audit's own report): without it, the containerized app would either fail `ValidateOnStart()` outright
+  (if `appsettings.Development.json`'s own value somehow weren't picked up) or, as actually would have
+  happened (that file's `CalendarFeed:PublicBaseUrl=http://localhost:5185` *is* published into the
+  container image and *is* read there, since `ASPNETCORE_ENVIRONMENT=Development` in this compose file),
+  silently build every subscription link against port 5185 - nothing this container ever listens on - so
+  every copied link would have been dead on arrival. `http://localhost:8080` only works from a browser/
+  calendar app on the SAME machine running `podman compose` - this is explicitly a **local-only** value,
+  never reachable by an external/cloud calendar provider (Google Calendar, Outlook.com, ...), which can
+  never resolve "localhost" to mean this machine. A real deployment needs this set to that deployment's own
+  actual externally-reachable HTTPS origin instead (see the Production bullet above).
 
 ## Database
 
@@ -291,3 +304,24 @@ behavior against a public internet-reachable URL.
   and caching" above).
 - `Completed` is mapped identically to `Confirmed` for forward-compatibility, but no handler in this
   codebase currently ever produces that status.
+
+## WP-8 final audit (findings)
+
+A dedicated audit pass across the whole WP-8 surface (background jobs, lease/concurrency, outbox/email
+reliability, check-in/no-show, and this feed) re-verified every guarantee documented above against the
+current code and its full test suite (`BookSpace.Application.Tests` 709/709,
+`BookSpace.Infrastructure.Tests` 332/332 against real LocalDB, `BookSpace.Api.Tests` 300/300, frontend
+513/513, backend Release build/publish, Angular production build - all clean). One real, concrete gap was
+found and fixed in this feed's own area:
+
+- **(A - blocking, fixed)** `CalendarFeed:PublicBaseUrl` was missing from `compose.local.yaml` - see
+  "Local Podman/Compose" above for the exact failure mode this would have caused and the fix applied.
+
+No other bug was found in this feed's token lifecycle, isolation, ICS generation, or caching behavior -
+every claim in this document was re-checked against the actual current code (not re-stated from memory)
+and found to still hold.
+
+**(C - pending a public HTTPS deployment, not newly discovered by this audit)**: the "Manual end-to-end
+verification" section above already disclosed this feed has never been exercised against a real external
+calendar client over the public internet; the final audit did not change that - there was no public HTTPS
+endpoint available to test against in this environment either.
