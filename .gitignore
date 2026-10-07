@@ -384,3 +384,6 @@ postman/
 .env
 .env.*
 !.env.example
+# compose.production-local.yaml's own example file - tracked like .env.example above; the real
+# .env.production-local it documents stays matched (and ignored) by the broader `.env.*` pattern.
+!.env.production-local.example

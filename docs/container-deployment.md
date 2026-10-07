@@ -258,6 +258,95 @@ Bootstrap__SysAdminPassword         # only while Bootstrap__Enabled=true; remove
 - The SQL Server container in `compose.local.yaml` is **local-only**. Azure uses **Azure SQL Database**
   (serverless or provisioned, your choice) - nothing in this repository runs SQL Server itself in Azure.
 
+## Local production-like testing
+
+`compose.production-local.yaml` (repo root) is a second, independent Compose file for smoke-testing the
+**Production** startup path - `ASPNETCORE_ENVIRONMENT=Production`, the opt-in migration step, and
+`ProductionBootstrapper` - on this laptop, against the exact image this repo's Dockerfile/CI
+(`.github/workflows/docker-image.yml`) builds and pushes to Docker Hub, **before** that image goes to AWS
+ECS. It is completely separate from `compose.local.yaml`: its own Compose project name
+(`bookspace-production-local`), its own network and named volume, its own host port (`8081`, vs. `8080`
+for the Development compose) - the two can run at the same time without colliding, and neither one's `up`/
+`down`/`down -v` ever touches the other's containers, network, or database volume.
+
+### Running it
+
+```bash
+cp .env.production-local.example .env.production-local
+# edit .env.production-local: set a real DB_SA_PASSWORD, AUTH_SIGNING_KEY, and
+# Bootstrap__SysAdminPassword - see the comments in that file for what each one is for.
+
+podman compose --env-file .env.production-local -f compose.production-local.yaml up --build -d
+```
+
+Status and logs:
+
+```bash
+podman compose --env-file .env.production-local -f compose.production-local.yaml ps
+podman compose --env-file .env.production-local -f compose.production-local.yaml logs -f bookspace-app
+```
+
+```bash
+curl http://localhost:8081/health           # liveness
+curl http://localhost:8081/health/db        # readiness - 200 once the local SQL Server container is reachable
+```
+
+### First login, then create a tenant end to end
+
+1. Open `http://localhost:8081` and log in with the `Bootstrap__SysAdminEmail`/`Bootstrap__SysAdminPassword`
+   you set in `.env.production-local` - this is the global SysAdmin `ProductionBootstrapper` created on
+   first start (see "Production bootstrap" above; the same idempotency guarantee applies here - restarting
+   this Compose project never creates a second SysAdmin or resets that password).
+2. As that SysAdmin, create a tenant (`Tenants -> New tenant`). This queues a TenantAdmin invitation email
+   through the real outbox/background-job path (`BackgroundJobs__Enabled=true` in this compose file).
+3. With `Email__Enabled=false` (this file's default - see `.env.production-local.example`), nothing is
+   actually sent to any real inbox; the invitation link appears instead in the app container's own logs
+   (`NotificationOutboxItems`/the SMTP sender's "Notification email not sent: Email:Enabled is false" line
+   - see `docs/background-jobs.md`). If you set `Email__Enabled=true` with real Gmail SMTP credentials
+   instead, the email is genuinely sent - only do this if you actually intend to verify real delivery
+   before deploying.
+4. Open the invitation link **on this same laptop** and accept it (set a password). **This only works on
+   this laptop**: `App__PublicBaseUrl`/`CalendarFeed__PublicBaseUrl` are both `http://localhost:8081` in
+   this file, so the link embedded in the invitation email/outbox payload is only reachable from a browser
+   that can resolve "localhost" to this machine - never from another device, and never from an external
+   service. A real deployment sets these to that deployment's actual public HTTPS origin instead (see
+   "Azure environment variables and secrets" above).
+5. Log in as the new TenantAdmin to confirm the full chain works end to end.
+
+**Google Calendar subscription will not work against this setup** - subscribing an ICS feed URL from
+Google Calendar (or Outlook.com, or any other external calendar provider) requires a URL that service's
+own servers can reach over the public internet; `http://localhost:8081` is never reachable from outside
+this laptop, no matter how the app itself is configured. Verifying the calendar feed for real needs an
+actual publicly-reachable deployment (or a tunnel such as `ngrok`, out of scope here) - this local
+production-like setup is for everything else in the stack (migrations, bootstrap, tenant onboarding, auth,
+background jobs), not for that one feature.
+
+### Stopping (without losing data) and disabling bootstrap afterward
+
+```bash
+podman compose --env-file .env.production-local -f compose.production-local.yaml down   # keeps the database volume
+```
+
+After you've successfully logged in as the bootstrap SysAdmin at least once, turn bootstrap back off -
+edit `.env.production-local` and set `Bootstrap__Enabled=false`, then re-apply (no rebuild needed, since
+this only changes an environment variable, not the image):
+
+```bash
+podman compose --env-file .env.production-local -f compose.production-local.yaml up -d
+```
+
+`ProductionBootstrapper`'s own idempotency check means leaving `Bootstrap__Enabled=true` would not by
+itself create a second SysAdmin or corrupt the existing one - but there is no reason to keep a plaintext
+admin password configured once it is no longer needed, exactly the same reasoning as the real Azure
+deployment (see "Production bootstrap" above).
+
+Destroying this setup's own local database volume (its own, never `compose.local.yaml`'s
+`bookspace-sql-data`) is a separate, deliberately explicit command:
+
+```bash
+podman compose --env-file .env.production-local -f compose.production-local.yaml down -v   # DESTROYS bookspace-production-local-sql-data
+```
+
 ## Verification performed
 
 See the final report in the pull request/commit history for exactly what was run and its results, and

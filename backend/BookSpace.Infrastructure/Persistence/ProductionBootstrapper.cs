@@ -42,6 +42,31 @@ internal static class ProductionBootstrapper
                 "Bootstrap:Enabled is true but one or more required Bootstrap values are missing - " +
                 "SysAdminFirstName, SysAdminLastName, SysAdminEmail and SysAdminPassword must all be set.");
         }
+        var requiredRoleNames = new[]
+{
+    "Member",
+    "ResourceApprover",
+    "TenantAdmin",
+    "SysAdmin"
+};
+
+var existingRoleNames = await dbContext.Roles
+    .Select(role => role.Name)
+    .ToListAsync(cancellationToken);
+
+foreach (var roleName in requiredRoleNames)
+{
+    if (!existingRoleNames.Contains(roleName))
+    {
+        dbContext.Roles.Add(new Role
+        {
+            Id = Guid.NewGuid(),
+            Name = roleName
+        });
+    }
+}
+
+await dbContext.SaveChangesAsync(cancellationToken);
 
         // Idempotent across restarts/redeploys: a user with this email already existing anywhere (not
         // just in a resolvable tenant - IgnoreQueryFilters, the same sanctioned exception

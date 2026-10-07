@@ -1,0 +1,141 @@
+# Local Podman/Docker Compose setup for testing the PRODUCTION startup path - ASPNETCORE_ENVIRONMENT=
+# Production, the same migration/bootstrap mechanism docs/container-deployment.md documents for Azure
+# Container Apps, and the exact image this repo's Dockerfile/CI (.github/workflows/docker-image.yml)
+# builds and pushes to Docker Hub before a real AWS ECS deployment. This is a smoke test for that image
+# and that startup path on this laptop - NOT a substitute for compose.local.yaml (Development, dev-only
+# migrate+seed, port 8080), which is untouched by this file and keeps working exactly as before.
+#
+# A separate Compose "name" (project) plus its own network and named volume keep this setup from ever
+# sharing or touching compose.local.yaml's own bookspace-db-1/bookspace-app-1 containers, network, or
+# bookspace-sql-data volume - the two can run at the same time with zero collision (different host port
+# too: 8081 here vs. 8080 there). No container_name is set anywhere for the same reason: Compose already
+# derives unique container names from the project name below, and a fixed container_name would be the one
+# thing that COULD collide with another project's container.
+#
+# Start:  podman compose --env-file .env.production-local -f compose.production-local.yaml up --build -d
+# Stop:   podman compose --env-file .env.production-local -f compose.production-local.yaml down            (keeps the database volume)
+# Wipe:   podman compose --env-file .env.production-local -f compose.production-local.yaml down -v         (DESTROYS the database volume)
+#
+# See docs/container-deployment.md ("Local production-like testing") for the full walkthrough: copying
+# .env.production-local.example, bootstrap SysAdmin login, create-tenant -> invitation -> accept -> login,
+# and turning Bootstrap__Enabled back off afterward.
+
+name: bookspace-production-local
+
+services:
+    bookspace-db:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        environment:
+            ACCEPT_EULA: "Y"
+            MSSQL_SA_PASSWORD: ${DB_SA_PASSWORD}
+        # No host port published - unlike compose.local.yaml's bookspace-db (1433, for local `sqlcmd`/GUI
+        # client convenience during development), nothing outside this Compose network needs to reach this
+        # database directly for a production-startup smoke test: only bookspace-app does, over the
+        # internal network below. A real deployment's database (Azure SQL) is never reachable this way
+        # either - this keeps the local test closer to that shape, not further from it.
+        volumes:
+            - bookspace-production-local-sql-data:/var/opt/mssql
+        networks:
+            - bookspace-production-local-net
+        # Identical healthcheck to compose.local.yaml's own - the app's EnableRetryOnFailure (see
+        # docs/container-deployment.md, "Azure SQL connection resilience") is still what actually makes
+        # startup resilient if this is ever ignored by a given Compose provider/version.
+        healthcheck:
+            test:
+                [
+                    "CMD-SHELL",
+                    '/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$$MSSQL_SA_PASSWORD" -C -Q ''SELECT 1'' || exit 1',
+                ]
+            interval: 10s
+            timeout: 5s
+            retries: 10
+            start_period: 30s
+
+    bookspace-app:
+       
+        image: docker.io/lbojic1/bookspace:dev
+        environment:
+            ASPNETCORE_ENVIRONMENT: Production
+            # bookspace-db is the other container's *service name* on the shared network below, resolved by
+            # Compose's internal DNS - never localhost, which inside this container would mean itself. This
+            # is the one value in this file that is NOT the same shape as a real deployment's secret (Azure
+            # uses an Azure SQL Database connection string instead - see docs/container-deployment.md,
+            # "Azure environment variables and secrets") - everything else here matches the documented
+            # Azure configuration one-for-one.
+            ConnectionStrings__BookSpace: "Server=bookspace-db,1433;Database=BookSpace;User Id=sa;Password=${DB_SA_PASSWORD};TrustServerCertificate=True"
+            # Opt-in startup migration step (DatabaseOptions/MigrateProductionDatabaseAsync) - the same
+            # mechanism documented for Azure Container Apps, used here instead of a separate one-off
+            # migration service/container: this compose file only ever runs a single app replica, so the
+            # "two replicas racing Database.MigrateAsync()" concern docs/container-deployment.md calls out
+            # does not apply. Database.MigrateAsync() is itself idempotent (a no-op once the schema is
+            # current), so leaving this "true" across repeated `up`/restart cycles during local testing is
+            # safe. Prefer applying migrations as a separate, explicit step instead by setting this to
+            # "false" and running, from the repo root with the .NET SDK installed:
+            #   dotnet ef database update --project backend/BookSpace.Infrastructure --startup-project backend/BookSpace.Api --connection "Server=localhost,1433;Database=BookSpace;User Id=sa;Password=<DB_SA_PASSWORD>;TrustServerCertificate=True"
+            # (which needs bookspace-db's port briefly published to run from the host - not done by this
+            # file by default, see the comment on bookspace-db above).
+            Database__ApplyMigrationsOnStartup: "true"
+            # Never set for local Compose - see docs/container-deployment.md ("Reverse proxy and Azure
+            # ingress"): this flag is for Azure Container Apps' own TLS-terminating ingress specifically,
+            # and must stay unset/false here, where the app is reached directly over plain HTTP.
+            # ASPNETCORE_FORWARDEDHEADERS_ENABLED is deliberately absent from this file.
+            Auth__Issuer: BookSpace
+            Auth__Audience: BookSpace
+            Auth__SigningKey: ${AUTH_SIGNING_KEY}
+            Auth__AccessTokenMinutes: "15"
+            Auth__RefreshTokenDays: "14"
+            # Same single-origin reasoning as compose.local.yaml's own Cors section (Angular and the API
+            # are served from this one container/origin - see docs/architecture.md) - included for
+            # consistency with that file and with the documented Azure configuration, even though a
+            # same-origin browser request never actually triggers a CORS preflight against it.
+            Cors__AllowedOrigins__0: "http://localhost:8081"
+            # Required - see docs/calendar-subscription-feed.md ("Public base URL") and AppOptions's own
+            # doc comment. Matches the host port this container is published on below (8081) - the address
+            # reachable from THIS machine's own browser/calendar client, not a real externally-reachable
+            # HTTPS origin (see the Google Calendar note in docs/container-deployment.md's walkthrough for
+            # this file).
+            CalendarFeed__PublicBaseUrl: "http://localhost:8081"
+            # Required - see docs/tenant-onboarding.md ("Public URL configuration"). Identical to
+            # CalendarFeed__PublicBaseUrl above - Angular and the API share this one origin, same as
+            # compose.local.yaml and the real, single-origin container deployment.
+            App__PublicBaseUrl: "http://localhost:8081"
+            # First global SysAdmin bootstrap (ProductionBootstrapper/BootstrapOptions) - see
+            # docs/container-deployment.md ("Production bootstrap"). Off unless Bootstrap__Enabled=true;
+            # idempotent across restarts (a user with Bootstrap__SysAdminEmail already existing anywhere
+            # means a previous run already completed - it neither creates a second SysAdmin nor resets the
+            # existing one's password). SysAdminPassword has no fallback default below (unlike the Email
+            # section) - ProductionBootstrapper itself fails startup loudly if Bootstrap__Enabled=true and
+            # any of these four is missing, which is the correct behavior to preserve here, not paper over
+            # with a guessed value.
+            Bootstrap__Enabled: ${Bootstrap__Enabled:-true}
+            Bootstrap__SysAdminFirstName: ${Bootstrap__SysAdminFirstName:-Sys}
+            Bootstrap__SysAdminLastName: ${Bootstrap__SysAdminLastName:-Admin}
+            Bootstrap__SysAdminEmail: ${Bootstrap__SysAdminEmail:-sysadmin@bookspace.local}
+            Bootstrap__SysAdminPassword: ${Bootstrap__SysAdminPassword}
+            # Gmail SMTP sender - see docs/background-jobs.md ("Gmail SMTP sender"). Same safe-default
+            # shape as compose.local.yaml's own Email section (Email__Enabled defaults to "false", so an
+            # .env.production-local with none of these set still starts the app with email sending
+            # disabled - no real email is ever sent to a real user just by running this file).
+            Email__Enabled: ${Email__Enabled:-false}
+            Email__Provider: ${Email__Provider:-Smtp}
+            Email__FromAddress: ${Email__FromAddress:-}
+            Email__FromName: ${Email__FromName:-BookSpace}
+            Email__Smtp__Host: ${Email__Smtp__Host:-smtp.gmail.com}
+            Email__Smtp__Port: ${Email__Smtp__Port:-587}
+            Email__Smtp__Security: ${Email__Smtp__Security:-StartTls}
+            Email__Smtp__Username: ${Email__Smtp__Username:-}
+            Email__Smtp__Password: ${Email__Smtp__Password:-}
+            BackgroundJobs__Enabled: "true"
+        ports:
+            - "8081:8080"
+        depends_on:
+            bookspace-db:
+                condition: service_healthy
+        networks:
+            - bookspace-production-local-net
+
+networks:
+    bookspace-production-local-net:
+
+volumes:
+    bookspace-production-local-sql-data:
