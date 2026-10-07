@@ -1,4 +1,4 @@
-name: Build and publish BookSpace image
+name: Test and publish BookSpace image
 
 on:
   push:
@@ -10,8 +10,78 @@ permissions:
   contents: read
 
 jobs:
-  docker-image:
+  backend-tests:
+    runs-on: windows-2022
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Start SQL Server LocalDB
+        shell: pwsh
+        run: |
+          $localDb = Get-ChildItem "C:\Program Files\Microsoft SQL Server" `
+            -Filter SqlLocalDB.exe -Recurse |
+            Select-Object -First 1 -ExpandProperty FullName
+
+          if (-not $localDb) {
+            throw "SQL Server LocalDB is not installed."
+          }
+
+          & $localDb start MSSQLLocalDB
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not start MSSQLLocalDB."
+          }
+
+          & $localDb info MSSQLLocalDB
+
+      - name: Restore backend
+        run: dotnet restore backend/BookSpace.slnx
+
+      - name: Build backend
+        run: dotnet build backend/BookSpace.slnx -c Release --no-restore
+
+      - name: Run backend tests
+        run: dotnet test backend/BookSpace.slnx -c Release --no-build --logger trx --results-directory TestResults
+
+  frontend-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run frontend tests
+        run: npm test -- --watch=false
+
+      - name: Build frontend
+        run: npm run build -- --configuration production
+
+  docker-image:
+    needs: [backend-tests, frontend-tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
