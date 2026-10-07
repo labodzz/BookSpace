@@ -19,6 +19,7 @@ public sealed class EmailRecipientResolverTests : IAsyncLifetime
     private Guid _tenantBId;
     private Guid _userInTenantAId;
     private Guid _userWithNoEmailId;
+    private Guid _withdrawnUserId;
 
     public async Task InitializeAsync()
     {
@@ -29,6 +30,7 @@ public sealed class EmailRecipientResolverTests : IAsyncLifetime
         _tenantBId = Guid.NewGuid();
         _userInTenantAId = Guid.NewGuid();
         _userWithNoEmailId = Guid.NewGuid();
+        _withdrawnUserId = Guid.NewGuid();
         var now = DateTimeOffset.UtcNow;
 
         dbContext.Tenants.Add(new Tenant { Id = _tenantAId, Name = "Resolver Tenant A", DefaultTimeZoneId = "UTC", Status = TenantStatus.Active, CreatedAtUtc = now });
@@ -42,6 +44,11 @@ public sealed class EmailRecipientResolverTests : IAsyncLifetime
         {
             Id = _userWithNoEmailId, TenantId = _tenantAId, FirstName = "No", LastName = "Email",
             Email = "", PasswordHash = "x", CreatedAtUtc = now,
+        });
+        dbContext.Users.Add(new User
+        {
+            Id = _withdrawnUserId, TenantId = _tenantAId, FirstName = "Withdrawn", LastName = "Member",
+            Email = "withdrawn@bookspace.test", PasswordHash = "x", Status = UserStatus.Withdrawn, CreatedAtUtc = now,
         });
         await dbContext.SaveChangesAsync();
     }
@@ -82,6 +89,18 @@ public sealed class EmailRecipientResolverTests : IAsyncLifetime
     public async Task ResolveAsync_ForAUserWithNoEmailAddress_ReturnsNull()
     {
         var result = await ResolveAsync(_tenantAId, _userWithNoEmailId);
+
+        Assert.Null(result);
+    }
+
+    // A tenant soft-delete (see DeleteTenantCommandHandler) must stop a still-pending outbox item from
+    // reaching an email address that may since have been reused by a brand-new, unrelated account - see
+    // this resolver's own doc comment on why excluding Withdrawn here can only ever suppress a stale
+    // notification, never misdirect one (the lookup stays ID-based throughout).
+    [Fact]
+    public async Task ResolveAsync_ForAWithdrawnUser_ReturnsNull()
+    {
+        var result = await ResolveAsync(_tenantAId, _withdrawnUserId);
 
         Assert.Null(result);
     }

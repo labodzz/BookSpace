@@ -18,5 +18,13 @@ public interface ICalendarSubscriptionRepository
 
     Task AddAsync(CalendarSubscription subscription, CancellationToken cancellationToken);
 
+    // Bypasses the tenant query filter by design - the one sanctioned caller is
+    // DeleteTenantCommandHandler (a SysAdmin action against a tenant that is never its own ambient
+    // tenant). Revokes every still-active subscription for the tenant, so an external calendar client
+    // polling an old feed URL stops working the moment the tenant is deleted, not merely the next time
+    // someone happens to regenerate it. Idempotent: a tenant with no active subscriptions left (a
+    // repeated delete attempt) revokes nothing.
+    Task RevokeAllActiveForTenantAsync(Guid tenantId, CancellationToken cancellationToken);
+
     Task SaveChangesAsync(CancellationToken cancellationToken);
 }

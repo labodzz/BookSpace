@@ -691,7 +691,8 @@ namespace BookSpace.Infrastructure.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("Name")
-                        .IsUnique();
+                        .IsUnique()
+                        .HasFilter("[Status] <> 'Deleted'");
 
                     b.ToTable("Tenants", null, t =>
                         {
@@ -747,7 +748,8 @@ namespace BookSpace.Infrastructure.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("Email")
-                        .IsUnique();
+                        .IsUnique()
+                        .HasFilter("[Status] <> 'Withdrawn'");
 
                     b.HasIndex("TenantId");
 

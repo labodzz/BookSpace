@@ -1,4 +1,5 @@
 using BookSpace.Application.Notifications;
+using BookSpace.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
@@ -16,17 +17,24 @@ internal sealed class EmailRecipientResolver(BookSpaceDbContext dbContext, ILogg
 {
     public async Task<EmailRecipient?> ResolveAsync(Guid tenantId, Guid recipientUserId, CancellationToken cancellationToken)
     {
+        // Excludes Withdrawn users (see UserStatus) - a tenant soft-delete must stop a still-pending
+        // outbox item from reaching a since-reused email address. This is still the same, ID-based lookup
+        // (TenantId, RecipientUserId) the row stays pinned to from enqueue time - a withdrawn user's
+        // row is never replaced by a NEW live user sharing their old email (that new row has its own,
+        // different Id - see User.cs), so excluding Withdrawn here can only ever suppress a stale
+        // notification, never misdirect one to the wrong account.
         var row = await dbContext.Users
             .IgnoreQueryFilters()
             .AsNoTracking()
-            .Where(user => user.TenantId == tenantId && user.Id == recipientUserId)
+            .Where(user => user.TenantId == tenantId && user.Id == recipientUserId && user.Status != UserStatus.Withdrawn)
             .Select(user => new { user.Email, user.FirstName, user.LastName })
             .FirstOrDefaultAsync(cancellationToken);
 
         if (row is null)
         {
             logger.LogInformation(
-                "Notification recipient lookup found no user. TenantId={TenantId} RecipientUserId={RecipientUserId}", tenantId, recipientUserId);
+                "Notification recipient lookup found no user with a usable (non-withdrawn) status. TenantId={TenantId} RecipientUserId={RecipientUserId}",
+                tenantId, recipientUserId);
             return null;
         }
 

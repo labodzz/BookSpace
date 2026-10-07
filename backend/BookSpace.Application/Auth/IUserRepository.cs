@@ -6,6 +6,9 @@ namespace BookSpace.Application.Auth;
 
 public interface IUserRepository
 {
+    // Excludes Withdrawn users (a tenant soft-delete releases their email for reuse - see UserStatus and
+    // BookSpaceModelConfiguration) - always resolves to the live account when a withdrawn and a live row
+    // happen to share an email.
     Task<User?> FindByEmailAsync(string email, CancellationToken cancellationToken);
     Task<User?> FindByIdAsync(Guid id, CancellationToken cancellationToken);
 
@@ -82,6 +85,13 @@ public interface IUserRepository
     // TenantUserAggregate.Empty.
     Task<IReadOnlyDictionary<Guid, TenantUserAggregate>> GetTenantUserAggregatesAsync(
         IReadOnlyList<Guid> tenantIds, CancellationToken cancellationToken);
+
+    // Bypasses the tenant query filter by design - see the implementation's own doc comment. The one
+    // sanctioned caller is DeleteTenantCommandHandler. Idempotent: a user already Withdrawn is left alone
+    // and excluded from the returned id list, so calling this again (a repeated delete attempt, or the
+    // ReleaseTenantNameAndUserEmailOnSoftDelete migration re-processing an already-handled tenant) revokes
+    // nothing a second time.
+    Task<IReadOnlyList<Guid>> WithdrawAllForTenantAsync(Guid tenantId, CancellationToken cancellationToken);
 
     Task SaveChangesAsync(CancellationToken cancellationToken);
 }

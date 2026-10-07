@@ -322,6 +322,36 @@ Backend: `GetTenantsQueryRequest`/`GetTenantQueryRequest` (`BookSpace.Applicatio
   requirement already is that gate - see `TenantStatus`'s own doc comment). Not reversible through this
   API. The confirmation name is re-verified server-side against the tenant's **current** name (never
   trusted from whatever the frontend dialog captured) - the frontend is not a security boundary.
+  - **Name/email release for reuse** (later task): deleting a tenant also releases its `Name` and every
+    one of its users' `Email` for a brand-new tenant/account to use, while keeping every historical row
+    (`Booking`, `ApprovalRequest`, ...) intact under its original id forever. `Tenant.Name`'s unique index
+    is now filtered to `[Status] <> 'Deleted'`; a NEW `UserStatus.Withdrawn` member (distinct from the
+    reversible, administrator-triggered `Inactive` - see `UserStatus`'s own doc comment) backs a matching
+    filtered unique index on `User.Email` (`[Status] <> 'Withdrawn'`). `DeleteTenantCommandHandler` now
+    atomically, in one commit: marks the tenant `Deleted`, withdraws every one of its users
+    (`IUserRepository.WithdrawAllForTenantAsync`), revokes every still-active invitation and calendar
+    subscription for the tenant, and revokes every refresh token belonging to one of those now-withdrawn
+    users. `IUserRepository.FindByEmailAsync` (login, and every "does this email exist" conflict check)
+    and `ITenantRepository.ExistsByNameAsync` both exclude Withdrawn/Deleted rows, so a historical and a
+    brand-new row can share an email/name without ever being confused - the live one is always what
+    resolves. History is never looked up by email/name; only by the original, unchanged ids.
+  - **Already-unexpired access tokens** (later task): revoking refresh tokens alone only stops a FUTURE
+    refresh - it does nothing about an access token that is still, technically, inside its own
+    `AccessTokenMinutes` window. `IDeletedTenantAccessGuard`/`DeletedTenantAccessMiddleware`
+    (`BookSpace.Api/Security/`) close that gap specifically for a Withdrawn user or a Deleted tenant by
+    checking live state once per authenticated request - deliberately narrower than "any non-Active
+    status": a merely-`Suspended` tenant (and an ordinarily-`Inactive` user) keep the existing, accepted
+    bounded-access-token-window tradeoff described two paragraphs up; only the two states a deletion
+    itself writes are an immediate hard cutoff.
+  - **Migration**: `ReleaseTenantNameAndUserEmailOnSoftDelete` backfills any tenant that was ALREADY
+    `Deleted` before this feature existed - its users become `Withdrawn` and its still-active
+    invitations/subscriptions/refresh tokens are revoked, retroactively, in the same migration, before the
+    new filtered indexes start enforcing anything.
+  - **Known limitation**: an email already accepted by the outbound SMTP server before a tenant was
+    deleted cannot be recalled - see [background-jobs.md](background-jobs.md). A still-`Pending` outbox
+    item for a since-withdrawn recipient is never sent at all (`EmailRecipientResolver` excludes Withdrawn
+    users, so the send attempt reports "recipient not found" and the item dead-letters, exactly as it
+    would for any other vanished recipient).
 - **Platform recovery**: `InviteReplacementTenantAdminCommandRequest` is a *separate* handler from both
   `CreateTenantCommandHandler` (which also creates the `Tenant` itself) and `InviteUserCommandHandler`
   (`UsersController`'s own invite, which is `TenantAdmin`-only, scoped to the caller's own tenant, and
@@ -354,7 +384,10 @@ Backend: `GetTenantsQueryRequest`/`GetTenantQueryRequest` (`BookSpace.Applicatio
   `UserListComponent` established, so "Back to tenants" restores the exact filtered view). Detail:
   aggregates, inline rename, suspend/reactivate buttons, a soft-delete dialog requiring the exact current
   name typed before the confirm button enables, and the platform-recovery panel (resend/revoke a pending
-  invitation, invite a replacement administrator) - never a booking/resource/ordinary-member view.
+  invitation, invite a replacement administrator) - never a booking/resource/ordinary-member view. The
+  delete dialog's summary text (later task) states plainly that history is kept, every user loses access
+  immediately, and the tenant's name/its users' emails are released for reuse - never that anything was
+  physically deleted.
 
 ## Testing
 
@@ -459,9 +492,15 @@ pushed, or opened as a PR, per the governing instructions - work is left entirel
 - **Not implemented, by explicit instruction**: support impersonation, a global view of all tenants'
   bookings/resources, global editing of all ordinary users' roles, physical (hard) deletion of a tenant's
   data, billing/subscription plans. See the governing instructions' own "not part of this task" list.
-- Suspending/soft-deleting a tenant does not proactively revoke its users' already-issued refresh tokens
-  - see "Tenant lifecycle management" above. An already-valid access token remains usable for up to
-  `AccessTokenMinutes` (15) after the action.
+- **Suspending** a tenant does not proactively revoke its users' already-issued refresh tokens or access
+  tokens - see "Tenant lifecycle management" above. An already-valid access token remains usable for up to
+  `AccessTokenMinutes` (15) after the action; this is an accepted, documented tradeoff, unchanged by the
+  later soft-delete work below.
+- **Soft-deleting** a tenant (later task) is stricter: it DOES revoke every refresh token belonging to one
+  of its (now-withdrawn) users, AND an already-unexpired access token is separately, immediately rejected
+  by `DeletedTenantAccessMiddleware` on the very next API call - see "Tenant lifecycle management" above.
+  The one gap that remains: an SMTP send already accepted by the mail server before deletion cannot be
+  recalled (see "Tenant lifecycle management" above, "Known limitation").
 - No composite database-level constraint prevents a future bug from re-introducing `SysAdmin` + non-null
   `TenantId` on a `User` row - this is enforced in application code only (the role-assignment validators,
   the seed/bootstrap code paths), not a `CHECK` constraint. See "Migration" above for why an automatic

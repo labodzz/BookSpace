@@ -17,8 +17,11 @@ internal sealed class TenantRepository(BookSpaceDbContext dbContext) :
     public Task<Tenant?> FindByIdAsync(Guid id, CancellationToken cancellationToken) =>
         dbContext.Tenants.FirstOrDefaultAsync(tenant => tenant.Id == id, cancellationToken);
 
+    // Excludes Deleted tenants - their name is released for reuse (see BookSpaceModelConfiguration's
+    // matching filtered unique index and DeleteTenantCommandHandler). Active and Suspended still count as
+    // a conflict - only a soft-deleted tenant's name is ever free.
     public async Task<bool> ExistsByNameAsync(string name, CancellationToken cancellationToken) =>
-        await dbContext.Tenants.AnyAsync(tenant => tenant.Name == name, cancellationToken);
+        await dbContext.Tenants.AnyAsync(tenant => tenant.Name == name && tenant.Status != TenantStatus.Deleted, cancellationToken);
 
     public async Task<PagedResult<Tenant>> GetPagedAsync(
         int page, int pageSize, string? search, TenantStatus? status, CancellationToken cancellationToken)

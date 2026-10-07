@@ -6,6 +6,7 @@ using BookSpace.Application.Common;
 using BookSpace.Application.Email;
 using BookSpace.Application.Logging;
 using BookSpace.Application.Mediator;
+using BookSpace.Application.Security;
 using FluentValidation;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -17,6 +18,10 @@ public static class DependencyInjection
     public static IServiceCollection AddApplication(this IServiceCollection services)
     {
         services.AddScoped<IAuthenticationService, AuthenticationService>();
+        // Checked once per authenticated API request (see BookSpace.Api's middleware) - see
+        // IDeletedTenantAccessGuard's own doc comment for why this exists alongside AuthenticationService's
+        // own IsUsableAsync rather than reusing it.
+        services.AddScoped<IDeletedTenantAccessGuard, DeletedTenantAccessGuard>();
         services.AddSingleton<ICorrelationIdContext, CorrelationIdContext>();
 
         // Scoped: resolved fresh per cycle by BackgroundJobsWorker (BookSpace.Api), never held by that

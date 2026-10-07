@@ -24,5 +24,13 @@ public interface IInvitationRepository
     // ResendTenantAdminInvitationCommandHandler should call this.
     Task<Invitation?> FindActiveByUserIdForTenantAdministrationAsync(Guid tenantId, Guid userId, CancellationToken cancellationToken);
 
+    // Bypasses the tenant query filter by design - the one sanctioned caller is
+    // DeleteTenantCommandHandler (a SysAdmin action against a tenant that is never its own ambient
+    // tenant). Revokes every still-active (not yet accepted, not yet revoked) invitation for the tenant,
+    // so a pending invitation link can never be accepted after its tenant has been soft-deleted even if
+    // the underlying User row's own status hasn't been checked yet - see AuthenticationService.
+    // Idempotent: a tenant with no active invitations left (a repeated delete attempt) revokes nothing.
+    Task RevokeAllActiveForTenantAsync(Guid tenantId, CancellationToken cancellationToken);
+
     Task SaveChangesAsync(CancellationToken cancellationToken);
 }
