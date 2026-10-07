@@ -15,6 +15,10 @@
       <p>Log in to your BookSpace account and keep your team moving.</p>
     </div>
 
+    @if (invitationAccepted) {
+      <p class="banner banner-info" role="status">Your password is set. You can now log in with your email and your new password.</p>
+    }
+
     @if (sessionExpired) {
       <p class="banner banner-info" role="status">Your session expired. Please sign in again.</p>
     }

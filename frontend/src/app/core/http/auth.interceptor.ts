@@ -5,7 +5,7 @@ import { catchError, switchMap, throwError } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import { AuthService } from '../auth/auth.service';
 
-const AUTH_ENDPOINTS = ['/api/auth/login', '/api/auth/refresh', '/api/auth/logout'];
+const AUTH_ENDPOINTS = ['/api/auth/login', '/api/auth/refresh', '/api/auth/logout', '/api/auth/accept-invitation'];
 
 const ABSOLUTE_URL_SCHEME = /^[a-z][a-z\d+.-]*:\/\//i;
 const PROTOCOL_RELATIVE_URL = /^\/\//;

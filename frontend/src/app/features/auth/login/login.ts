@@ -28,6 +28,7 @@ export class LoginComponent {
   protected readonly errorMessage = signal<string | null>(null);
   protected readonly showPassword = signal(false);
   protected readonly sessionExpired = this.route.snapshot.queryParamMap.get('sessionExpired') === 'true';
+  protected readonly invitationAccepted = this.route.snapshot.queryParamMap.get('invitationAccepted') === 'true';
 
   submit(): void {
     if (this.form.invalid || this.isSubmitting()) {

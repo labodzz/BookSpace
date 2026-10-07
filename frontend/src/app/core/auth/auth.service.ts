@@ -74,7 +74,11 @@ export class AuthService {
           // clearExpiredSession(), there is no "maybe a newer session already landed" case to protect
           // here, since nothing in this lineage is valid anymore regardless of what storage holds.
           this.clearLocalSessionUnconditionally();
-          this.router.navigate(['/login']);
+          // A public invitation already has everything needed to continue after logout. Preserve
+          // its token-bearing URL when the session is ended in another tab as well.
+          if (this.router.parseUrl(this.router.url).root.children['primary']?.segments[0]?.path !== 'accept-invitation') {
+            this.router.navigate(['/login']);
+          }
         }
       };
     }
