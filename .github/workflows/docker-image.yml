@@ -109,10 +109,10 @@ jobs:
             ${{ secrets.DOCKERHUB_USERNAME }}/bookspace:sha-${{ github.sha }}
 
     deploy:
-    needs: docker-image
-    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+      needs: docker-image
+      if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+      runs-on: ubuntu-latest
+      timeout-minutes: 20
 
     concurrency:
       group: bookspace-ec2-deploy
