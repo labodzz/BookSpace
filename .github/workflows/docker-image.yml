@@ -108,11 +108,11 @@ jobs:
             ${{ secrets.DOCKERHUB_USERNAME }}/bookspace:dev
             ${{ secrets.DOCKERHUB_USERNAME }}/bookspace:sha-${{ github.sha }}
 
-    deploy:
-      needs: docker-image
-      if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
-      runs-on: ubuntu-latest
-      timeout-minutes: 20
+  deploy:
+    needs: docker-image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     concurrency:
       group: bookspace-ec2-deploy
@@ -148,10 +148,12 @@ jobs:
                   "--query", "SecretString",
                   "--output", "text"
               ],
-              check=True,
               capture_output=True,
               text=True
           )
+
+          if result.returncode != 0:
+              raise SystemExit(result.stderr)
 
           secret = json.loads(result.stdout)
 
@@ -230,10 +232,12 @@ jobs:
                   "--timeout-seconds", "60",
                   "--output", "json"
               ],
-              check=True,
               capture_output=True,
               text=True
           )
+
+          if sent.returncode != 0:
+              raise SystemExit(sent.stderr)
 
           command_id = json.loads(sent.stdout)["Command"]["CommandId"]
           print(f"SSM deployment command: {command_id}", flush=True)
