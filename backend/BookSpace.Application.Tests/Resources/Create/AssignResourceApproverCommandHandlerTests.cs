@@ -136,10 +136,8 @@ public sealed class AssignResourceApproverCommandHandlerTests
         _resourceApproverRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
-    [Theory]
-    [InlineData("TenantAdmin")]
-    [InlineData("SysAdmin")]
-    public async Task Handle_WithTenantAdminOrSysAdminRole_IsAllowedEvenWithoutTheApproverRole(string adminRole)
+    [Fact]
+    public async Task Handle_WithTenantAdminRole_IsAllowedEvenWithoutTheApproverRole()
     {
         var resource = CreateResource();
         var tenantId = Guid.NewGuid();
@@ -147,7 +145,7 @@ public sealed class AssignResourceApproverCommandHandlerTests
         _currentUserContext.SetupGet(c => c.TenantId).Returns(tenantId);
         _resourceRepository.Setup(r => r.FindByIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(resource);
         _userRepository.Setup(r => r.FindByIdAsync(user.Id, It.IsAny<CancellationToken>())).ReturnsAsync(user);
-        SetUpApprovalCapableRoles(user.Id, adminRole);
+        SetUpApprovalCapableRoles(user.Id, "TenantAdmin");
         _resourceApproverRepository
             .Setup(r => r.FindByResourceAndUserAsync(resource.Id, user.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync((ResourceApprover?)null);
@@ -158,5 +156,30 @@ public sealed class AssignResourceApproverCommandHandlerTests
 
         Assert.Equal(user.Id, result.UserId);
         _resourceApproverRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    // The global SysAdmin is deliberately NOT eligible here any more (see
+    // AssignResourceApproverCommandRequest's own doc comment) - a platform admin is not a tenant member
+    // and must not become a resource approver. In practice a SysAdmin's own user row could never even be
+    // found this way (FindByIdAsync is tenant-filtered and a SysAdmin has no TenantId), but this proves
+    // the role-eligibility check itself also no longer special-cases it, independent of that.
+    [Fact]
+    public async Task Handle_WithUserHoldingOnlySysAdmin_ThrowsConflictExceptionWithoutSaving()
+    {
+        var resource = CreateResource();
+        var tenantId = Guid.NewGuid();
+        var user = CreateUser(tenantId);
+        _currentUserContext.SetupGet(c => c.TenantId).Returns(tenantId);
+        _resourceRepository.Setup(r => r.FindByIdAsync(resource.Id, It.IsAny<CancellationToken>())).ReturnsAsync(resource);
+        _userRepository.Setup(r => r.FindByIdAsync(user.Id, It.IsAny<CancellationToken>())).ReturnsAsync(user);
+        SetUpApprovalCapableRoles(user.Id, "SysAdmin");
+        var sut = CreateSut();
+        var request = new AssignResourceApproverCommandRequest(resource.Id, user.Id);
+
+        var exception = await Assert.ThrowsAsync<ConflictException>(() => sut.Handle(request, CancellationToken.None));
+
+        Assert.Equal("ResourceApprover.RoleRequired", exception.ErrorCode);
+        _resourceApproverRepository.Verify(r => r.AddAsync(It.IsAny<ResourceApprover>(), It.IsAny<CancellationToken>()), Times.Never);
+        _resourceApproverRepository.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 }

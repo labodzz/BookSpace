@@ -41,15 +41,17 @@ public sealed class AssignResourceApproverCommandHandler(
         }
 
         // A per-resource approver assignment is meaningless for a user who can never actually decide an
-        // approval - ApprovalAuthorization only ever lets a plain Approver, TenantAdmin, or SysAdmin
-        // through. Without this check, assigning e.g. a plain Member as an approver would silently
-        // create a ResourceApprover row that ApprovalAuthorization would still reject at decision time,
-        // leaving the resource's approval queue with an assignee who can never actually approve anything.
+        // approval - ApprovalAuthorization only ever lets a plain Approver or TenantAdmin through (never
+        // SysAdmin - a global platform admin is not a tenant member and must not become a resource
+        // approver, see ApprovalAuthorization's own doc comment). Without this check, assigning e.g. a
+        // plain Member as an approver would silently create a ResourceApprover row that
+        // ApprovalAuthorization would still reject at decision time, leaving the resource's approval
+        // queue with an assignee who can never actually approve anything.
         var targetRoles = await userRepository.GetRolesAsync(request.UserId, cancellationToken);
-        if (!targetRoles.Contains("Approver") && !targetRoles.Contains("TenantAdmin") && !targetRoles.Contains("SysAdmin"))
+        if (!targetRoles.Contains("Approver") && !targetRoles.Contains("TenantAdmin"))
         {
             throw new ConflictException(
-                $"User {request.UserId} does not hold a role that can approve bookings (Approver, TenantAdmin, or SysAdmin).",
+                $"User {request.UserId} does not hold a role that can approve bookings (Approver or TenantAdmin).",
                 ErrorCodes.ResourceApproverRoleRequired);
         }
 

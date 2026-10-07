@@ -18,8 +18,8 @@ const CONFLICT_MESSAGES: Record<string, string> = {
 
 // One component for both routes - resources/new (create) and resources/:id/edit (edit) - since the
 // form itself, its validation, and its submit handling are identical; only which request gets sent
-// (and whether a resource is loaded to prefill from first) differs. TenantAdmin/SysAdmin only, both
-// routes role-guarded - see app.routes.ts.
+// (and whether a resource is loaded to prefill from first) differs. TenantAdmin only (never the global
+// SysAdmin - see ResourcesController), both routes role-guarded - see app.routes.ts.
 @Component({
   selector: 'app-resource-form',
   imports: [RouterLink, FormsModule, TimezoneSelectComponent],

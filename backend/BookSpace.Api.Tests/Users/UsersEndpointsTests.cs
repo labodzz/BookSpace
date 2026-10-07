@@ -34,14 +34,16 @@ public sealed class UsersEndpointsTests : IClassFixture<CustomWebApplicationFact
         Assert.All(body.Items, user => Assert.Equal(TestDataSeeder.AcmeTenantId, user.TenantId));
     }
 
+    // The global SysAdmin is not a member of any tenant and must not manage a tenant's own user roster -
+    // see UsersController's own doc comment. This endpoint is TenantAdmin-only now.
     [Fact]
-    public async Task GetUsers_AsSysAdmin_ReturnsOk()
+    public async Task GetUsers_AsSysAdmin_ReturnsForbidden()
     {
-        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.GlobalSysAdminEmail);
 
         var response = await client.GetAsync("/api/users");
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     [Fact]

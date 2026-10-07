@@ -266,7 +266,7 @@ describe('UserListComponent', () => {
       expect(router.serializeUrl(detailResult as UrlTree)).toBe('/');
     });
 
-    it('allows TenantAdmin/SysAdmin to reach both /users and /users/:id', () => {
+    it('allows a TenantAdmin to reach both /users and /users/:id', () => {
       authService.hasAnyRole.mockReturnValue(true);
 
       expect(TestBed.runInInjectionContext(() => guardFor('users')(null!, null!))).toBe(true);

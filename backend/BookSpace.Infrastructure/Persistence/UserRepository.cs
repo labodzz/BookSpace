@@ -8,17 +8,30 @@ namespace BookSpace.Infrastructure.Persistence;
 
 internal sealed class UserRepository(BookSpaceDbContext dbContext) : IUserRepository
 {
-    // Administrative roles that count toward "this tenant must always retain at least one active
-    // administrator" - see CountActiveAdministratorsAsync and UserAdministrationGuard.
-    private static readonly string[] AdministratorRoleNames = ["TenantAdmin", "SysAdmin"];
+    // The administrative role that counts toward "this tenant must always retain at least one active
+    // administrator" - see CountActiveAdministratorsAsync and UserAdministrationGuard. SysAdmin is
+    // deliberately not included: this method is only ever called from a real, non-null ambient tenant
+    // context (a TenantAdmin-only handler - see UsersController), and a global SysAdmin's TenantId ==
+    // null row could never match that tenant-filtered query anyway (a non-null value never equals null,
+    // in either C# or SQL - see BookSpaceDbContext.ApplyUserTenantFilter) - this list only ever names
+    // roles that CAN actually belong to a tenant user.
+    private static readonly string[] AdministratorRoleNames = ["TenantAdmin"];
 
     // Explicitly bypasses the tenant query filter: email is globally unique (see the index comment on
     // User in BookSpaceModelConfiguration.cs), and login is the one moment there's no tenant context
     // yet to filter by - the tenant is only known once this lookup finds the user. This is the sole
     // sanctioned exception to "every ITenantOwned read goes through the tenant filter"; don't copy this
     // pattern for anything that isn't a pre-authentication, globally-unique-key lookup.
+    //
+    // Excludes Withdrawn users (see UserStatus) - their email was released by a tenant soft-delete (see
+    // BookSpaceModelConfiguration's matching filtered unique index and DeleteTenantCommandHandler), so a
+    // historical, withdrawn row and a brand-new live row can legitimately share an email at once. Every
+    // caller of this method (login, and every "does this email already exist" conflict check) wants
+    // exactly the live account, never the withdrawn one - without this filter, FirstOrDefaultAsync could
+    // non-deterministically return either row.
     public Task<User?> FindByEmailAsync(string email, CancellationToken cancellationToken) =>
-        dbContext.Users.IgnoreQueryFilters().FirstOrDefaultAsync(user => user.Email == email, cancellationToken);
+        dbContext.Users.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(user => user.Email == email && user.Status != UserStatus.Withdrawn, cancellationToken);
 
     public Task<User?> FindByIdAsync(Guid id, CancellationToken cancellationToken) =>
         dbContext.Users.FirstOrDefaultAsync(user => user.Id == id, cancellationToken);
@@ -27,6 +40,11 @@ internal sealed class UserRepository(BookSpaceDbContext dbContext) : IUserReposi
     // accept-invitation) that have no tenant context yet.
     public Task<User?> FindByIdForAuthenticationAsync(Guid id, CancellationToken cancellationToken) =>
         dbContext.Users.IgnoreQueryFilters().FirstOrDefaultAsync(user => user.Id == id, cancellationToken);
+
+    // See the interface doc comment - explicitly bypasses the tenant filter and re-applies tenantId itself
+    // for the one sanctioned cross-tenant caller (SysAdmin tenant onboarding).
+    public Task<User?> FindByIdForTenantAdministrationAsync(Guid tenantId, Guid userId, CancellationToken cancellationToken) =>
+        dbContext.Users.IgnoreQueryFilters().FirstOrDefaultAsync(user => user.TenantId == tenantId && user.Id == userId, cancellationToken);
 
     public async Task<IReadOnlyList<string>> GetRolesAsync(Guid userId, CancellationToken cancellationToken) =>
         await dbContext.UserRoles
@@ -126,6 +144,76 @@ internal sealed class UserRepository(BookSpaceDbContext dbContext) : IUserReposi
                 .Join(dbContext.Roles, userRole => userRole.RoleId, role => role.Id, (userRole, role) => new { userRole.UserId, role.Name })
                 .Any(userRole => userRole.UserId == user.Id && AdministratorRoleNames.Contains(userRole.Name)))
             .CountAsync(cancellationToken);
+
+    // See the interface doc comment for why this bypasses the tenant filter. Two queries total (never one
+    // per tenant, and never one per user): the user rows themselves, and a single batched join resolving
+    // which of exactly those users hold "TenantAdmin" - combined client-side via a HashSet lookup, rather
+    // than a correlated subquery evaluated per row inside the first query's own SELECT projection. The
+    // latter shape (tried first) is what CountActiveAdministratorsAsync's WHERE-clause EXISTS subquery
+    // already proves translates fine against SQL Server, but moving the equivalent subquery into a
+    // SELECT projection's own field turned out not to translate the same way against every provider this
+    // codebase runs against (SQLite, used by BookSpace.Api.Tests) - caught by
+    // BookSpace.Api.Tests/Tenants/TenantsEndpointsTests itself before this ever shipped. This two-query
+    // shape is provider-agnostic and avoids the question entirely.
+    public async Task<IReadOnlyDictionary<Guid, TenantUserAggregate>> GetTenantUserAggregatesAsync(
+        IReadOnlyList<Guid> tenantIds, CancellationToken cancellationToken)
+    {
+        var users = await dbContext.Users.IgnoreQueryFilters()
+            .Where(user => user.TenantId != null && tenantIds.Contains(user.TenantId.Value))
+            .Select(user => new { TenantId = user.TenantId!.Value, user.Id, user.Status, user.Email })
+            .ToListAsync(cancellationToken);
+
+        var userIds = users.Select(user => user.Id).ToList();
+        var tenantAdminUserIds = (await dbContext.UserRoles
+            .Where(userRole => userIds.Contains(userRole.UserId))
+            .Join(dbContext.Roles, userRole => userRole.RoleId, role => role.Id, (userRole, role) => new { userRole.UserId, role.Name })
+            .Where(userRole => userRole.Name == "TenantAdmin")
+            .Select(userRole => userRole.UserId)
+            .ToListAsync(cancellationToken))
+            .ToHashSet();
+
+        return users
+            .GroupBy(row => row.TenantId)
+            .ToDictionary(
+                group => group.Key,
+                TenantUserAggregate (group) =>
+                {
+                    var items = group.Select(row => new { row.Id, row.Status, row.Email, IsTenantAdmin = tenantAdminUserIds.Contains(row.Id) }).ToList();
+                    return new TenantUserAggregate(
+                        TotalUserCount: items.Count,
+                        ActiveUserCount: items.Count(row => row.Status == UserStatus.Active),
+                        InvitedUserCount: items.Count(row => row.Status == UserStatus.Invited),
+                        InactiveUserCount: items.Count(row => row.Status == UserStatus.Inactive),
+                        ActiveTenantAdminEmails: items
+                            .Where(row => row.Status == UserStatus.Active && row.IsTenantAdmin)
+                            .Select(row => row.Email).ToList(),
+                        PendingTenantAdminInvitations: items
+                            .Where(row => row.Status == UserStatus.Invited && row.IsTenantAdmin)
+                            .Select(row => new PendingTenantAdminContact(row.Id, row.Email)).ToList());
+                });
+    }
+
+    // Bypasses the tenant query filter by design - the one sanctioned caller is
+    // DeleteTenantCommandHandler, a SysAdmin action against a tenant that is never the caller's own
+    // ambient tenant (the global SysAdmin has none). Withdraws every user who still has a "live" status
+    // (Active/Invited/Inactive) - a previously-Withdrawn row (an already-deleted tenant re-processed by
+    // the ReleaseTenantNameAndUserEmailOnSoftDelete migration, or a repeated delete attempt) is left alone,
+    // which is what makes this safe to call again with no further effect. Returns the ids actually
+    // transitioned so the caller can revoke exactly their refresh tokens (RefreshToken carries no TenantId
+    // of its own - see RefreshToken.cs) without a second, broader query.
+    public async Task<IReadOnlyList<Guid>> WithdrawAllForTenantAsync(Guid tenantId, CancellationToken cancellationToken)
+    {
+        var users = await dbContext.Users.IgnoreQueryFilters()
+            .Where(user => user.TenantId == tenantId && user.Status != UserStatus.Withdrawn)
+            .ToListAsync(cancellationToken);
+
+        foreach (var user in users)
+        {
+            user.Status = UserStatus.Withdrawn;
+        }
+
+        return users.Select(user => user.Id).ToList();
+    }
 
     public Task SaveChangesAsync(CancellationToken cancellationToken) =>
         dbContext.SaveChangesHandlingConflictsAsync(cancellationToken);

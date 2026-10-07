@@ -878,7 +878,7 @@ under "Notification outbox" above.
 | Approver confirms a `Pending` booking | `ApproveBookingCommandHandler` | `Booking.Confirmation` | Booking owner | `booking:{bookingId}:confirmation` |
 | `ApproveRemainingSeries` cascades to a sibling occurrence | `ApproveBookingCommandHandler` | `Booking.Confirmation` | That occurrence's owner | `booking:{occurrenceId}:confirmation` |
 | Approver rejects a `Pending` booking | `RejectBookingCommandHandler` | `Booking.Rejection` | Booking owner | `booking:{bookingId}:rejection` |
-| Booking owner, or a TenantAdmin/SysAdmin acting on their behalf, cancels a booking | `CancelBookingCommandHandler` | `Booking.Cancellation` | Booking owner (never the admin who acted) | `booking:{bookingId}:cancellation` |
+| Booking owner, or a TenantAdmin acting on their behalf, cancels a booking | `CancelBookingCommandHandler` | `Booking.Cancellation` | Booking owner (never the admin who acted) | `booking:{bookingId}:cancellation` |
 | `CancelRemainingSeries` cascades to a sibling occurrence | `CancelBookingCommandHandler` | `Booking.Cancellation` | That occurrence's owner | `booking:{occurrenceId}:cancellation` |
 
 A booking that is created `Pending` (`RequiresApproval`) never enqueues a confirmation at creation time -
@@ -949,7 +949,7 @@ ordinary tenant-filtered repository methods that existed before this branch (`Fi
 before an enqueue could ever be attempted - this branch does not call `IgnoreQueryFilters()` anywhere.
 `BookingNotificationFactory` always takes `TenantId`/`RecipientUserId` from the loaded `Booking` entity
 itself, never from `ICurrentUserContext` - so the recipient is always the booking's own owner, never the
-approver or TenantAdmin/SysAdmin who performed the approve/reject/cancel action, even when that caller
+approver or TenantAdmin who performed the approve/reject/cancel action, even when that caller
 belongs to the same tenant as the booking.
 
 ## Gmail SMTP sender

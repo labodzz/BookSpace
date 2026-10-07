@@ -68,13 +68,16 @@ public sealed class GetPendingApprovalsQueryHandlerTests
         Assert.Equal(booking.Id, item.BookingId);
     }
 
-    [Theory]
-    [InlineData("TenantAdmin")]
-    [InlineData("SysAdmin")]
-    public async Task Handle_AsTenantAdminOrSysAdmin_SeesEveryPendingBookingWithoutResourceRestriction(string role)
+    // SysAdmin is deliberately not parameterized here alongside TenantAdmin any more - this handler no
+    // longer treats it as equivalent (see ApprovalAuthorization.IsTenantAdmin); the real boundary keeping
+    // a global SysAdmin out of this endpoint at all is BookingsController's own
+    // [Authorize(Roles = "Approver,TenantAdmin")], proven by an API-level test instead (see
+    // BookingsEndpointsTests).
+    [Fact]
+    public async Task Handle_AsTenantAdmin_SeesEveryPendingBookingWithoutResourceRestriction()
     {
         _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
-        _currentUserContext.SetupGet(c => c.Roles).Returns([role]);
+        _currentUserContext.SetupGet(c => c.Roles).Returns(["TenantAdmin"]);
         var booking = CreatePendingBooking(Guid.NewGuid());
         _bookingRepository
             .Setup(r => r.GetPendingApprovalAsync(null, It.IsAny<CancellationToken>()))

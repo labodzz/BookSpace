@@ -464,4 +464,19 @@ public sealed class CreateRecurringSeriesCommandHandlerTests
 
         await Assert.ThrowsAsync<NotFoundException>(() => sut.Handle(CreateRequest(Guid.NewGuid()), CancellationToken.None));
     }
+
+    // The global SysAdmin has no TenantId and must never be able to create a recurring series - see
+    // TenantMembershipGuard. Rejected cleanly before even looking up the resource.
+    [Fact]
+    public async Task Handle_ForTheGlobalSysAdminWithNoTenantId_ThrowsConflictExceptionWithoutLookingUpTheResource()
+    {
+        _currentUserContext.SetupGet(c => c.TenantId).Returns((Guid?)null);
+        _currentUserContext.SetupGet(c => c.UserId).Returns(UserId);
+        var sut = CreateSut();
+
+        var exception = await Assert.ThrowsAsync<ConflictException>(() => sut.Handle(CreateRequest(Guid.NewGuid()), CancellationToken.None));
+
+        Assert.Equal("Common.TenantMembershipRequired", exception.ErrorCode);
+        _resourceRepository.Verify(r => r.FindByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
 }

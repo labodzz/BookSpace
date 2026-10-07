@@ -51,6 +51,7 @@ public static class DependencyInjection
         services.AddScoped<IRecurringSeriesRepository, RecurringSeriesRepository>();
         services.AddScoped<IApprovalRequestRepository, ApprovalRequestRepository>();
         services.AddScoped<ITenantRepository, TenantRepository>();
+        services.AddScoped<BookSpace.Application.Tenants.ITenantRepository, TenantRepository>();
         services.AddScoped<ICalendarSubscriptionRepository, CalendarSubscriptionRepository>();
         services.AddScoped<IJobLeaseStore, JobLeaseStore>();
         services.AddScoped<INotificationOutboxWriter, NotificationOutboxWriter>();

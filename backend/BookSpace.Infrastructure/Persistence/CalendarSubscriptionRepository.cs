@@ -18,5 +18,20 @@ internal sealed class CalendarSubscriptionRepository(BookSpaceDbContext dbContex
     public async Task AddAsync(CalendarSubscription subscription, CancellationToken cancellationToken) =>
         await dbContext.CalendarSubscriptions.AddAsync(subscription, cancellationToken);
 
+    // See the interface doc comment - explicitly bypasses the tenant filter for the one sanctioned
+    // cross-tenant caller (SysAdmin tenant deletion).
+    public async Task RevokeAllActiveForTenantAsync(Guid tenantId, CancellationToken cancellationToken)
+    {
+        var activeSubscriptions = await dbContext.CalendarSubscriptions.IgnoreQueryFilters()
+            .Where(subscription => subscription.TenantId == tenantId && subscription.RevokedAtUtc == null)
+            .ToListAsync(cancellationToken);
+
+        var now = DateTimeOffset.UtcNow;
+        foreach (var subscription in activeSubscriptions)
+        {
+            subscription.RevokedAtUtc = now;
+        }
+    }
+
     public Task SaveChangesAsync(CancellationToken cancellationToken) => dbContext.SaveChangesHandlingConflictsAsync(cancellationToken);
 }

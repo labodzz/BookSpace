@@ -691,7 +691,8 @@ namespace BookSpace.Infrastructure.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("Name")
-                        .IsUnique();
+                        .IsUnique()
+                        .HasFilter("[Status] <> 'Deleted'");
 
                     b.ToTable("Tenants", null, t =>
                         {
@@ -741,13 +742,14 @@ namespace BookSpace.Infrastructure.Migrations
                         .HasColumnType("nvarchar(20)")
                         .HasDefaultValue("Active");
 
-                    b.Property<Guid>("TenantId")
+                    b.Property<Guid?>("TenantId")
                         .HasColumnType("uniqueidentifier");
 
                     b.HasKey("Id");
 
                     b.HasIndex("Email")
-                        .IsUnique();
+                        .IsUnique()
+                        .HasFilter("[Status] <> 'Withdrawn'");
 
                     b.HasIndex("TenantId");
 
@@ -988,8 +990,7 @@ namespace BookSpace.Infrastructure.Migrations
                     b.HasOne("BookSpace.Domain.Entities.Tenant", null)
                         .WithMany()
                         .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("BookSpace.Domain.Entities.UserRole", b =>

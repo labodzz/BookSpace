@@ -58,6 +58,14 @@ internal static class DevelopmentSeeder
         var globexMeetingRoomType = new ResourceType { Id = Guid.NewGuid(), TenantId = globex.Id, Name = "Meeting Room" };
         dbContext.ResourceTypes.AddRange(acmeMeetingRoomType, acmeDeskType, globexMeetingRoomType);
 
+        // The global platform administrator - TenantId = null, SysAdmin only. Deliberately a SEPARATE
+        // account from any tenant's TenantAdmin (e.g. admin@acme.test below): a global SysAdmin is not a
+        // member of Acme or any other company, and must never be seeded holding both TenantId and
+        // SysAdmin at once - see docs/tenant-onboarding.md, "SysAdmin and tenant business data".
+        var sysAdmin = new User { Id = Guid.NewGuid(), TenantId = null, FirstName = "Sys", LastName = "Admin", Email = "sysadmin@bookspace.test", PasswordHash = passwordHash, CreatedAtUtc = now };
+        dbContext.Users.Add(sysAdmin);
+        dbContext.UserRoles.Add(new UserRole { Id = Guid.NewGuid(), UserId = sysAdmin.Id, RoleId = sysAdminRole.Id });
+
         var acmeAdmin = new User { Id = Guid.NewGuid(), TenantId = acme.Id, FirstName = "Amina", LastName = "Kovač", Email = "admin@acme.test", PasswordHash = passwordHash, CreatedAtUtc = now };
         var acmeApprover = new User { Id = Guid.NewGuid(), TenantId = acme.Id, FirstName = "Emir", LastName = "Hodžić", Email = "approver@acme.test", PasswordHash = passwordHash, CreatedAtUtc = now };
         var acmeMember = new User { Id = Guid.NewGuid(), TenantId = acme.Id, FirstName = "Lamija", LastName = "Bojić", Email = "member@acme.test", PasswordHash = passwordHash, CreatedAtUtc = now };
@@ -65,6 +73,9 @@ internal static class DevelopmentSeeder
         var globexMember = new User { Id = Guid.NewGuid(), TenantId = globex.Id, FirstName = "Jane", LastName = "Smith", Email = "member@globex.test", PasswordHash = passwordHash, CreatedAtUtc = now };
         dbContext.Users.AddRange(acmeAdmin, acmeApprover, acmeMember, globexAdmin, globexMember);
 
+        // acmeAdmin is TenantAdmin only - never SysAdmin. A real booking/approval test path for an admin
+        // account, if one is ever needed, should add Member explicitly as its own business decision (see
+        // docs/tenant-onboarding.md), not by reusing the global SysAdmin's elevated role.
         dbContext.UserRoles.AddRange(
             new UserRole { Id = Guid.NewGuid(), UserId = acmeAdmin.Id, RoleId = tenantAdminRole.Id },
             new UserRole { Id = Guid.NewGuid(), UserId = acmeApprover.Id, RoleId = approverRole.Id },

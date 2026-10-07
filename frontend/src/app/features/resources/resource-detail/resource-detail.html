@@ -35,7 +35,7 @@
       </span>
     </header>
 
-    @if (authService.hasAnyRole('TenantAdmin', 'SysAdmin')) {
+    @if (authService.hasAnyRole('TenantAdmin')) {
       <div class="resource-detail__admin-actions">
         @if (resource.status !== 'Archived') {
           <a class="btn btn-secondary" [routerLink]="['/resources', resource.id, 'edit']">Edit</a>

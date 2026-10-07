@@ -77,10 +77,15 @@ public sealed class GetResourcesQueryHandlerTests
             r => r.GetPagedAsync(3, 5, resourceTypeId, ResourceStatus.Maintenance, It.IsAny<CancellationToken>()), Times.Once);
     }
 
+    // SysAdmin is included here too, not just Member/Approver: it's deliberately not "privileged" for
+    // this query any more (see GetResourcesQueryRequest's own comment) - a global SysAdmin has no tenant
+    // context, so this query's own tenant filter already returns nothing for it regardless, but the
+    // status-filter logic itself should not special-case it either.
     [Theory]
     [InlineData("Member")]
     [InlineData("Approver")]
-    public async Task Handle_AsAPlainMemberOrApprover_ForcesTheStatusFilterToActiveRegardlessOfWhatWasRequested(string role)
+    [InlineData("SysAdmin")]
+    public async Task Handle_AsAPlainMemberApproverOrSysAdmin_ForcesTheStatusFilterToActiveRegardlessOfWhatWasRequested(string role)
     {
         _currentUserContext.SetupGet(c => c.Roles).Returns(new[] { role });
         _resourceRepository
@@ -111,18 +116,4 @@ public sealed class GetResourcesQueryHandlerTests
             r => r.GetPagedAsync(1, 20, null, ResourceStatus.Inactive, It.IsAny<CancellationToken>()), Times.Once);
     }
 
-    [Fact]
-    public async Task Handle_AsSysAdmin_PassesTheRequestedStatusThroughUnchanged()
-    {
-        _currentUserContext.SetupGet(c => c.Roles).Returns(new[] { "SysAdmin" });
-        _resourceRepository
-            .Setup(r => r.GetPagedAsync(1, 20, null, ResourceStatus.Archived, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedResult<Resource>([], 1, 20, 0));
-        var sut = CreateSut();
-
-        await sut.Handle(new GetResourcesQueryRequest(Status: ResourceStatus.Archived), CancellationToken.None);
-
-        _resourceRepository.Verify(
-            r => r.GetPagedAsync(1, 20, null, ResourceStatus.Archived, It.IsAny<CancellationToken>()), Times.Once);
-    }
 }

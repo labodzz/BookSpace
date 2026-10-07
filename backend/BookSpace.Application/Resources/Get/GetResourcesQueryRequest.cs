@@ -36,9 +36,11 @@ public sealed class GetResourcesQueryHandler(IResourceRepository resourceReposit
         // A plain Member/Approver browsing the standard resource list should only ever see resources they
         // can actually act on - an Inactive/Maintenance/Archived resource isn't bookable, so surfacing it
         // (or letting a client force it via ?status=) would be confusing noise, not useful information.
-        // TenantAdmin/SysAdmin manage the full lifecycle (including setting a new resource up before it's
-        // Active), so they keep seeing - and can explicitly filter to - every status, unchanged.
-        var isPrivileged = currentUserContext.Roles.Contains("TenantAdmin") || currentUserContext.Roles.Contains("SysAdmin");
+        // TenantAdmin manages the full lifecycle (including setting a new resource up before it's
+        // Active), so it keeps seeing - and can explicitly filter to - every status, unchanged. SysAdmin
+        // is deliberately not included: a global SysAdmin has no tenant context, so this query's own
+        // tenant filter already returns nothing for it regardless of this status filter.
+        var isPrivileged = currentUserContext.Roles.Contains("TenantAdmin");
         var status = isPrivileged ? request.Status : ResourceStatus.Active;
 
         var paged = await resourceRepository.GetPagedAsync(

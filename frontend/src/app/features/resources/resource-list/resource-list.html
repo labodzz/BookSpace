@@ -5,7 +5,7 @@
       <p class="resource-list__subtitle">Browse what your team can book.</p>
     </div>
 
-    @if (authService.hasAnyRole('TenantAdmin', 'SysAdmin')) {
+    @if (authService.hasAnyRole('TenantAdmin')) {
       <a class="btn btn-primary" routerLink="/resources/new">New resource</a>
     }
 

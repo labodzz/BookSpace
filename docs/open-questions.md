@@ -183,10 +183,11 @@ channel currently available to do better.
 mechanism first; (d) add TenantAdmin override now with an audit trail (who cancelled it and why) recorded
 on the booking, but no *active* notification, as a middle ground between (b) and (c).
 
-**Interim implementation (option (d))**: `TenantAdmin`/`SysAdmin` can now cancel any booking in their
-tenant via the same `DELETE /api/bookings/{id}` endpoint a member uses to cancel their own
-(`CancelBookingCommandHandler` - see
-[bookings-and-concurrency.md](bookings-and-concurrency.md#2-ownership-and-tenant-isolation)). An optional
+**Interim implementation (option (d))**: `TenantAdmin` can cancel any booking in their tenant via the
+same `DELETE /api/bookings/{id}` endpoint a member uses to cancel their own (`CancelBookingCommandHandler`
+- see [bookings-and-concurrency.md](bookings-and-concurrency.md#2-ownership-and-tenant-isolation)). The
+global `SysAdmin` deliberately does **not** get this override - see "SysAdmin Scope" below, now resolved:
+a platform administrator is not a tenant member and must not manage its bookings. An optional
 `reason` is stored on `Booking.CancellationReason`, and `CancelledByUserId` records the acting admin
 (already-existing columns, previously unpopulated by any handler). `GetOwnBookings` surfaces
 `CancelledByAdmin`/`CancellationReason`/`CancelledAtUtc` so the affected owner can see IN THEIR OWN
@@ -200,44 +201,41 @@ middle ground pending product/mentor confirmation, not as a final decision - ful
 **Trigger**: An explicit product requirement for *active* notification (email/push/in-app) at
 cancellation time - the interim audit-trail-only version above is already live.
 
-**Current default**: (d) - a `TenantAdmin`/`SysAdmin` can cancel any booking in their tenant, with the
+**Current default**: (d) - a `TenantAdmin` can cancel any booking in their tenant, with the
 reason and acting admin recorded and visible to the owner in booking history, but with no active
-notification sent.
+notification sent. The global `SysAdmin` cannot - see "SysAdmin Scope" below.
 
 ---
 
-## SysAdmin Scope — Cross-Tenant Access
+## SysAdmin Scope — Cross-Tenant Access — RESOLVED
 
-**Question**: Is `SysAdmin` meant to be a cross-tenant, platform-level role (visibility/access across
-every tenant), or is it deliberately just a stronger role scoped to its own tenant, same as
-`TenantAdmin`?
+**Question (as originally asked)**: Is `SysAdmin` meant to be a cross-tenant, platform-level role
+(visibility/access across every tenant), or is it deliberately just a stronger role scoped to its own
+tenant, same as `TenantAdmin`?
 
-**Context**: Every access token carries exactly one `tenant_id` claim, set unconditionally from
-`user.TenantId` at issuance regardless of role - `SysAdmin` gets one exactly like `TenantAdmin` does
-(see [tenant-isolation.md](tenant-isolation.md#how-tenant-context-is-derived)). The global EF Core query
-filter (`entity.TenantId == currentUserContext.TenantId`) applies without exception, so today `SysAdmin`
-cannot see or act on another tenant's data at all - everywhere `SysAdmin` currently has elevated power
-(e.g. `ApprovalAuthorization.IsTenantAdminOrSysAdmin`, booking cancellation above), that power bypasses a
-per-resource/per-owner check *within* its own tenant, not a cross-tenant boundary.
+**Resolution**: Option (b)-and-(c) combined, implemented by a later task (see
+[tenant-onboarding.md](tenant-onboarding.md), "SysAdmin and tenant business data") - not a rename, but a
+genuine redesign: `SysAdmin` is now the global platform administrator, with **no** `tenant_id` at all
+(`User.TenantId` is nullable; the global SysAdmin's row has it `null`), not a token/claim trick layered on
+top of the old tenant-scoped shape. It explicitly lost the tenant-business powers it used to share with
+`TenantAdmin` (booking approval/cancellation, resource/resource-type management, tenant user
+administration - see [user-administration.md](user-administration.md) §2) rather than gaining broader
+*cross-tenant* reach into that same business data - the "support staff troubleshooting a customer's
+tenant" shape flagged below as a concern was deliberately **not** built (no impersonation, no global
+booking/resource view - see [tenant-onboarding.md](tenant-onboarding.md)'s "not part of this task" list).
+What it gained instead is platform tenant-*lifecycle* management (create/list/suspend/reactivate/
+soft-delete a tenant, recover a tenant that lost its administrator) - a different, narrower kind of
+cross-tenant reach than "see any tenant's business data," with its own tenant-isolation review (see
+[tenant-isolation.md](tenant-isolation.md)'s `GetTenantUserAggregatesAsync` entry: aggregates and an
+admin contact only, never full user/booking/resource rows).
 
-**Why it matters**: The name "SysAdmin" reads as a platform-wide operator role in most systems, which is
-a different shape of access than "a second TenantAdmin-equivalent." If real cross-tenant access is ever
-needed (e.g. platform support staff troubleshooting a customer's tenant), it requires deliberate design -
-a user with no single `tenant_id`, a way to pick/impersonate a tenant, and its own audit trail - not just
-attaching the role name to more `[Authorize]` checks that stay tenant-scoped underneath.
-
-**Options**: (a) leave `SysAdmin` exactly as-is - elevated, but still confined to its own tenant like
-`TenantAdmin`; (b) build genuine cross-tenant reach for `SysAdmin` (a token/claim shape not tied to one
-tenant, or an explicit tenant-switch mechanism), with its own tenant-isolation review since it would be a
-deliberate hole in the invariant every other role upholds; (c) rename the current role to something that
-doesn't imply platform-wide reach, and introduce a real cross-tenant role separately if and when it's
-needed.
-
-**Trigger**: A concrete need for a role that operates across tenants (platform support/operations,
-cross-tenant reporting, etc.).
-
-**Current default**: (a) - `SysAdmin` is elevated but tenant-scoped; no cross-tenant reach exists for any
-role today.
+**Original context, kept for history**: every access token used to carry exactly one `tenant_id` claim,
+set unconditionally from `user.TenantId` at issuance regardless of role - `SysAdmin` got one exactly like
+`TenantAdmin` did. The global EF Core query filter applied without exception, so `SysAdmin` could not see
+or act on another tenant's data at all; everywhere it had elevated power (e.g.
+`ApprovalAuthorization.IsTenantAdminOrSysAdmin`, booking cancellation above), that power bypassed a
+per-resource/per-owner check *within* its own tenant, not a cross-tenant boundary. Both of those are now
+inaccurate as a description of the current code - see the Resolution above.
 
 ---
 

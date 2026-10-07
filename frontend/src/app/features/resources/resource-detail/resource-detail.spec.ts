@@ -147,8 +147,8 @@ describe('ResourceDetailComponent', () => {
     expect(root().querySelector('.dialog .banner-error')).not.toBeNull();
   });
 
-  it('shows "Manage availability" and "Manage approvers", navigating to their guarded management routes, for a TenantAdmin or SysAdmin', () => {
-    configure((...roles) => roles.includes('SysAdmin'));
+  it('shows "Manage availability" and "Manage approvers", navigating to their guarded management routes, for a TenantAdmin', () => {
+    configure((...roles) => roles.includes('TenantAdmin'));
     flushLoad();
 
     const availabilityLink = [...root().querySelectorAll('a')].find((a) => a.textContent?.trim() === 'Manage availability');
@@ -159,6 +159,16 @@ describe('ResourceDetailComponent', () => {
 
   it('does not show "Manage availability" or "Manage approvers" for a plain Member', () => {
     configure();
+    flushLoad();
+
+    expect([...root().querySelectorAll('a')].some((a) => a.textContent?.trim() === 'Manage availability')).toBe(false);
+    expect([...root().querySelectorAll('a')].some((a) => a.textContent?.trim() === 'Manage approvers')).toBe(false);
+  });
+
+  // The global SysAdmin is not a tenant member and must not manage its resources - see ResourcesController
+  // and resource-detail.html's own [Authorize]-mirroring hasAnyRole('TenantAdmin') check.
+  it('does not show "Manage availability" or "Manage approvers" for the global SysAdmin', () => {
+    configure((...roles) => roles.includes('SysAdmin'));
     flushLoad();
 
     expect([...root().querySelectorAll('a')].some((a) => a.textContent?.trim() === 'Manage availability')).toBe(false);

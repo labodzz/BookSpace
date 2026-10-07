@@ -1,0 +1,105 @@
+<div class="tenant-form-page">
+@if (created(); as createdTenant) {
+  <div class="card tenant-form tenant-form__confirmation">
+    <h1>Tenant created</h1>
+    <p class="banner banner-success" role="status">
+      <strong>{{ createdTenant.tenantName }}</strong> was created, and {{ createdTenant.adminEmail }} was set up as its first
+      administrator. An invitation email has been queued for sending - this does not yet confirm it was delivered.
+    </p>
+
+    @if (resent()) {
+      <p class="banner banner-success" role="status">A new invitation was queued for {{ createdTenant.adminEmail }}.</p>
+    }
+    @if (resendError()) {
+      <p class="banner banner-error" role="alert">{{ resendError() }}</p>
+    }
+
+    <div class="tenant-form__confirmation-actions">
+      <button type="button" class="btn btn-secondary" [disabled]="resending()" (click)="resendInvitation()">
+        {{ resending() ? 'Resending…' : 'Resend invitation' }}
+      </button>
+      <button type="button" class="btn btn-primary" (click)="startAnotherTenant()">Create another tenant</button>
+    </div>
+  </div>
+} @else {
+  <form class="card tenant-form" (ngSubmit)="submit()" novalidate>
+    <h1>New tenant</h1>
+    <p class="tenant-form__intro">
+      Creates a new tenant and invites its first administrator by email - they'll set their own password to accept.
+    </p>
+
+    @if (formError()) {
+      <p class="banner banner-error" role="alert">{{ formError() }}</p>
+    }
+
+    <div class="field">
+      <label for="tenant-name">Tenant name</label>
+      <input id="tenant-name" type="text" [value]="name()" (input)="name.set($any($event.target).value)" maxlength="200" required />
+      @if (nameFieldErrors().length) {
+        <span class="field-error-text">{{ nameFieldErrors().join(' ') }}</span>
+      }
+    </div>
+
+    <app-timezone-select [value]="defaultTimeZoneId()" (valueChange)="defaultTimeZoneId.set($event)" [autoDetectBrowserTimezone]="true" />
+    @if (timeZoneFieldErrors().length) {
+      <span class="field-error-text">{{ timeZoneFieldErrors().join(' ') }}</span>
+    }
+
+    <fieldset class="tenant-form__admin">
+      <legend>First administrator</legend>
+
+      <div class="field">
+        <label for="admin-first-name">First name</label>
+        <input
+          id="admin-first-name"
+          type="text"
+          [value]="adminFirstName()"
+          (input)="adminFirstName.set($any($event.target).value)"
+          maxlength="100"
+          required
+        />
+        @if (adminFirstNameFieldErrors().length) {
+          <span class="field-error-text">{{ adminFirstNameFieldErrors().join(' ') }}</span>
+        }
+      </div>
+
+      <div class="field">
+        <label for="admin-last-name">Last name</label>
+        <input
+          id="admin-last-name"
+          type="text"
+          [value]="adminLastName()"
+          (input)="adminLastName.set($any($event.target).value)"
+          maxlength="100"
+          required
+        />
+        @if (adminLastNameFieldErrors().length) {
+          <span class="field-error-text">{{ adminLastNameFieldErrors().join(' ') }}</span>
+        }
+      </div>
+
+      <div class="field">
+        <label for="admin-email">Email</label>
+        <input
+          id="admin-email"
+          type="email"
+          [value]="adminEmail()"
+          (input)="adminEmail.set($any($event.target).value)"
+          autocomplete="off"
+          required
+        />
+        @if (adminEmailFieldErrors().length) {
+          <span class="field-error-text">{{ adminEmailFieldErrors().join(' ') }}</span>
+        }
+      </div>
+    </fieldset>
+
+    <div class="tenant-form__actions">
+      <a class="btn btn-secondary" routerLink="/">Cancel</a>
+      <button type="submit" class="btn btn-primary" [disabled]="submitting()">
+        {{ submitting() ? 'Creating…' : 'Create tenant' }}
+      </button>
+    </div>
+  </form>
+}
+</div>

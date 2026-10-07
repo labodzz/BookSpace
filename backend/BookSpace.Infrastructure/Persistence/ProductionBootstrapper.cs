@@ -6,15 +6,20 @@ using Microsoft.Extensions.Logging;
 
 namespace BookSpace.Infrastructure.Persistence;
 
-// Creates the first tenant and first TenantAdmin in an otherwise-empty production database - the
-// production counterpart to DevelopmentSeeder, gated by BootstrapOptions.Enabled instead of the
-// Development environment check. Called from Program.cs only after migrations have already run (see
-// DependencyInjection.BootstrapProductionAdminAsync), never in place of them and never alongside
-// DevelopmentSeeder - the two are mutually exclusive by construction (one runs only in Development,
-// this one only when explicitly enabled by configuration).
+// Creates the first global SysAdmin in an otherwise-empty production database - the production
+// counterpart to DevelopmentSeeder's own sysadmin@bookspace.test account, gated by
+// BootstrapOptions.Enabled instead of the Development environment check. Called from Program.cs only
+// after migrations have already run (see DependencyInjection.BootstrapProductionAdminAsync), never in
+// place of them and never alongside DevelopmentSeeder - the two are mutually exclusive by construction
+// (one runs only in Development, this one only when explicitly enabled by configuration).
+//
+// Deliberately does NOT create a tenant: a platform with zero tenants is a normal, expected state
+// immediately after bootstrap - the SysAdmin creates the first tenant through the ordinary create-tenant
+// API afterward (see CreateTenantCommandHandler), the same path every later tenant goes through. See
+// BootstrapOptions for why this replaced an earlier version that bootstrapped a tenant + TenantAdmin.
 internal static class ProductionBootstrapper
 {
-    private const string TenantAdminRoleName = "TenantAdmin";
+    private const string SysAdminRoleName = "SysAdmin";
 
     public static async Task SeedAsync(
         BookSpaceDbContext dbContext,
@@ -28,17 +33,14 @@ internal static class ProductionBootstrapper
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(options.TenantName)
-            || string.IsNullOrWhiteSpace(options.DefaultTimeZoneId)
-            || string.IsNullOrWhiteSpace(options.AdminFirstName)
-            || string.IsNullOrWhiteSpace(options.AdminLastName)
-            || string.IsNullOrWhiteSpace(options.AdminEmail)
-            || string.IsNullOrWhiteSpace(options.AdminPassword))
+        if (string.IsNullOrWhiteSpace(options.SysAdminFirstName)
+            || string.IsNullOrWhiteSpace(options.SysAdminLastName)
+            || string.IsNullOrWhiteSpace(options.SysAdminEmail)
+            || string.IsNullOrWhiteSpace(options.SysAdminPassword))
         {
             throw new InvalidOperationException(
                 "Bootstrap:Enabled is true but one or more required Bootstrap values are missing - " +
-                "TenantName, DefaultTimeZoneId, AdminFirstName, AdminLastName, AdminEmail and AdminPassword " +
-                "must all be set.");
+                "SysAdminFirstName, SysAdminLastName, SysAdminEmail and SysAdminPassword must all be set.");
         }
 
         // Idempotent across restarts/redeploys: a user with this email already existing anywhere (not
@@ -46,49 +48,42 @@ internal static class ProductionBootstrapper
         // UserRepository.FindByEmailAsync uses for the same reason: email is globally unique, and no
         // tenant context exists yet at this point in startup) means a previous run already completed.
         var alreadyBootstrapped = await dbContext.Users.IgnoreQueryFilters()
-            .AnyAsync(user => user.Email == options.AdminEmail, cancellationToken);
+            .AnyAsync(user => user.Email == options.SysAdminEmail, cancellationToken);
         if (alreadyBootstrapped)
         {
-            logger.LogInformation("Bootstrap skipped - a user with the configured Bootstrap:AdminEmail already exists.");
+            logger.LogInformation("Bootstrap skipped - a user with the configured Bootstrap:SysAdminEmail already exists.");
             return;
         }
 
         var now = DateTimeOffset.UtcNow;
 
-        var tenant = new Tenant
+        // The Roles catalog has no seed migration (see docs/user-administration.md) - reused if it
+        // already exists (e.g. a prior tenant's invitation flow referenced it first), created fresh
+        // otherwise.
+        var sysAdminRole = await dbContext.Roles.FirstOrDefaultAsync(role => role.Name == SysAdminRoleName, cancellationToken);
+        if (sysAdminRole is null)
         {
-            Id = Guid.NewGuid(),
-            Name = options.TenantName,
-            DefaultTimeZoneId = options.DefaultTimeZoneId,
-            Status = TenantStatus.Active,
-            CreatedAtUtc = now,
-        };
-        dbContext.Tenants.Add(tenant);
-
-        // The Roles catalog has no seed migration (see docs/user-administration.md) - reused if a prior
-        // bootstrap or another tenant already created it, created fresh otherwise.
-        var tenantAdminRole = await dbContext.Roles.FirstOrDefaultAsync(role => role.Name == TenantAdminRoleName, cancellationToken);
-        if (tenantAdminRole is null)
-        {
-            tenantAdminRole = new Role { Id = Guid.NewGuid(), Name = TenantAdminRoleName };
-            dbContext.Roles.Add(tenantAdminRole);
+            sysAdminRole = new Role { Id = Guid.NewGuid(), Name = SysAdminRoleName };
+            dbContext.Roles.Add(sysAdminRole);
         }
 
-        var admin = new User
+        var sysAdmin = new User
         {
             Id = Guid.NewGuid(),
-            TenantId = tenant.Id,
-            FirstName = options.AdminFirstName,
-            LastName = options.AdminLastName,
-            Email = options.AdminEmail,
-            PasswordHash = passwordHasher.Hash(options.AdminPassword),
+            TenantId = null,
+            FirstName = options.SysAdminFirstName,
+            LastName = options.SysAdminLastName,
+            Email = options.SysAdminEmail,
+            PasswordHash = passwordHasher.Hash(options.SysAdminPassword),
             Status = UserStatus.Active,
             CreatedAtUtc = now,
         };
-        dbContext.Users.Add(admin);
-        dbContext.UserRoles.Add(new UserRole { Id = Guid.NewGuid(), UserId = admin.Id, RoleId = tenantAdminRole.Id });
+        dbContext.Users.Add(sysAdmin);
+        dbContext.UserRoles.Add(new UserRole { Id = Guid.NewGuid(), UserId = sysAdmin.Id, RoleId = sysAdminRole.Id });
 
         await dbContext.SaveChangesAsync(cancellationToken);
-        logger.LogInformation("Bootstrap complete - created tenant {TenantName} and its first TenantAdmin.", tenant.Name);
+        // Never logs the password or the user's id together with anything sensitive - matches the
+        // Options type's own doc comment on removing the secret after first login.
+        logger.LogInformation("Bootstrap complete - created the global SysAdmin {SysAdminEmail}.", sysAdmin.Email);
     }
 }

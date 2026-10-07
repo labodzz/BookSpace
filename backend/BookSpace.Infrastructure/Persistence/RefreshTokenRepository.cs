@@ -25,6 +25,24 @@ internal sealed class RefreshTokenRepository(BookSpaceDbContext dbContext) : IRe
         }
     }
 
+    public async Task RevokeAllForUsersAsync(IReadOnlyList<Guid> userIds, CancellationToken cancellationToken)
+    {
+        if (userIds.Count == 0)
+        {
+            return;
+        }
+
+        var activeTokens = await dbContext.RefreshTokens
+            .Where(token => userIds.Contains(token.UserId) && token.RevokedAtUtc == null)
+            .ToListAsync(cancellationToken);
+
+        var now = DateTimeOffset.UtcNow;
+        foreach (var token in activeTokens)
+        {
+            token.RevokedAtUtc = now;
+        }
+    }
+
     public Task SaveChangesAsync(CancellationToken cancellationToken) =>
         dbContext.SaveChangesHandlingConflictsAsync(cancellationToken);
 }

@@ -42,6 +42,7 @@ public sealed class CustomWebApplicationFactory : WebApplicationFactory<Program>
         Environment.SetEnvironmentVariable("Auth__RefreshTokenDays", "14");
         Environment.SetEnvironmentVariable("Cors__AllowedOrigins__0", "http://localhost:4200");
         Environment.SetEnvironmentVariable("CalendarFeed__PublicBaseUrl", "https://bookspace.tests.local");
+        Environment.SetEnvironmentVariable("App__PublicBaseUrl", "https://bookspace.tests.local");
 
         _connection.Open();
     }

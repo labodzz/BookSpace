@@ -8,73 +8,86 @@
 # Wipe:   podman compose -f compose.local.yaml down -v         (DESTROYS the database volume - see docs)
 
 services:
-  bookspace-db:
-    image: mcr.microsoft.com/mssql/server:2022-latest
-    environment:
-      ACCEPT_EULA: "Y"
-      MSSQL_SA_PASSWORD: ${DB_SA_PASSWORD}
-    ports:
-      - "1433:1433"
-    volumes:
-      - bookspace-sql-data:/var/opt/mssql
-    networks:
-      - bookspace-net
-    # depends_on.condition below already waits for this, but that ordering guarantee isn't identical
-    # across every Compose provider/version - see the app's own EnableRetryOnFailure note below, which
-    # is what actually makes the app resilient if this healthcheck is ever ignored.
-    healthcheck:
-      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1' || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
+    bookspace-db:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        environment:
+            ACCEPT_EULA: "Y"
+            MSSQL_SA_PASSWORD: ${DB_SA_PASSWORD}
 
-  bookspace-app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    environment:
-      ASPNETCORE_ENVIRONMENT: Development
-      # bookspace-db is the other container's *service name* on the shared network below, resolved by
-      # Compose's internal DNS - never localhost, which inside this container would mean itself.
-      ConnectionStrings__BookSpace: "Server=bookspace-db,1433;Database=BookSpace;User Id=sa;Password=${DB_SA_PASSWORD};TrustServerCertificate=True"
-      Auth__Issuer: BookSpace
-      Auth__Audience: BookSpace
-      Auth__SigningKey: ${AUTH_SIGNING_KEY}
-      Auth__AccessTokenMinutes: "15"
-      Auth__RefreshTokenDays: "14"
-      Cors__AllowedOrigins__0: "http://localhost:8080"
-      # Required - see docs/calendar-subscription-feed.md ("Public base URL"). Matches the host port this
-      # container is published on (8080 - see the ports mapping below), the address reachable from THIS
-      # machine's own browser. A subscription link built from it only works for a calendar client running
-      # on this same machine (or one that can otherwise reach "localhost" on it, which an external/cloud
-      # calendar provider such as Google Calendar or Outlook.com never can) - a real deployment needs this
-      # set to that deployment's actual externally-reachable HTTPS origin instead (see
-      # docs/container-deployment.md, "Azure environment variables and secrets").
-      CalendarFeed__PublicBaseUrl: "http://localhost:8080"
-      # Gmail SMTP sender - see docs/background-jobs.md ("Gmail SMTP sender"). Every value here has a
-      # safe default (Email__Enabled defaults to "false") so an .env with none of these set still starts
-      # the container with email sending disabled, exactly like running `dotnet run` locally with no
-      # Email section configured at all.
-      Email__Enabled: ${Email__Enabled:-false}
-      Email__Provider: ${Email__Provider:-Smtp}
-      Email__FromAddress: ${Email__FromAddress:-}
-      Email__FromName: ${Email__FromName:-BookSpace}
-      Email__Smtp__Host: ${Email__Smtp__Host:-smtp.gmail.com}
-      Email__Smtp__Port: ${Email__Smtp__Port:-587}
-      Email__Smtp__Security: ${Email__Smtp__Security:-StartTls}
-      Email__Smtp__Username: ${Email__Smtp__Username:-}
-      Email__Smtp__Password: ${Email__Smtp__Password:-}
-    ports:
-      - "8080:8080"
-    depends_on:
-      bookspace-db:
-        condition: service_healthy
-    networks:
-      - bookspace-net
+        ports:
+            - "1433:1433"
+        volumes:
+            - bookspace-sql-data:/var/opt/mssql
+        networks:
+            - bookspace-net
+        # depends_on.condition below already waits for this, but that ordering guarantee isn't identical
+        # across every Compose provider/version - see the app's own EnableRetryOnFailure note below, which
+        # is what actually makes the app resilient if this healthcheck is ever ignored.
+        healthcheck:
+            test:
+                [
+                    "CMD-SHELL",
+                    '/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$$MSSQL_SA_PASSWORD" -C -Q ''SELECT 1'' || exit 1',
+                ]
+            interval: 10s
+            timeout: 5s
+            retries: 10
+            start_period: 30s
+
+    bookspace-app:
+        build:
+            context: .
+            dockerfile: Dockerfile
+        environment:
+            ASPNETCORE_ENVIRONMENT: Development
+            # bookspace-db is the other container's *service name* on the shared network below, resolved by
+            # Compose's internal DNS - never localhost, which inside this container would mean itself.
+            ConnectionStrings__BookSpace: "Server=bookspace-db,1433;Database=BookSpace;User Id=sa;Password=${DB_SA_PASSWORD};TrustServerCertificate=True"
+            Auth__Issuer: BookSpace
+            Auth__Audience: BookSpace
+            Auth__SigningKey: ${AUTH_SIGNING_KEY}
+            Auth__AccessTokenMinutes: "15"
+            Auth__RefreshTokenDays: "14"
+            Cors__AllowedOrigins__0: "http://localhost:8080"
+            # Required - see docs/calendar-subscription-feed.md ("Public base URL"). Matches the host port this
+            # container is published on (8080 - see the ports mapping below), the address reachable from THIS
+            # machine's own browser. A subscription link built from it only works for a calendar client running
+            # on this same machine (or one that can otherwise reach "localhost" on it, which an external/cloud
+            # calendar provider such as Google Calendar or Outlook.com never can) - a real deployment needs this
+            # set to that deployment's actual externally-reachable HTTPS origin instead (see
+            # docs/container-deployment.md, "Azure environment variables and secrets").
+            CalendarFeed__PublicBaseUrl: "http://localhost:8080"
+            # Required - see docs/tenant-onboarding.md ("Public URL configuration"). Angular and the API are
+            # served from this SAME container/origin (the Dockerfile always builds the Angular production bundle
+            # into wwwroot regardless of ASPNETCORE_ENVIRONMENT - see Program.cs's UseStaticFiles/
+            # MapFallbackToFile wiring), so this is identical to CalendarFeed__PublicBaseUrl above in this
+            # specific compose file - unlike local `dotnet run`/`ng serve` Development, where the two point at
+            # genuinely different ports (see appsettings.Development.json).
+            App__PublicBaseUrl: "http://localhost:8080"
+            # Gmail SMTP sender - see docs/background-jobs.md ("Gmail SMTP sender"). Every value here has a
+            # safe default (Email__Enabled defaults to "false") so an .env with none of these set still starts
+            # the container with email sending disabled, exactly like running `dotnet run` locally with no
+            # Email section configured at all.
+            Email__Enabled: ${Email__Enabled:-false}
+            Email__Provider: ${Email__Provider:-Smtp}
+            Email__FromAddress: ${Email__FromAddress:-}
+            Email__FromName: ${Email__FromName:-BookSpace}
+            Email__Smtp__Host: ${Email__Smtp__Host:-smtp.gmail.com}
+            Email__Smtp__Port: ${Email__Smtp__Port:-587}
+            Email__Smtp__Security: ${Email__Smtp__Security:-StartTls}
+            Email__Smtp__Username: ${Email__Smtp__Username:-}
+            Email__Smtp__Password: ${Email__Smtp__Password:-}
+            BackgroundJobs__Enabled: "true"
+        ports:
+            - "8080:8080"
+        depends_on:
+            bookspace-db:
+                condition: service_healthy
+        networks:
+            - bookspace-net
 
 networks:
-  bookspace-net:
+    bookspace-net:
 
 volumes:
-  bookspace-sql-data:
+    bookspace-sql-data:

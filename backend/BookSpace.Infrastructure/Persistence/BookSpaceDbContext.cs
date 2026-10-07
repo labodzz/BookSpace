@@ -37,6 +37,30 @@ public sealed class BookSpaceDbContext(DbContextOptions<BookSpaceDbContext> opti
         // manually-defaulted byte[] so CRUD keeps working, without pretending to guard anything.
         builder.ConfigureBookSpaceModel(useRowVersionColumns: Database.IsSqlServer());
         ApplyTenantIsolationFilters(builder);
+        ApplyUserTenantFilter(builder);
+    }
+
+    // User is deliberately NOT ITenantOwned (see User.cs), so the generic loop below skips it - but it
+    // still needs the identical tenant-scoping behavior for every tenant-scoped read (GetUsers, role
+    // management, administrator-count checks, ...). This filter is registered by hand instead, rather
+    // than reusing ApplyTenantFilter<TEntity> below, because User.TenantId is the ONE place in this whole
+    // schema a tenant-owning column is nullable - and that breaks the "SQL NULL = NULL -> UNKNOWN" fail-
+    // closed reasoning every other filter in this file relies on: EF Core's default query translation
+    // does NOT use raw SQL null comparison for a `Guid? == Guid?` predicate - it rewrites it using C#
+    // comparison semantics, i.e. `(a == b) OR (a IS NULL AND b IS NULL)`, which means a global SysAdmin
+    // (User.TenantId == null) querying with currentUserContext.TenantId also null would match EVERY
+    // global SysAdmin row (anyone else with TenantId == null), not nothing - confirmed by
+    // TenantOnboardingEndToEndTests' own "SysAdmin sees nothing through the ordinary filtered Users
+    // query" step before this fix was added. The explicit `currentUserContext.TenantId != null` guard
+    // below short-circuits that: when there is no ambient tenant, the whole predicate is false for every
+    // row, including the caller's own. When there IS an ambient tenant (a real, non-null Guid), comparing
+    // it to User.TenantId needs no such rewrite - a non-null value is never "null-equal" to anything -
+    // so tenant users keep working exactly as before. The sanctioned bypasses (login, refresh, accept-
+    // invitation, the SysAdmin tenant-onboarding lookup, tenant user aggregates) go through UserRepository
+    // methods that call IgnoreQueryFilters() explicitly instead - see UserRepository.cs.
+    private void ApplyUserTenantFilter(ModelBuilder builder)
+    {
+        builder.Entity<User>().HasQueryFilter(user => currentUserContext.TenantId != null && user.TenantId == currentUserContext.TenantId);
     }
 
     // The structural half of tenant isolation: every ITenantOwned entity gets a query filter baked

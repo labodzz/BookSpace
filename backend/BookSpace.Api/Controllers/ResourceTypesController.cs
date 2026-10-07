@@ -7,14 +7,14 @@ namespace BookSpace.Api.Controllers;
 
 // Every GET is plain [Authorize] - any authenticated tenant member reads the type catalog to pick
 // one when creating a resource. Every POST/PUT/DELETE is admin-only, same convention as
-// ResourcesController.
+// ResourcesController (TenantAdmin only, never the global SysAdmin).
 [ApiController]
 [Route("api/resource-types")]
 [Authorize]
 public sealed class ResourceTypesController(IMediator mediator) : ControllerBase
 {
     [HttpPost]
-    [Authorize(Roles = "TenantAdmin,SysAdmin")]
+    [Authorize(Roles = "TenantAdmin")]
     public async Task<IActionResult> CreateResourceType(CreateResourceTypeRequest request, CancellationToken cancellationToken)
     {
         var response = await mediator.Send(new CreateResourceTypeCommandRequest(request.Name), cancellationToken);
@@ -30,12 +30,12 @@ public sealed class ResourceTypesController(IMediator mediator) : ControllerBase
         Ok(await mediator.Send(new GetResourceTypeQueryRequest(id), cancellationToken));
 
     [HttpPut("{id:guid}")]
-    [Authorize(Roles = "TenantAdmin,SysAdmin")]
+    [Authorize(Roles = "TenantAdmin")]
     public async Task<IActionResult> UpdateResourceType(Guid id, UpdateResourceTypeRequest request, CancellationToken cancellationToken) =>
         Ok(await mediator.Send(new UpdateResourceTypeCommandRequest(id, request.Name), cancellationToken));
 
     [HttpDelete("{id:guid}")]
-    [Authorize(Roles = "TenantAdmin,SysAdmin")]
+    [Authorize(Roles = "TenantAdmin")]
     public async Task<IActionResult> DeleteResourceType(Guid id, CancellationToken cancellationToken)
     {
         await mediator.Send(new DeleteResourceTypeCommandRequest(id), cancellationToken);

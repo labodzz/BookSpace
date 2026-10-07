@@ -40,6 +40,39 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
         Assert.Equal(TestDataSeeder.AcmeResourceId, body.ResourceId);
     }
 
+    // The global SysAdmin has no TenantId and must never be able to create a booking - see
+    // TenantMembershipGuard. POST /api/bookings carries no role restriction at all (any authenticated
+    // tenant member may call it), so this is the one place the global SysAdmin can actually reach it.
+    [Fact]
+    public async Task CreateBooking_AsSysAdmin_ReturnsConflict()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.GlobalSysAdminEmail);
+        var start = AnchorPlusHours(223);
+
+        var response = await client.PostAsJsonAsync("/api/bookings", new
+        {
+            resourceId = TestDataSeeder.AcmeResourceId, startUtc = start, endUtc = start.AddHours(1), quantity = 1,
+        });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal("Common.TenantMembershipRequired", await ReadErrorCodeAsync(response));
+    }
+
+    // "My bookings" is simply always empty for the global SysAdmin, not an error - see
+    // GetOwnBookingsQueryHandler.
+    [Fact]
+    public async Task GetOwnBookings_AsSysAdmin_ReturnsOkWithAnEmptyPage()
+    {
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.GlobalSysAdminEmail);
+
+        var response = await client.GetAsync("/api/bookings");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<PagedResult<BookingResponse>>(JsonOptions);
+        Assert.Empty(body!.Items);
+        Assert.Equal(0, body.TotalCount);
+    }
+
     [Fact]
     public async Task CreateBooking_OverlappingABlackoutPeriod_ReturnsConflictWithBlackoutConflictErrorCode()
     {
@@ -312,8 +345,8 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
     public async Task CancelBooking_BelongingToAnotherUserWithNoAdminRole_ReturnsNotFound()
     {
         using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
-        // A plain Approver - some role, just not TenantAdmin/SysAdmin - to prove holding SOME role
-        // isn't enough to bypass ownership; only the privileged admin roles are (see the next test).
+        // A plain Approver - some role, just not TenantAdmin - to prove holding SOME role isn't enough
+        // to bypass ownership; only TenantAdmin is (see the next test).
         using var approverClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeApproverEmail);
         var start = AnchorPlusHours(6);
         var created = await CreateBookingAsync(memberClient, TestDataSeeder.AcmeResourceId, start, start.AddHours(1));
@@ -323,9 +356,9 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
-    // TenantAdmin/SysAdmin override - see docs/open-questions.md, "TenantAdmin Cancellation of Another
-    // User's Booking." CancelledByUserId ends up as the admin, not the booking's own owner, which is
-    // exactly the signal GetOwnBookings' CancelledByAdmin flag is built on.
+    // TenantAdmin override - see docs/open-questions.md, "TenantAdmin Cancellation of Another User's
+    // Booking." CancelledByUserId ends up as the admin, not the booking's own owner, which is exactly the
+    // signal GetOwnBookings' CancelledByAdmin flag is built on.
     [Fact]
     public async Task CancelBooking_AsTenantAdmin_ForAnotherUsersBooking_CancelsItWithAReason()
     {
@@ -339,6 +372,22 @@ public sealed class BookingsEndpointsTests : IClassFixture<CustomWebApplicationF
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<BookingResponse>(JsonOptions);
         Assert.Equal(BookingStatus.Cancelled, body!.Status);
+    }
+
+    // The global SysAdmin does NOT get TenantAdmin's override - see ApprovalAuthorization.IsTenantAdmin.
+    // Identical outcome to CancelBooking_BelongingToAnotherUserWithNoAdminRole_ReturnsNotFound above: the
+    // booking's existence is never confirmed to a caller who isn't its owner or a TenantAdmin.
+    [Fact]
+    public async Task CancelBooking_AsSysAdmin_ForAnotherUsersBooking_ReturnsNotFound()
+    {
+        using var memberClient = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
+        using var sysAdminClient = await AuthenticatedClientAsync(TestDataSeeder.GlobalSysAdminEmail);
+        var start = AnchorPlusHours(222);
+        var created = await CreateBookingAsync(memberClient, TestDataSeeder.AcmeResourceId, start, start.AddHours(1));
+
+        var response = await sysAdminClient.DeleteAsync($"/api/bookings/{created.Id}?reason=Freeing%20the%20resource");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
     // Tenant isolation on cancel: a Globex user can't even see an Acme booking exists, let alone cancel

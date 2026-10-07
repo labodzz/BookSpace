@@ -15,9 +15,19 @@ namespace BookSpace.Domain.Enums;
 // in. Inactive: administratively deactivated - cannot log in, but the row and its history are kept
 // (never physically deleted). See docs/user-administration.md for the full lifecycle and the
 // transitions each admin action allows.
+//
+// Withdrawn: this user's tenant was soft-deleted (see DeleteTenantCommandHandler) - deliberately a
+// DIFFERENT, non-reversible terminal state from Inactive, which is an administrator's own, reversible
+// deactivation of one member. Collapsing the two would mean Users.Email's filtered unique index (see
+// BookSpaceModelConfiguration, "[Status] <> 'Withdrawn'") would also have to release every ordinarily-
+// deactivated user's email for reuse - never intended, and not what docs/tenant-onboarding.md's "Tenant
+// lifecycle" describes. Only DeleteTenantCommandHandler (and, for data that predates this status, the
+// ReleaseTenantNameAndUserEmailOnSoftDelete migration's backfill) ever sets this; never reachable through
+// ReactivateUserCommandHandler, which only accepts Inactive -> Active.
 public enum UserStatus
 {
     Active,
     Invited,
     Inactive,
+    Withdrawn,
 }

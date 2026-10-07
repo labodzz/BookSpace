@@ -8,6 +8,7 @@ using BookSpace.Api.Security;
 using BookSpace.Application;
 using BookSpace.Application.BackgroundJobs;
 using BookSpace.Application.Calendar;
+using BookSpace.Application.Common;
 using BookSpace.Application.Email;
 using BookSpace.Application.Logging;
 using BookSpace.Application.Security;
@@ -199,6 +200,12 @@ try
         .Bind(builder.Configuration.GetSection("CalendarFeed"))
         .ValidateOnStart();
 
+    // App-wide public base URL (tenant onboarding's invitation link) - see docs/tenant-onboarding.md. Same
+    // ValidateOnStart convention as every other options class above.
+    builder.Services.AddOptions<AppOptions>()
+        .Bind(builder.Configuration.GetSection("App"))
+        .ValidateOnStart();
+
     builder.Services.AddHttpContextAccessor();
     builder.Services.AddScoped<ICurrentUserContext, CurrentUserContext>();
 
@@ -317,6 +324,15 @@ try
 
     app.UseAuthentication();
     app.UseAuthorization();
+
+    // Must run after UseAuthentication (needs HttpContext.User's claims) and after UseRouting (needs
+    // the matched endpoint's [AllowAnonymous] metadata, checked via GetEndpoint()) - both already true at
+    // this point in the pipeline. See DeletedTenantAccessMiddleware's own doc comment: closes the one gap
+    // this task's tenant-deletion requirements call out that AuthenticationService's existing
+    // Login/Refresh/AcceptInvitation-time checks cannot (an already-issued, still-unexpired access token
+    // carries no live signal that its tenant was deleted, or its own account withdrawn, after it was
+    // minted).
+    app.UseMiddleware<DeletedTenantAccessMiddleware>();
 
     // Endpoint-metadata-based ([EnableRateLimiting] on AuthController.Login), so this must run after
     // routing has matched an endpoint - placed alongside UseAuthorization, before the endpoints

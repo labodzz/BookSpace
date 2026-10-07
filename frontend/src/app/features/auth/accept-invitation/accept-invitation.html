@@ -1,0 +1,93 @@
+<div class="auth-page">
+  <app-theme-toggle class="auth-page__theme-toggle" />
+
+  @if (!token) {
+    <div class="accept-invitation-card">
+      <div class="accept-invitation-card__header">
+        <h2>This invitation link isn't valid</h2>
+        <p>It may be missing its token, or the link wasn't copied correctly. Ask whoever invited you to resend it.</p>
+      </div>
+      <a class="btn btn-primary accept-invitation-submit" routerLink="/login">Go to login</a>
+    </div>
+  } @else if (accepted()) {
+    <div class="accept-invitation-card">
+      <div class="accept-invitation-card__header">
+        <h2>Your password is set</h2>
+        <p>You can now log in with your email and your new password.</p>
+      </div>
+      <a class="btn btn-primary accept-invitation-submit" routerLink="/login">Go to login</a>
+    </div>
+  } @else {
+    <form class="accept-invitation-card" [formGroup]="form" (ngSubmit)="submit()" novalidate>
+      <div class="accept-invitation-card__brand">
+        <svg viewBox="0 0 40 40" aria-hidden="true">
+          <path d="M20 4 34 11 20 18 6 11Z" fill="currentColor" opacity="1" />
+          <path d="M20 18 34 11V29L20 36Z" fill="currentColor" opacity=".7" />
+          <path d="M20 18 6 11V29L20 36Z" fill="currentColor" opacity=".5" />
+        </svg>
+        <span class="accept-invitation-card__wordmark">Book<span class="accept-invitation-card__wordmark--accent">Space</span></span>
+      </div>
+
+      <div class="accept-invitation-card__header">
+        <h2>Set your password</h2>
+        <p>Choose a password to accept your invitation and activate your account.</p>
+      </div>
+
+      @if (errorMessage()) {
+        <p class="banner banner-error" role="alert">{{ errorMessage() }}</p>
+      }
+
+      <div class="field">
+        <label for="password">New password</label>
+        <div class="accept-invitation-input-wrap">
+          <input
+            id="password"
+            [type]="showPassword() ? 'text' : 'password'"
+            formControlName="password"
+            autocomplete="new-password"
+            placeholder="At least 8 characters"
+            [attr.aria-invalid]="form.controls.password.invalid && form.controls.password.touched"
+          />
+          <button
+            type="button"
+            class="accept-invitation-toggle-btn"
+            (click)="showPassword.set(!showPassword())"
+            [attr.aria-label]="showPassword() ? 'Hide password' : 'Show password'"
+          >
+            {{ showPassword() ? 'Hide' : 'Show' }}
+          </button>
+        </div>
+        @if (form.controls.password.touched && form.controls.password.hasError('required')) {
+          <span class="field-error-text">Password is required.</span>
+        }
+        @if (form.controls.password.touched && form.controls.password.hasError('minlength')) {
+          <span class="field-error-text">Password must be at least 8 characters.</span>
+        }
+      </div>
+
+      <div class="field">
+        <label for="confirm-password">Confirm password</label>
+        <div class="accept-invitation-input-wrap">
+          <input
+            id="confirm-password"
+            [type]="showPassword() ? 'text' : 'password'"
+            formControlName="confirmPassword"
+            autocomplete="new-password"
+            placeholder="Re-enter your password"
+            [attr.aria-invalid]="form.controls.confirmPassword.touched && form.hasError('passwordMismatch')"
+          />
+        </div>
+        @if (form.controls.confirmPassword.touched && form.controls.confirmPassword.hasError('required')) {
+          <span class="field-error-text">Please confirm your password.</span>
+        }
+        @if (form.controls.confirmPassword.touched && form.hasError('passwordMismatch')) {
+          <span class="field-error-text">Passwords don't match.</span>
+        }
+      </div>
+
+      <button type="submit" class="btn btn-primary accept-invitation-submit" [disabled]="isSubmitting()">
+        {{ isSubmitting() ? 'Setting password…' : 'Set password and continue' }}
+      </button>
+    </form>
+  }
+</div>

@@ -362,6 +362,38 @@ public sealed class SchemaConstraintTests : IAsyncLifetime
         await Assert.ThrowsAsync<DbUpdateException>(() => secondContext.SaveChangesAsync());
     }
 
+    // A Suspended tenant still reserves its name - only Deleted ever releases it (see
+    // BookSpaceModelConfiguration's filtered index and DeleteTenantCommandHandler).
+    [Fact]
+    public async Task InsertingATenantWithTheSameNameAsASuspendedTenant_ViolatesTheUniqueIndex()
+    {
+        var name = $"Suspended Tenant {Guid.NewGuid()}";
+        await using var firstContext = CreateDbContext();
+        firstContext.Tenants.Add(new Tenant { Id = Guid.NewGuid(), Name = name, DefaultTimeZoneId = "UTC", Status = TenantStatus.Suspended, CreatedAtUtc = DateTimeOffset.UtcNow });
+        await firstContext.SaveChangesAsync();
+
+        await using var secondContext = CreateDbContext();
+        secondContext.Tenants.Add(new Tenant { Id = Guid.NewGuid(), Name = name, DefaultTimeZoneId = "UTC", Status = TenantStatus.Active, CreatedAtUtc = DateTimeOffset.UtcNow });
+
+        await Assert.ThrowsAsync<DbUpdateException>(() => secondContext.SaveChangesAsync());
+    }
+
+    // The filtered index's whole point: a Deleted tenant's name is free for a brand-new tenant to reuse -
+    // see DeleteTenantCommandHandler and docs/tenant-onboarding.md ("Tenant lifecycle").
+    [Fact]
+    public async Task InsertingATenantWithTheSameNameAsADeletedTenant_DoesNotViolateTheUniqueIndex()
+    {
+        var name = $"Reusable Tenant {Guid.NewGuid()}";
+        await using var firstContext = CreateDbContext();
+        firstContext.Tenants.Add(new Tenant { Id = Guid.NewGuid(), Name = name, DefaultTimeZoneId = "UTC", Status = TenantStatus.Deleted, CreatedAtUtc = DateTimeOffset.UtcNow });
+        await firstContext.SaveChangesAsync();
+
+        await using var secondContext = CreateDbContext();
+        secondContext.Tenants.Add(new Tenant { Id = Guid.NewGuid(), Name = name, DefaultTimeZoneId = "UTC", Status = TenantStatus.Active, CreatedAtUtc = DateTimeOffset.UtcNow });
+
+        await secondContext.SaveChangesAsync(); // does not throw
+    }
+
     [Fact]
     public async Task InsertingADuplicateRoleName_ViolatesTheUniqueIndex()
     {
@@ -407,6 +439,56 @@ public sealed class SchemaConstraintTests : IAsyncLifetime
         secondContext.Users.Add(new User { Id = Guid.NewGuid(), TenantId = otherTenantId, FirstName = "Second", LastName = "User", Email = email, PasswordHash = "x", CreatedAtUtc = DateTimeOffset.UtcNow });
 
         await Assert.ThrowsAsync<DbUpdateException>(() => secondContext.SaveChangesAsync());
+    }
+
+    // A tenant soft-delete must not release an email that is still in active use elsewhere - only the
+    // withdrawn row's OWN email is ever released (see BookSpaceModelConfiguration's filtered index and
+    // UserStatus). Inactive - an administrator's own reversible deactivation of a still-live tenant member
+    // - must also keep reserving its email; only Withdrawn ever does not.
+    [Fact]
+    public async Task InsertingAUserWithTheSameEmailAsAnInactiveUser_ViolatesTheGlobalUniqueIndex()
+    {
+        var email = $"inactive-{Guid.NewGuid()}@constraint.test";
+        await using var firstContext = CreateDbContext();
+        firstContext.Users.Add(new User
+        {
+            Id = Guid.NewGuid(), TenantId = _tenantId, FirstName = "Inactive", LastName = "User",
+            Email = email, PasswordHash = "x", Status = UserStatus.Inactive, CreatedAtUtc = DateTimeOffset.UtcNow,
+        });
+        await firstContext.SaveChangesAsync();
+
+        await using var secondContext = CreateDbContext();
+        secondContext.Users.Add(new User
+        {
+            Id = Guid.NewGuid(), TenantId = _tenantId, FirstName = "New", LastName = "User",
+            Email = email, PasswordHash = "x", CreatedAtUtc = DateTimeOffset.UtcNow,
+        });
+
+        await Assert.ThrowsAsync<DbUpdateException>(() => secondContext.SaveChangesAsync());
+    }
+
+    // The filtered index's whole point: a Withdrawn user's email (set by a tenant soft-delete - see
+    // DeleteTenantCommandHandler) is free for a brand-new account to use, in this tenant or a new one.
+    [Fact]
+    public async Task InsertingAUserWithTheSameEmailAsAWithdrawnUser_DoesNotViolateTheUniqueIndex()
+    {
+        var email = $"withdrawn-{Guid.NewGuid()}@constraint.test";
+        await using var firstContext = CreateDbContext();
+        firstContext.Users.Add(new User
+        {
+            Id = Guid.NewGuid(), TenantId = _tenantId, FirstName = "Withdrawn", LastName = "User",
+            Email = email, PasswordHash = "x", Status = UserStatus.Withdrawn, CreatedAtUtc = DateTimeOffset.UtcNow,
+        });
+        await firstContext.SaveChangesAsync();
+
+        await using var secondContext = CreateDbContext();
+        secondContext.Users.Add(new User
+        {
+            Id = Guid.NewGuid(), TenantId = _tenantId, FirstName = "New", LastName = "User",
+            Email = email, PasswordHash = "x", CreatedAtUtc = DateTimeOffset.UtcNow,
+        });
+
+        await secondContext.SaveChangesAsync(); // does not throw
     }
 
     // --- FK delete-behaviors ---

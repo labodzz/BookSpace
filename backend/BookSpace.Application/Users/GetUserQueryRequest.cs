@@ -39,8 +39,10 @@ public sealed class GetUserQueryHandler(IUserRepository userRepository, IInvitat
             pendingInvitationExpiresAtUtc = activeInvitation?.ExpiresAtUtc;
         }
 
+        // user.TenantId can't be null here: userRepository.FindByIdAsync is tenant-filtered, and this
+        // endpoint is TenantAdmin-only (never the global SysAdmin) - see UsersController.
         return new GetUserResponse(
-            user.Id, user.FirstName, user.LastName, user.Email, user.TenantId, user.Status, roles, user.CreatedAtUtc,
+            user.Id, user.FirstName, user.LastName, user.Email, user.TenantId!.Value, user.Status, roles, user.CreatedAtUtc,
             pendingInvitationExpiresAtUtc);
     }
 }

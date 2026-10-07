@@ -1,0 +1,128 @@
+.tenant-detail-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 720px;
+}
+
+.tenant-detail__back {
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  width: fit-content;
+}
+
+.tenant-detail__back:hover {
+  color: var(--color-primary);
+}
+
+.tenant-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.tenant-detail__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.tenant-detail__header h1 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.tenant-detail__rename {
+  font-size: 0.75rem;
+  padding: var(--space-1) var(--space-2);
+}
+
+.tenant-detail__name-edit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.tenant-detail__facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-4);
+  margin: 0;
+  padding: var(--space-4) 0;
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.tenant-detail__facts dt {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tenant-detail__facts dd {
+  margin: var(--space-1) 0 0;
+  font-weight: 600;
+}
+
+.tenant-detail__aggregates h2,
+.tenant-detail__recovery h2 {
+  margin: 0 0 var(--space-2);
+  font-size: 1rem;
+}
+
+.tenant-detail__lifecycle-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.tenant-detail__recovery {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.tenant-detail__invitation-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tenant-detail__invitation-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.tenant-detail__invitation-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+.tenant-detail__invite-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+
+.tenant-detail__invite-form-actions {
+  display: flex;
+  gap: var(--space-3);
+}

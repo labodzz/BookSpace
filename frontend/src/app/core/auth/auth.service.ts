@@ -135,6 +135,15 @@ export class AuthService {
       );
   }
 
+  // Activates an invited account - see docs/tenant-onboarding.md. Unlike login(), this never touches
+  // `tokens`/localStorage: the backend returns 204 with no tokens at all (accepting an invitation only
+  // sets a password; the caller still logs in separately afterward via login() above, same as a brand
+  // new account would), so there is nothing here for this service's own session state to update.
+  acceptInvitation(token: string, password: string): Observable<void> {
+    const context = new HttpContext().set(SKIP_GLOBAL_ERROR_TOAST, true);
+    return this.http.post<void>(`${environment.apiUrl}/auth/accept-invitation`, { token, password }, { context });
+  }
+
   // The one path that means "the user actually asked to end this session" - notifies the other tabs of
   // this browser and, best-effort, the backend (which revokes the whole token family). Server-side
   // revocation is best-effort: local state is cleared first and always, whether or not the /auth/logout

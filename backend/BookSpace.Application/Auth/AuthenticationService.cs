@@ -11,6 +11,7 @@ public sealed class AuthenticationService(
     IUserRepository userRepository,
     IRefreshTokenRepository refreshTokenRepository,
     IInvitationRepository invitationRepository,
+    BookSpace.Application.Bookings.ITenantRepository tenantRepository,
     IPasswordHasher passwordHasher,
     IJwtTokenGenerator jwtTokenGenerator,
     IOptions<AuthOptions> authOptions,
@@ -23,7 +24,12 @@ public sealed class AuthenticationService(
         // yet given a real password) user presenting their genuinely-correct old password must still
         // fail without spending a PBKDF2 verification - and either way, the identical generic
         // "invalid credentials" outcome as an unknown email or a wrong password, never revealing which.
-        if (user is null || user.Status != UserStatus.Active || !passwordHasher.Verify(user.PasswordHash, password))
+        // A tenant user (TenantId set) whose tenant is Suspended/Deleted collapses into the exact same
+        // outcome - "my organization got suspended" is still account state, not a secret a generic
+        // message protects less than a wrong-password attempt. The global SysAdmin has no TenantId, so
+        // this check never applies to it - there is no tenant to be suspended/deleted out from under it.
+        if (user is null || user.Status != UserStatus.Active || !await IsUsableAsync(user, cancellationToken)
+            || !passwordHasher.Verify(user.PasswordHash, password))
         {
             // Information, not Error - a wrong password is expected user error, same reasoning as
             // ValidationExceptionHandler. Only the email is logged, never the attempted password.
@@ -34,6 +40,21 @@ public sealed class AuthenticationService(
         var roles = await userRepository.GetRolesAsync(user.Id, cancellationToken);
         var tokens = await IssueTokensAsync(user, roles, familyId: Guid.NewGuid(), rotatedFrom: null, cancellationToken);
         return new LoginResponse(true, tokens);
+    }
+
+    // True for the global SysAdmin (no TenantId to check) and for a tenant user whose tenant is still
+    // Active. False for a tenant user whose tenant has been Suspended or soft-deleted - see
+    // docs/tenant-onboarding.md, "Tenant lifecycle". Shared by Login/Refresh/AcceptInvitation so the
+    // three places a tenant's status can block access never drift out of sync.
+    private async Task<bool> IsUsableAsync(User user, CancellationToken cancellationToken)
+    {
+        if (user.TenantId is not { } tenantId)
+        {
+            return true;
+        }
+
+        var tenant = await tenantRepository.FindByIdAsync(tenantId, cancellationToken);
+        return tenant is not null && tenant.Status == TenantStatus.Active;
     }
 
     public async Task<RefreshResponse> RefreshAsync(string refreshToken, CancellationToken cancellationToken)
@@ -71,7 +92,11 @@ public sealed class AuthenticationService(
         }
 
         var user = await userRepository.FindByIdForAuthenticationAsync(existing.UserId, cancellationToken);
-        if (user is null)
+        // A tenant user whose tenant has since been Suspended/soft-deleted must not be able to keep
+        // minting fresh access tokens off an old refresh token - see IsUsableAsync and
+        // docs/tenant-onboarding.md, "Tenant lifecycle". Collapsed into the same generic outcome as an
+        // unknown/expired token, not a distinct "your organization was suspended" error.
+        if (user is null || !await IsUsableAsync(user, cancellationToken))
         {
             return new RefreshResponse(false, null, false, ErrorCodes.AuthInvalidRefreshToken);
         }
@@ -146,7 +171,11 @@ public sealed class AuthenticationService(
         // Pre-tenant-context lookup, same reasoning as FindByIdForAuthenticationAsync's own doc comment
         // - the caller presents only a raw token, no valid access token, so no tenant is known yet.
         var user = await userRepository.FindByIdForAuthenticationAsync(invitation.UserId, cancellationToken);
-        if (user is null || user.Status != UserStatus.Invited)
+        // A tenant that was Suspended/soft-deleted after the invitation was sent must not become
+        // acceptable - see IsUsableAsync and docs/tenant-onboarding.md, "Tenant lifecycle". An invited
+        // user's TenantId is always the tenant that invited them (see CreateTenantCommandHandler), never
+        // null, so this always resolves to a real tenant status check here.
+        if (user is null || user.Status != UserStatus.Invited || !await IsUsableAsync(user, cancellationToken))
         {
             return new AcceptInvitationResponse(false, ErrorCodes.InvitationInvalid);
         }

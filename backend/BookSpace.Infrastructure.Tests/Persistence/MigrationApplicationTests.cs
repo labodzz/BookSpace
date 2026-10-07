@@ -142,6 +142,103 @@ public sealed class MigrationApplicationTests : IAsyncLifetime
         Assert.Equal(UserStatus.Active, user.Status);
     }
 
+    // ReleaseTenantNameAndUserEmailOnSoftDelete's own backfill (see that migration's doc comment) must
+    // catch up tenants that were ALREADY soft-deleted before this feature existed: their users are still
+    // sitting at whatever live status they had at deletion time, which would otherwise keep blocking their
+    // name/email from ever being reused once the new filtered indexes start enforcing
+    // "[Status] <> 'Withdrawn'"/"[Status] <> 'Deleted'". No column shapes change between this checkpoint
+    // and the migration under test, so seeding via the ordinary DbContext API (not raw SQL) is safe here,
+    // unlike the two migration tests above.
+    private const string PreReleaseNameAndEmailMigration = "20261006184600_MakeUserTenantIdNullable";
+
+    [Fact]
+    public async Task ApplyingTheReleaseTenantNameAndUserEmailMigration_BackfillsAnAlreadyDeletedTenantsUsersAndRevokesTheirTokens()
+    {
+        var deletedTenantId = Guid.NewGuid();
+        var activeUserId = Guid.NewGuid();
+        var invitedUserId = Guid.NewGuid();
+        var deletedTenantName = $"Pre-Existing Deleted Tenant {Guid.NewGuid():N}";
+        var activeUserEmail = $"pre-existing-active-{Guid.NewGuid():N}@migration.test";
+        var invitedUserEmail = $"pre-existing-invited-{Guid.NewGuid():N}@migration.test";
+        Guid invitationId, subscriptionId, refreshTokenId;
+
+        await using (var dbContext = CreateDbContext())
+        {
+            var migrator = dbContext.GetService<IMigrator>();
+            await migrator.MigrateAsync(PreReleaseNameAndEmailMigration);
+
+            var now = DateTimeOffset.UtcNow;
+            dbContext.Tenants.Add(new Tenant
+            {
+                Id = deletedTenantId, Name = deletedTenantName, DefaultTimeZoneId = "UTC", Status = TenantStatus.Deleted, CreatedAtUtc = now,
+            });
+            dbContext.Users.Add(new User
+            {
+                Id = activeUserId, TenantId = deletedTenantId, FirstName = "Was", LastName = "Active",
+                Email = activeUserEmail, PasswordHash = "x", Status = UserStatus.Active, CreatedAtUtc = now,
+            });
+            dbContext.Users.Add(new User
+            {
+                Id = invitedUserId, TenantId = deletedTenantId, FirstName = "Was", LastName = "Invited",
+                Email = invitedUserEmail, PasswordHash = "", Status = UserStatus.Invited, CreatedAtUtc = now,
+            });
+            invitationId = Guid.NewGuid();
+            dbContext.Invitations.Add(new Invitation
+            {
+                Id = invitationId, TenantId = deletedTenantId, UserId = invitedUserId, TokenHash = $"hash-{Guid.NewGuid()}",
+                CreatedByUserId = activeUserId, CreatedAtUtc = now, ExpiresAtUtc = now.AddHours(72),
+            });
+            subscriptionId = Guid.NewGuid();
+            dbContext.CalendarSubscriptions.Add(new CalendarSubscription
+            {
+                Id = subscriptionId, TenantId = deletedTenantId, UserId = activeUserId, TokenHash = $"hash-{Guid.NewGuid()}", CreatedAtUtc = now,
+            });
+            refreshTokenId = Guid.NewGuid();
+            dbContext.RefreshTokens.Add(new RefreshToken
+            {
+                Id = refreshTokenId, UserId = activeUserId, FamilyId = Guid.NewGuid(), TokenHash = $"hash-{Guid.NewGuid()}",
+                CreatedAtUtc = now, ExpiresAtUtc = now.AddDays(30),
+            });
+            await dbContext.SaveChangesAsync();
+
+            // The migration under test.
+            await migrator.MigrateAsync();
+        }
+
+        await using (var verifyContext = CreateDbContext())
+        {
+            Assert.Equal(UserStatus.Withdrawn, (await verifyContext.Users.IgnoreQueryFilters().SingleAsync(u => u.Id == activeUserId)).Status);
+            Assert.Equal(UserStatus.Withdrawn, (await verifyContext.Users.IgnoreQueryFilters().SingleAsync(u => u.Id == invitedUserId)).Status);
+            Assert.NotNull((await verifyContext.Invitations.IgnoreQueryFilters().SingleAsync(i => i.Id == invitationId)).RevokedAtUtc);
+            Assert.NotNull((await verifyContext.CalendarSubscriptions.IgnoreQueryFilters().SingleAsync(s => s.Id == subscriptionId)).RevokedAtUtc);
+            Assert.NotNull((await verifyContext.RefreshTokens.SingleAsync(t => t.Id == refreshTokenId)).RevokedAtUtc);
+        }
+
+        // The whole point: the backfilled Withdrawn status/Deleted tenant immediately free up the name and
+        // both emails for brand-new rows - proving the backfill ran BEFORE the new filtered indexes started
+        // enforcing anything, not merely that the columns above were updated in isolation.
+        await using (var reuseContext = CreateDbContext())
+        {
+            var newTenantId = Guid.NewGuid();
+            reuseContext.Tenants.Add(new Tenant
+            {
+                Id = newTenantId, Name = deletedTenantName, DefaultTimeZoneId = "UTC", Status = TenantStatus.Active, CreatedAtUtc = DateTimeOffset.UtcNow,
+            });
+            reuseContext.Users.Add(new User
+            {
+                Id = Guid.NewGuid(), TenantId = newTenantId, FirstName = "New", LastName = "Owner",
+                Email = activeUserEmail, PasswordHash = "x", Status = UserStatus.Active, CreatedAtUtc = DateTimeOffset.UtcNow,
+            });
+            reuseContext.Users.Add(new User
+            {
+                Id = Guid.NewGuid(), TenantId = newTenantId, FirstName = "New", LastName = "Member",
+                Email = invitedUserEmail, PasswordHash = "x", Status = UserStatus.Active, CreatedAtUtc = DateTimeOffset.UtcNow,
+            });
+
+            await reuseContext.SaveChangesAsync(); // does not throw
+        }
+    }
+
     private BookSpaceDbContext CreateDbContext(Guid? tenantId = null)
     {
         var options = new DbContextOptionsBuilder<BookSpaceDbContext>().UseSqlServer(_connectionString).Options;

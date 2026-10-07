@@ -458,6 +458,11 @@ a[href^='/'] {
   color: var(--color-text);
 }
 
+.banner-success {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
 // Distinct from banner-error: used when a request failed specifically because availability changed out
 // from under the user (not a plain validation mistake) - see booking-form.ts's conflictNotice.
 .banner-warning {

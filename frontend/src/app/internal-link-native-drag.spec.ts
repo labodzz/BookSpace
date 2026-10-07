@@ -106,7 +106,9 @@ describe('centralized internal-link native-drag prevention reaches real rendered
         {
           provide: AuthService,
           useValue: {
-            hasAnyRole: () => true,
+            // Not a blanket true - true for every role would also make isSysAdmin true, which hides the
+            // /resources link this test looks for entirely (see shell.html's tenant-business nav block).
+            hasAnyRole: (...roles: string[]) => !roles.includes('SysAdmin'),
             currentUser: () => ({ userId: 'admin-1', email: 'admin@bookspace.test', tenantId: 'tenant-1', roles: [] }),
             displayName: () => 'Admin',
             logout: () => undefined,

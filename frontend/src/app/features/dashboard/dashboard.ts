@@ -32,7 +32,10 @@ export class DashboardComponent {
   private readonly approvalService = inject(ApprovalService);
   private readonly notificationService = inject(NotificationService);
 
-  protected readonly isApprover = this.authService.hasAnyRole('Approver', 'TenantAdmin', 'SysAdmin');
+  // Never SysAdmin: GET /bookings/pending-approval is TenantAdmin-only besides Approver itself (a global
+  // SysAdmin is not a tenant member and gets 403 there now - see ApprovalAuthorization), so including it
+  // here would fire a request this dashboard knows will fail.
+  protected readonly isApprover = this.authService.hasAnyRole('Approver', 'TenantAdmin');
   protected readonly today = DateTime.now().toFormat('cccc, LLLL d');
 
   protected readonly loading = signal(true);

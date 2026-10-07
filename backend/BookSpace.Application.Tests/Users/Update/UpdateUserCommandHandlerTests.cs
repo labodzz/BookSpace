@@ -17,7 +17,7 @@ public sealed class UpdateUserCommandHandlerTests
     public async Task Handle_UpdatesFirstAndLastNameAndReturnsTheUpdatedUser()
     {
         var userId = Guid.NewGuid();
-        var user = new User { Id = userId, FirstName = "Old", LastName = "Name", Email = "jane@bookspace.test" };
+        var user = new User { Id = userId, TenantId = Guid.NewGuid(), FirstName = "Old", LastName = "Name", Email = "jane@bookspace.test" };
         _userRepository.Setup(r => r.FindByIdAsync(userId, It.IsAny<CancellationToken>())).ReturnsAsync(user);
         _userRepository.Setup(r => r.GetRolesAsync(userId, It.IsAny<CancellationToken>())).ReturnsAsync((IReadOnlyList<string>)["Member"]);
 

@@ -34,14 +34,14 @@ tenant-filtered `IResourceRepository`, so a cross-tenant `ResourceId` simply isn
 403 that would confirm the resource exists), only ever list their own bookings
 (`GetOwnBookingsQueryRequest` has no `UserId` parameter to accept from the client at all - the repository
 call is always `GetOwnBookingsAsync(currentUserContext.UserId, ...)`), and can cancel their own booking,
-or - as of the interim implementation below - a `TenantAdmin`/`SysAdmin` can cancel any booking in the
+or - as of the interim implementation below - a `TenantAdmin` can cancel any booking in the
 tenant (`CancelBookingCommandHandler` checks `booking.UserId == currentUserContext.UserId` OR
-`ApprovalAuthorization.IsTenantAdminOrSysAdmin(currentUserContext)`, throwing `NotFoundException` - not
+`ApprovalAuthorization.IsTenantAdmin(currentUserContext)`, throwing `NotFoundException` - not
 `ConflictException`/403 - when neither holds, so cancelling a booking that belongs to someone else without
 the privileged role looks identical to cancelling one that doesn't exist, matching this codebase's
 existing "never leak that another tenant's/user's row exists" convention).
 
-A `TenantAdmin`/`SysAdmin` cancelling someone else's booking can supply an optional `reason`, recorded on
+A `TenantAdmin` cancelling someone else's booking can supply an optional `reason`, recorded on
 `Booking.CancellationReason` alongside `CancelledByUserId` (the acting admin, not the booking's owner) -
 `GetOwnBookingsQueryRequest` surfaces these as `CancelledByAdmin`/`CancellationReason`/`CancelledAtUtc` so
 the owner can see who cancelled it and why in their own booking history. There is still no *active*
@@ -111,7 +111,7 @@ proves the boundary: requesting exactly the remaining capacity succeeds, not jus
 
 ## 6. Cancellation semantics
 
-- The booking's own `UserId`, or a `TenantAdmin`/`SysAdmin` acting on any booking in the tenant, may
+- The booking's own `UserId`, or a `TenantAdmin` acting on any booking in the tenant, may
   cancel it (see §2).
 - Cancelling an already-`Cancelled` booking is **idempotent**: it returns the current state without
   writing again. This mirrors `DeleteResourceCommandHandler`'s existing Archive-idempotency pattern
@@ -315,7 +315,7 @@ All three were run five consecutive times during development with zero flaky fai
   creates is `Confirmed` regardless of that flag.
 - No idempotency-key support on `POST /api/bookings` - a client retrying a timed-out request could create a
   duplicate booking. See [open-questions.md](open-questions.md#idempotency).
-- `TenantAdmin`/`SysAdmin` can cancel another user's booking (§2), but there is still no *active*
+- `TenantAdmin` can cancel another user's booking (§2), but there is still no *active*
   notification (email/push/in-app) telling the affected owner it happened - only an audit trail visible
   if/when they check their own booking history (§10).
 - Booking creation only accepts an already-UTC `DateTimeOffset` window (matching
@@ -445,11 +445,11 @@ testing in a way a single HTTP request does not.
 |---|---|
 | The booking's own owner (`Booking.UserId`) | Always (subject to status/window) |
 | `ResourceApprover` for `Booking.ResourceId` | Always, for ANY booking on that resource - this is a resource-level grant (the same `ResourceApprover` table `ApprovalAuthorization` already reads), independent of whether that specific booking ever needed approval |
-| `TenantAdmin` / `SysAdmin` | Any booking in their own tenant (enforced automatically by the global query filter) |
+| `TenantAdmin` | Any booking in their own tenant (enforced automatically by the global query filter) - the global `SysAdmin` deliberately does NOT get this, see `ApprovalAuthorization.IsTenantAdmin` |
 | Anyone else | Never - `Booking.NotFound` (404) |
 
 The route (`[HttpPost("{id:guid}/check-in")]`) is plain `[Authorize]`, **not** role-gated the way
-approve/reject are (`[Authorize(Roles = "Approver,TenantAdmin,SysAdmin")]`) - a route-level role gate would
+approve/reject are (`[Authorize(Roles = "Approver,TenantAdmin")]`) - a route-level role gate would
 block a plain `Member` from checking in their own booking, which is the primary use case. All three
 authorization branches are checked inside `CheckInBookingCommandHandler.CanCheckInAsync`.
 
@@ -515,7 +515,7 @@ no new rule was needed on the check-in side for this ordering, only the shared l
 **Rule 2 - check-in wins the lock.** `CheckedInAtUtc` is set; the booking stays `Confirmed`. A plain
 member's subsequent cancel attempt is refused with a new conflict, `Booking.AlreadyCheckedIn` (409) -
 **no admin override exists for this rule**, confirmed directly from `CancelBookingCommandHandler`'s own
-code: the `TenantAdmin`/`SysAdmin` bypass only ever widens WHO may act (the ownership check), never WHICH
+code: the `TenantAdmin` bypass only ever widens WHO may act (the ownership check), never WHICH
 states are eligible to cancel - the pre-existing `CancellableStatuses` check already applies unconditionally
 to every caller including admins (a `TenantAdmin` could never cancel a `Completed` booking either), and the
 new `CheckedInAtUtc is not null` check follows that identical, already-established precedent rather than
@@ -622,7 +622,7 @@ this index's natural selection in production.
 each boundary, every non-`Confirmed` status, already-checked-in short-circuiting the window, per-tenant
 `CheckInLeadMinutes`/`NoShowGraceMinutes` actually respected (not hardcoded). `CheckInBookingCommandHandlerTests`
 (mocked repositories, `PassThroughResourceBookingLock`): owner success, unknown booking, another member's
-booking, assigned/unassigned approver, `TenantAdmin`/`SysAdmin` bypass, idempotent repeat, already-checked-in
+booking, assigned/unassigned approver, `TenantAdmin` bypass, idempotent repeat, already-checked-in
 surviving a closed window, every non-`Confirmed` status, too-early, too-late, cross-tenant. `CheckInConcurrencyTests`
 (real LocalDB): two genuinely concurrent check-ins on one booking, assigned-vs-unassigned approver against
 real data. `BookingsEndpointsTests` (SQLite, full HTTP + auth pipeline): success, repeat-is-idempotent,
@@ -635,7 +635,7 @@ for deterministic window-relative "now"), `mapCheckInBookingResponse` mapping.
 
 `CancelBookingCommandHandlerTests` (mocked repositories, `PassThroughResourceBookingLock`, extended for the
 check-in/cancel race): already-checked-in primary target refused with `Booking.AlreadyCheckedIn` (including
-for `TenantAdmin`/`SysAdmin`, proving no override), a checked-in sibling silently excluded from a
+for `TenantAdmin`, proving no override), a checked-in sibling silently excluded from a
 `CancelRemainingSeries` cascade without aborting the rest, cancellation-token propagation. Every pre-existing
 Cancel test still passes - extended only to also stub the new pre-lock `FindResourceIdAsync` projection.
 `CheckInVsCancelConcurrencyTests` (real LocalDB, the authoritative proof for this fix): cancel-wins and

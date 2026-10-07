@@ -289,4 +289,25 @@ public sealed class GetOwnBookingsQueryHandlerTests
         Assert.Equal(startUtc.AddMinutes(-20), item.CheckInWindowOpensAtUtc);
         Assert.Equal(startUtc.AddMinutes(10), item.CheckInWindowClosesAtUtc);
     }
+
+    // The global SysAdmin has no TenantId and can never have a booking - "my bookings" is simply always
+    // empty for it, not an error (unlike the write-side handlers, which reject the attempt outright - see
+    // TenantMembershipGuard). Never queries the booking repository or looks up a tenant at all.
+    [Fact]
+    public async Task Handle_ForTheGlobalSysAdminWithNoTenantId_ReturnsAnEmptyPageWithoutQueryingAnything()
+    {
+        var sut = CreateSut();
+        _currentUserContext.SetupGet(c => c.TenantId).Returns((Guid?)null);
+
+        var result = await sut.Handle(new GetOwnBookingsQueryRequest(Page: 2, PageSize: 10), CancellationToken.None);
+
+        Assert.Empty(result.Items);
+        Assert.Equal(2, result.Page);
+        Assert.Equal(10, result.PageSize);
+        Assert.Equal(0, result.TotalCount);
+        _bookingRepository.Verify(
+            r => r.GetOwnBookingsAsync(It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<DateTimeOffset?>(), It.IsAny<DateTimeOffset?>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _tenantRepository.Verify(r => r.FindByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
 }

@@ -64,6 +64,24 @@ describe('AuthService', () => {
     httpTesting.expectNone(`${environment.apiUrl}/auth/logout`);
   });
 
+  // Unlike login(), the backend returns 204 with no tokens at all for this endpoint (accepting an
+  // invitation only activates the account - the caller logs in separately afterward) - this must never
+  // touch `tokens`/localStorage, and must leave whatever session already existed in THIS browser
+  // completely untouched (see docs/tenant-onboarding.md, "Already logged in").
+  it('posts the token and password to /auth/accept-invitation and never touches session state', async () => {
+    const result = firstValueFrom(service.acceptInvitation('a-raw-token', 'New-Passw0rd!'));
+
+    const req = httpTesting.expectOne(`${environment.apiUrl}/auth/accept-invitation`);
+    expect(req.request.body).toEqual({ token: 'a-raw-token', password: 'New-Passw0rd!' });
+    req.flush(null, { status: 204, statusText: 'No Content' });
+
+    // HttpClient resolves a flushed 204's body as null, not undefined - acceptInvitation() passes it
+    // through as-is (unlike login(), it never maps the response to anything).
+    await expect(result).resolves.toBeNull();
+    // The session seeded in beforeEach is still exactly what it was - acceptInvitation never replaced it.
+    expect(service.currentAccessToken()).toBe(TOKENS.accessToken);
+  });
+
   // The scenario this guards against: a refresh already in flight when logout() runs must not be
   // allowed to complete later and silently write fresh tokens back into storage, resurrecting a
   // session the user just explicitly ended.

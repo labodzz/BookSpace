@@ -25,7 +25,10 @@ internal static class BookSpaceModelConfiguration
             entity.Property(tenant => tenant.Name).HasMaxLength(200).IsRequired();
             entity.Property(tenant => tenant.DefaultTimeZoneId).HasMaxLength(100).IsRequired();
             entity.Property(tenant => tenant.Status).HasConversion<string>().HasMaxLength(20);
-            entity.HasIndex(tenant => tenant.Name).IsUnique();
+            // Filtered to non-Deleted tenants only - a soft-deleted tenant's name is released for reuse by
+            // a brand-new tenant (see DeleteTenantCommandHandler and docs/tenant-onboarding.md, "Tenant
+            // lifecycle"). Active and Suspended both still reserve their name - only Deleted is excluded.
+            entity.HasIndex(tenant => tenant.Name).IsUnique().HasFilter("[Status] <> 'Deleted'");
         });
 
         builder.Entity<Role>(entity =>
@@ -61,9 +64,23 @@ internal static class BookSpaceModelConfiguration
             // explicitly. See User.cs's own comment for why Active had to be the zero member.
             entity.Property(user => user.Status).HasConversion<string>().HasMaxLength(20).HasDefaultValue(UserStatus.Active);
             // Global, not per-tenant: login looks a user up by email alone, before any tenant is
-            // known, so two tenants sharing an email would make that lookup ambiguous.
-            entity.HasIndex(user => user.Email).IsUnique();
-            entity.HasOne<Tenant>().WithMany().HasForeignKey(user => user.TenantId).OnDelete(DeleteBehavior.Restrict);
+            // known, so two tenants sharing an email would make that lookup ambiguous. Stays global
+            // (not scoped around the null TenantId case) even for the global SysAdmin: one platform-
+            // wide identity space, same as everyone else.
+            //
+            // Filtered to non-Withdrawn users only - a user whose tenant was soft-deleted (Status ->
+            // Withdrawn, see DeleteTenantCommandHandler/UserStatus) releases their email for a brand-new
+            // account to use, in this tenant or a new one. A plain "exclude Inactive" filter would be wrong
+            // here: Inactive is an administrator's own reversible deactivation of a still-live tenant
+            // member and must keep reserving that email (see UserStatus's own doc comment for why these are
+            // deliberately different statuses) - this can never be expressed as a filter on the related
+            // Tenants row (a SQL Server filtered index predicate must be a constant expression over this
+            // table's own columns), which is exactly why Withdrawn exists as its own User-level status.
+            entity.HasIndex(user => user.Email).IsUnique().HasFilter("[Status] <> 'Withdrawn'");
+            // IsRequired(false) explicit, not just inferred from the nullable CLR property - TenantId
+            // nullability is the load-bearing part of the whole SysAdmin-is-global invariant, so this
+            // FK's optionality is spelled out rather than left to EF's default inference.
+            entity.HasOne<Tenant>().WithMany().HasForeignKey(user => user.TenantId).IsRequired(false).OnDelete(DeleteBehavior.Restrict);
         });
 
         builder.Entity<Invitation>(entity =>

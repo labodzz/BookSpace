@@ -133,7 +133,10 @@ require real SQL Server (LocalDB) and are called out as such in their own file-l
 [audit-remediation-summary.md](audit-remediation-summary.md) for exact counts):
 
 - Auth: credential login, JWT access tokens, refresh token rotation with reuse detection and
-  optimistic-concurrency-safe rotation, RBAC (`TenantAdmin`/`SysAdmin`/`Member`/`Approver` roles).
+  optimistic-concurrency-safe rotation, RBAC (`TenantAdmin`/`Member`/`Approver` tenant roles, plus the
+  separate global `SysAdmin` platform role - see [tenant-onboarding.md](tenant-onboarding.md)).
+- Platform tenant lifecycle: `SysAdmin` creates/lists/suspends/reactivates/soft-deletes tenants and
+  recovers a tenant that lost its administrator - see [tenant-onboarding.md](tenant-onboarding.md).
 - Tenant isolation: fail-closed global query filter, structural (not per-query) enforcement.
 - Resources: full CRUD, soft-delete/Archived lifecycle, `ResourceType` (tenant-owned taxonomy),
   `AvailabilityRule` (Create/Delete only, no Update), `BlackoutPeriod` (full CRUD, backdating-guarded),
@@ -142,7 +145,7 @@ require real SQL Server (LocalDB) and are called out as such in their own file-l
 - Bookings: single-user creation (availability/blackout/capacity-checked, `[Start,End)` semantics reused
   from `IntervalMath`), member self-service view/cancel, and - the hard part - concurrency-safe capacity
   enforcement under real racing requests via a transaction-scoped `Resource`-row lock, proven against
-  real SQL Server/LocalDB. `TenantAdmin`/`SysAdmin` can additionally cancel another user's booking in
+  real SQL Server/LocalDB. `TenantAdmin` can additionally cancel another user's booking in
   the tenant with an optional audit-trail reason (`CancelledByUserId`/`CancellationReason`, surfaced to
   the owner via `GetOwnBookings`) - active notification to the affected owner is still deferred, see
   [open-questions.md](open-questions.md#tenantadmin-cancellation-of-another-users-booking--interim-implementation-notification-still-open).
@@ -151,7 +154,7 @@ require real SQL Server (LocalDB) and are called out as such in their own file-l
   every occurrence materialized as a real, independently viewable/cancellable `Booking`; conflicts
   surfaced explicitly per occurrence at creation, never silently dropped.
 - Approval workflow: `Resource.RequiresApproval` now produces `Pending` bookings decided via approve/
-  reject by a `ResourceApprover` or `TenantAdmin`/`SysAdmin`, with a fresh availability re-check at
+  reject by a `ResourceApprover` or `TenantAdmin`, with a fresh availability re-check at
   decision time under the same resource lock booking creation uses. See
   [recurring-bookings-and-approvals.md](recurring-bookings-and-approvals.md) for the full writeup,
   including a real EF Core identity-map bug this work surfaced and fixed.
@@ -160,9 +163,10 @@ require real SQL Server (LocalDB) and are called out as such in their own file-l
 database-level composite tenant foreign keys, absolute refresh-token session lifetime, logout/session
 revocation, password-change session revocation, dynamic role-change invalidation, Resource
 reactivation-from-Archived as an explicit action, JWT signing-key git-history rewrite, active
-notification for TenantAdmin/SysAdmin booking cancellation, automatic `ApprovalRequest` expiry
-enforcement, booking idempotency keys. `TenantStatus.Suspended` is likewise modeled but deliberately
-unenforced - reserved for a future SysAdmin tenant-suspension feature, not a gap in current scope.
+notification for TenantAdmin booking cancellation, automatic `ApprovalRequest` expiry
+enforcement, booking idempotency keys. `TenantStatus.Suspended`/`Deleted` are now enforced
+(`AuthenticationService.IsUsableAsync` blocks login/refresh for a non-`Active` tenant's users - see
+[tenant-onboarding.md](tenant-onboarding.md)), closing what this line used to call a deferred feature.
 
 **Not yet implemented at all** - do not assume any of this exists: notification/reminder delivery, any
 scheduled/background job infrastructure. `POST /api/auth/login` is rate-limited (10 attempts/minute per

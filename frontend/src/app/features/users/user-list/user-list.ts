@@ -16,7 +16,7 @@ function toApiErrorOrFallback(error: unknown): ApiError {
   return error instanceof HttpErrorResponse ? toApiError(error) : { status: 0, title: 'Something went wrong.' };
 }
 
-// TenantAdmin/SysAdmin only (route-gated). Search/role/status/page all live in the URL's own query
+// TenantAdmin only (route-gated) - never the global SysAdmin, see UsersController. Search/role/status/page all live in the URL's own query
 // params, not just component signals - specifically so the "Back to users" link on the detail page (see
 // user-detail.ts) can return here with the exact same filters and page still applied, instead of a reset
 // list, satisfying "preserve filter state when editing a user" without any shared service between the

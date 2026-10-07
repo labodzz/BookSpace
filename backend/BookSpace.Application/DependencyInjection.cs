@@ -2,9 +2,11 @@ using System.Reflection;
 using BookSpace.Application.Auth;
 using BookSpace.Application.BackgroundJobs;
 using BookSpace.Application.Calendar;
+using BookSpace.Application.Common;
 using BookSpace.Application.Email;
 using BookSpace.Application.Logging;
 using BookSpace.Application.Mediator;
+using BookSpace.Application.Security;
 using FluentValidation;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -16,6 +18,10 @@ public static class DependencyInjection
     public static IServiceCollection AddApplication(this IServiceCollection services)
     {
         services.AddScoped<IAuthenticationService, AuthenticationService>();
+        // Checked once per authenticated API request (see BookSpace.Api's middleware) - see
+        // IDeletedTenantAccessGuard's own doc comment for why this exists alongside AuthenticationService's
+        // own IsUsableAsync rather than reusing it.
+        services.AddScoped<IDeletedTenantAccessGuard, DeletedTenantAccessGuard>();
         services.AddSingleton<ICorrelationIdContext, CorrelationIdContext>();
 
         // Scoped: resolved fresh per cycle by BackgroundJobsWorker (BookSpace.Api), never held by that
@@ -33,6 +39,9 @@ public static class DependencyInjection
 
         // Calendar subscription feed (WP-8) - see docs/calendar-subscription-feed.md.
         services.AddSingleton<IValidateOptions<CalendarFeedOptions>, CalendarFeedOptionsValidator>();
+
+        // App-wide public base URL (tenant onboarding's invitation link) - see docs/tenant-onboarding.md.
+        services.AddSingleton<IValidateOptions<AppOptions>, AppOptionsValidator>();
 
         // Singleton: one stable OwnerId, and one lease coordinator holding only IServiceScopeFactory, for
         // this instance's entire lifetime - see docs/background-jobs.md ("Job lease lock"). Neither ever

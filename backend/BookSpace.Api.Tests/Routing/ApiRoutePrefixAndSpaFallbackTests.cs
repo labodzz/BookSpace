@@ -119,6 +119,7 @@ public sealed class SpaWebApplicationFactory : WebApplicationFactory<Program>, I
         Environment.SetEnvironmentVariable("Auth__RefreshTokenDays", "14");
         Environment.SetEnvironmentVariable("Cors__AllowedOrigins__0", "http://localhost:4200");
         Environment.SetEnvironmentVariable("CalendarFeed__PublicBaseUrl", "https://bookspace.tests.local");
+        Environment.SetEnvironmentVariable("App__PublicBaseUrl", "https://bookspace.tests.local");
 
         Directory.CreateDirectory(_webRootPath);
         File.WriteAllText(Path.Combine(_webRootPath, "index.html"), $"<!doctype html><html><body>{IndexHtmlMarker}</body></html>");

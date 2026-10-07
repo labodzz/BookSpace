@@ -49,13 +49,14 @@ export function mapAvailabilityRule(wire: AvailabilityRuleWire): AvailabilityRul
   return { ...wire, dayOfWeek: toDayOfWeek(wire.dayOfWeek) };
 }
 
-// Mirrors AssignResourceApproverCommandHandler's own eligibility check exactly (Approver, TenantAdmin,
-// or SysAdmin all qualify) - NOT just "Approver". This is deliberately broader than the eligible-user
-// PICKER's own role filter (which only ever searches for "Approver" specifically, since a TenantAdmin/
-// SysAdmin already bypasses the per-resource check entirely and gains nothing from being assigned - see
-// resource-approvers-manage.ts). Using the narrower "Approver only" rule here would incorrectly flag a
-// legitimate TenantAdmin/SysAdmin assignment as "missing role".
-const APPROVAL_CAPABLE_ROLES = ['Approver', 'TenantAdmin', 'SysAdmin'];
+// Mirrors AssignResourceApproverCommandHandler's own eligibility check exactly (Approver or TenantAdmin
+// qualify - NOT SysAdmin, which is deliberately excluded there too, see that handler's own doc comment)
+// - NOT just "Approver". This is deliberately broader than the eligible-user PICKER's own role filter
+// (which only ever searches for "Approver" specifically, since a TenantAdmin already bypasses the
+// per-resource check entirely and gains nothing from being assigned - see resource-approvers-manage.ts).
+// Using the narrower "Approver only" rule here would incorrectly flag a legitimate TenantAdmin
+// assignment as "missing role".
+const APPROVAL_CAPABLE_ROLES = ['Approver', 'TenantAdmin'];
 
 export function mapAssignedApprover(assignment: ResourceApproverAssignment, user: UserSummary | undefined): AssignedApprover {
   if (!user) {

@@ -1,0 +1,203 @@
+<div class="tenant-detail-page">
+  @if (loading()) {
+    <div class="card tenant-detail" aria-busy="true">
+      <span class="skeleton" style="height: 1.5rem; width: 50%;"></span>
+      <span class="skeleton" style="height: 1rem; width: 30%;"></span>
+    </div>
+  } @else if (error()) {
+    <div class="state-panel card">
+      <p class="state-panel__title">{{ notFound() ? 'Tenant not found' : "Couldn't load tenant" }}</p>
+      <p>{{ error()!.detail ?? error()!.title }}</p>
+      @if (notFound()) {
+        <a class="btn btn-secondary" routerLink="/tenants" [queryParams]="backQueryParams">Back to tenants</a>
+      } @else {
+        <button type="button" class="btn btn-secondary" (click)="retry()">Try again</button>
+      }
+    </div>
+  } @else if (tenant(); as tenant) {
+    <a class="tenant-detail__back" routerLink="/tenants" [queryParams]="backQueryParams">&larr; Back to tenants</a>
+
+    <div class="card tenant-detail">
+      <header class="tenant-detail__header">
+        @if (editingName()) {
+          <div class="field tenant-detail__name-edit">
+            <input [value]="nameInput()" (input)="nameInput.set($any($event.target).value)" maxlength="200" [disabled]="savingName()" />
+            <button type="button" class="btn btn-primary" [disabled]="savingName()" (click)="saveName()">
+              {{ savingName() ? 'Saving…' : 'Save' }}
+            </button>
+            <button type="button" class="btn btn-secondary" [disabled]="savingName()" (click)="cancelEditingName()">Cancel</button>
+          </div>
+          @if (nameError()) {
+            <p class="banner banner-error" role="alert">{{ nameError() }}</p>
+          }
+        } @else {
+          <h1>
+            {{ tenant.name }}
+            <button type="button" class="btn btn-secondary tenant-detail__rename" (click)="startEditingName()">Rename</button>
+          </h1>
+        }
+        <span
+          class="status-pill"
+          [class.status-pill--confirmed]="tenant.status === 'Active'"
+          [class.status-pill--pending]="tenant.status === 'Suspended'"
+          [class.status-pill--cancelled]="tenant.status === 'Deleted'"
+        >
+          {{ tenant.status }}
+        </span>
+      </header>
+
+      <dl class="tenant-detail__facts">
+        <div><dt>Tenant ID</dt><dd>{{ tenant.id }}</dd></div>
+        <div><dt>Default time zone</dt><dd>{{ tenant.defaultTimeZoneId }}</dd></div>
+        <div><dt>Created</dt><dd>{{ tenant.createdAtUtc | date: 'medium' }}</dd></div>
+      </dl>
+
+      <section class="tenant-detail__aggregates">
+        <h2>Users</h2>
+        <dl class="tenant-detail__facts">
+          <div><dt>Total</dt><dd>{{ tenant.totalUserCount }}</dd></div>
+          <div><dt>Active</dt><dd>{{ tenant.activeUserCount }}</dd></div>
+          <div><dt>Invited</dt><dd>{{ tenant.invitedUserCount }}</dd></div>
+          <div><dt>Disabled</dt><dd>{{ tenant.inactiveUserCount }}</dd></div>
+        </dl>
+        @if (tenant.hasActiveTenantAdmin) {
+          <p>Active administrator(s): {{ tenant.activeTenantAdminEmails.join(', ') }}</p>
+        } @else {
+          <p class="banner banner-warning" role="status">This tenant has no active administrator.</p>
+        }
+      </section>
+
+      @if (statusError()) {
+        <p class="banner banner-error" role="alert">{{ statusError() }}</p>
+      }
+      <div class="tenant-detail__lifecycle-actions">
+        @if (tenant.status === 'Active') {
+          <button type="button" class="btn btn-secondary" [disabled]="updatingStatus()" (click)="suspend()">
+            {{ updatingStatus() ? 'Suspending…' : 'Suspend tenant' }}
+          </button>
+        }
+        @if (tenant.status === 'Suspended') {
+          <button type="button" class="btn btn-secondary" [disabled]="updatingStatus()" (click)="reactivate()">
+            {{ updatingStatus() ? 'Reactivating…' : 'Reactivate tenant' }}
+          </button>
+        }
+        @if (tenant.status !== 'Deleted') {
+          <button type="button" class="btn btn-secondary" (click)="openDeleteDialog()">Delete tenant</button>
+        }
+      </div>
+    </div>
+
+    <section class="card tenant-detail__recovery">
+      <h2>Platform recovery</h2>
+      <p class="field-hint">
+        Resend or revoke a pending TenantAdmin invitation, or invite a replacement administrator if this tenant has lost access.
+      </p>
+
+      @if (invitationActionError()) {
+        <p class="banner banner-error" role="alert">{{ invitationActionError() }}</p>
+      }
+
+      @if (tenant.pendingTenantAdminInvitations.length > 0) {
+        <ul class="tenant-detail__invitation-list">
+          @for (contact of tenant.pendingTenantAdminInvitations; track contact.userId) {
+            <li class="tenant-detail__invitation-row">
+              <span>{{ contact.email }}</span>
+              <span class="status-pill status-pill--pending">Invited</span>
+              @if (resentToUserId() === contact.userId) {
+                <span class="field-hint">Queued</span>
+              }
+              <div class="tenant-detail__invitation-actions">
+                <button
+                  type="button"
+                  class="btn btn-secondary"
+                  [disabled]="actingOnUserId() === contact.userId"
+                  (click)="resendInvitation(contact.userId, contact.email)"
+                >
+                  {{ actingOnUserId() === contact.userId ? 'Resending…' : 'Resend' }}
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-secondary"
+                  [disabled]="actingOnUserId() === contact.userId"
+                  (click)="revokeInvitation(contact.userId)"
+                >
+                  Revoke
+                </button>
+              </div>
+            </li>
+          }
+        </ul>
+      } @else {
+        <p class="field-hint">No pending TenantAdmin invitations.</p>
+      }
+
+      @if (inviteFormOpen()) {
+        <form class="tenant-detail__invite-form" (ngSubmit)="submitInvite()" novalidate>
+          @if (inviteError()) {
+            <p class="banner banner-error" role="alert">{{ inviteError() }}</p>
+          }
+          <div class="field">
+            <label for="invite-first-name">First name</label>
+            <input id="invite-first-name" [value]="inviteFirstName()" (input)="inviteFirstName.set($any($event.target).value)" maxlength="100" required />
+            @if (inviteFieldErrors()['FirstName']; as errors) {
+              <span class="field-error-text">{{ errors.join(' ') }}</span>
+            }
+          </div>
+          <div class="field">
+            <label for="invite-last-name">Last name</label>
+            <input id="invite-last-name" [value]="inviteLastName()" (input)="inviteLastName.set($any($event.target).value)" maxlength="100" required />
+            @if (inviteFieldErrors()['LastName']; as errors) {
+              <span class="field-error-text">{{ errors.join(' ') }}</span>
+            }
+          </div>
+          <div class="field">
+            <label for="invite-email">Email</label>
+            <input id="invite-email" type="email" [value]="inviteEmail()" (input)="inviteEmail.set($any($event.target).value)" autocomplete="off" required />
+            @if (inviteFieldErrors()['Email']; as errors) {
+              <span class="field-error-text">{{ errors.join(' ') }}</span>
+            }
+          </div>
+          <div class="tenant-detail__invite-form-actions">
+            <button type="button" class="btn btn-secondary" [disabled]="inviting()" (click)="closeInviteForm()">Cancel</button>
+            <button type="submit" class="btn btn-primary" [disabled]="inviting()">{{ inviting() ? 'Inviting…' : 'Send invitation' }}</button>
+          </div>
+        </form>
+      } @else {
+        <button type="button" class="btn btn-secondary" (click)="openInviteForm()">Invite a replacement administrator</button>
+      }
+    </section>
+  }
+
+  @if (deleteDialogOpen()) {
+    <div class="dialog-backdrop" (click)="closeDeleteDialog()">
+      <div class="card dialog" role="dialog" aria-modal="true" aria-labelledby="delete-dialog-title" (click)="$event.stopPropagation()">
+        <h2 id="delete-dialog-title">Delete {{ tenant()?.name }}?</h2>
+        <p class="dialog__summary">
+          This cannot be undone through this screen. History is kept - the tenant's bookings and records are preserved exactly as they
+          are - but every one of its users immediately loses access: no one can log in, and no new bookings or changes can be made. The
+          tenant's name and its users' email addresses are released and may be reused by a new tenant or new accounts afterward.
+        </p>
+        <div class="field">
+          <label for="delete-confirm-name">Type <strong>{{ tenant()?.name }}</strong> to confirm</label>
+          <input
+            id="delete-confirm-name"
+            [value]="deleteConfirmName()"
+            (input)="deleteConfirmName.set($any($event.target).value)"
+            autocomplete="off"
+          />
+        </div>
+
+        @if (deleteError()) {
+          <p class="banner banner-error" role="alert">{{ deleteError() }}</p>
+        }
+
+        <div class="dialog__actions">
+          <button type="button" class="btn btn-secondary" [disabled]="deleting()" (click)="closeDeleteDialog()">Keep tenant</button>
+          <button type="button" class="btn btn-primary" [disabled]="deleting() || !deleteConfirmMatches()" (click)="confirmDelete()">
+            {{ deleting() ? 'Deleting…' : 'Delete tenant' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  }
+</div>

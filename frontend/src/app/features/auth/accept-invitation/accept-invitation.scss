@@ -1,0 +1,139 @@
+// Mirrors login.scss's own card treatment (duplicated rather than shared - see welcome.scss for the same
+// established pattern: every auth-page card in this app styles itself independently).
+:host {
+  display: block;
+  min-height: 100dvh;
+}
+
+.auth-page {
+  --accept-invitation-card-text: #f8eef1;
+  --accept-invitation-card-text-secondary: #e3bcc9;
+  --accept-invitation-card-accent: #f0a9be;
+  --accept-invitation-card-cta-text: #4a1528;
+}
+
+.auth-page__theme-toggle {
+  position: fixed;
+  top: var(--space-4);
+  right: var(--space-4);
+  z-index: 10;
+
+  --theme-toggle-border: rgb(255 255 255 / 25%);
+  --theme-toggle-text: var(--accept-invitation-card-text);
+  --theme-toggle-hover-bg: rgb(255 255 255 / 10%);
+  --theme-toggle-focus-ring: var(--accept-invitation-card-text);
+}
+
+.accept-invitation-card {
+  width: 100%;
+  max-width: 380px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  background: linear-gradient(160deg, #430f24 0%, #2f0b17 60%, #17060c 100%);
+  border: 1px solid transparent;
+  border-radius: var(--radius-lg);
+  padding: var(--space-7) var(--space-6);
+  box-shadow: 0 24px 60px -20px rgb(140 33 69 / 32%), 0 0 90px -40px rgb(240 169 190 / 16%);
+  color: var(--accept-invitation-card-text);
+  text-align: center;
+}
+
+.accept-invitation-card :focus-visible {
+  outline-color: var(--accept-invitation-card-text);
+}
+
+.accept-invitation-card__brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+}
+
+.accept-invitation-card__brand svg {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  color: var(--accept-invitation-card-text);
+}
+
+.accept-invitation-card__wordmark {
+  font-size: 1.0625rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--accept-invitation-card-text);
+}
+
+.accept-invitation-card__wordmark--accent {
+  color: var(--accept-invitation-card-accent);
+}
+
+.accept-invitation-card__header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  text-align: center;
+  margin-bottom: var(--space-2);
+}
+
+.accept-invitation-card__header h2 {
+  font-family: var(--font-display);
+  font-size: 1.625rem;
+  font-weight: 600;
+  color: var(--accept-invitation-card-text);
+}
+
+.accept-invitation-card__header p {
+  color: var(--accept-invitation-card-text-secondary);
+  font-size: 0.875rem;
+}
+
+.accept-invitation-card .field {
+  text-align: left;
+}
+
+.accept-invitation-card .field label {
+  color: var(--accept-invitation-card-text-secondary);
+}
+
+.accept-invitation-card .field-error-text {
+  color: #ffbcbc;
+}
+
+.accept-invitation-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.accept-invitation-toggle-btn {
+  position: absolute;
+  right: var(--space-2);
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--accept-invitation-card-text-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: var(--space-1) var(--space-2);
+}
+
+.accept-invitation-submit {
+  margin-top: var(--space-1);
+  width: 100%;
+  background: var(--accept-invitation-card-text);
+  color: var(--accept-invitation-card-cta-text);
+  text-align: center;
+}
+
+.accept-invitation-submit:not(:disabled):hover {
+  background: #ecdbe0;
+}
+
+@media (max-width: 480px) {
+  .accept-invitation-card {
+    padding: var(--space-6) var(--space-5);
+  }
+}

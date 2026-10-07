@@ -6,6 +6,9 @@ namespace BookSpace.Application.Auth;
 
 public interface IUserRepository
 {
+    // Excludes Withdrawn users (a tenant soft-delete releases their email for reuse - see UserStatus and
+    // BookSpaceModelConfiguration) - always resolves to the live account when a withdrawn and a live row
+    // happen to share an email.
     Task<User?> FindByEmailAsync(string email, CancellationToken cancellationToken);
     Task<User?> FindByIdAsync(Guid id, CancellationToken cancellationToken);
 
@@ -15,6 +18,15 @@ public interface IUserRepository
     // should call this; every other lookup-by-id (e.g. validating an approver assignment target) must
     // keep using the tenant-filtered FindByIdAsync above.
     Task<User?> FindByIdForAuthenticationAsync(Guid id, CancellationToken cancellationToken);
+
+    // Explicitly bypasses the tenant query filter and re-applies BOTH tenantId and id in the same Where
+    // clause - a different, narrower exception than FindByIdForAuthenticationAsync's (that one has NO
+    // tenant to filter by at all; this one has one, just never the CALLER's own). A SysAdmin administering
+    // a tenant they do not themselves belong to (tenant onboarding - see docs/tenant-onboarding.md) is the
+    // one sanctioned caller: ICurrentUserContext.TenantId is always the SysAdmin's OWN tenant, never the
+    // target tenant being onboarded, so the ordinary tenant-filtered FindByIdAsync can never find that
+    // user. Only ResendTenantAdminInvitationCommandHandler should call this.
+    Task<User?> FindByIdForTenantAdministrationAsync(Guid tenantId, Guid userId, CancellationToken cancellationToken);
     Task<IReadOnlyList<string>> GetRolesAsync(Guid userId, CancellationToken cancellationToken);
 
     // Relies on the DbContext's global tenant query filter to scope results - callers must not
@@ -62,6 +74,24 @@ public interface IUserRepository
     // of an admin role deliberately don't count - they cannot log in, so they provide no actual
     // administrative capability right now.
     Task<int> CountActiveAdministratorsAsync(CancellationToken cancellationToken);
+
+    // Bypasses the tenant query filter by design - this is the one place a SysAdmin (ICurrentUserContext.
+    // TenantId == null) legitimately needs user-derived facts about tenants that are never its own. Used
+    // by the tenant list/detail screens (see GetTenantsQueryRequest/GetTenantQueryRequest). Projects ONLY
+    // counts and the active TenantAdmin(s)' email - never full user rows, never Invited/Inactive users'
+    // identities, matching docs/tenant-onboarding.md's "aggregates only, never business/personal data
+    // beyond what platform recovery needs" rule. A tenantId with no users at all is simply absent from
+    // the result rather than present with zeros - callers default a missing key to
+    // TenantUserAggregate.Empty.
+    Task<IReadOnlyDictionary<Guid, TenantUserAggregate>> GetTenantUserAggregatesAsync(
+        IReadOnlyList<Guid> tenantIds, CancellationToken cancellationToken);
+
+    // Bypasses the tenant query filter by design - see the implementation's own doc comment. The one
+    // sanctioned caller is DeleteTenantCommandHandler. Idempotent: a user already Withdrawn is left alone
+    // and excluded from the returned id list, so calling this again (a repeated delete attempt, or the
+    // ReleaseTenantNameAndUserEmailOnSoftDelete migration re-processing an already-handled tenant) revokes
+    // nothing a second time.
+    Task<IReadOnlyList<Guid>> WithdrawAllForTenantAsync(Guid tenantId, CancellationToken cancellationToken);
 
     Task SaveChangesAsync(CancellationToken cancellationToken);
 }

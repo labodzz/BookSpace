@@ -10,13 +10,15 @@ namespace BookSpace.Api.Controllers;
 // cancels their OWN bookings and recurring series. Ownership itself is enforced inside each handler
 // (server-derived UserId on create, an explicit owner check on view/cancel), not gated by role at the
 // route. Three actions widen that in-handler check instead of gating the route: cancel additionally lets a
-// TenantAdmin/SysAdmin cancel someone ELSE's booking (see docs/open-questions.md), check-in additionally
-// lets a ResourceApprover check in a booking on a resource they're actually assigned to (or a
-// TenantAdmin/SysAdmin check in anything in their tenant) - see CheckInBookingCommandHandler.CanCheckInAsync
-// - deliberately NOT route-gated the way approve/reject are, since a plain Member must still be able to
-// check in their OWN booking, and approve/reject (below) are gated to Approver/TenantAdmin/SysAdmin at the
-// route, with a further in-handler check that a plain Approver is actually assigned to the specific
-// resource (see ApprovalAuthorization).
+// TenantAdmin cancel someone ELSE's booking (see docs/open-questions.md), check-in additionally lets a
+// ResourceApprover check in a booking on a resource they're actually assigned to (or a TenantAdmin check
+// in anything in their tenant) - see CheckInBookingCommandHandler.CanCheckInAsync - deliberately NOT
+// route-gated the way approve/reject are, since a plain Member must still be able to check in their OWN
+// booking, and approve/reject (below) are gated to Approver/TenantAdmin at the route, with a further
+// in-handler check that a plain Approver is actually assigned to the specific resource (see
+// ApprovalAuthorization). SysAdmin is deliberately absent from every one of these bypasses: a global
+// SysAdmin is not a member of any tenant and must not manage its bookings/approvals - see
+// ApprovalAuthorization's own doc comment and docs/tenant-onboarding.md.
 [ApiController]
 [Route("api/bookings")]
 [Authorize]
@@ -75,17 +77,17 @@ public sealed class BookingsController(IMediator mediator) : ControllerBase
         Ok(await mediator.Send(new GetRecurringSeriesQueryRequest(id), cancellationToken));
 
     [HttpGet("pending-approval")]
-    [Authorize(Roles = "Approver,TenantAdmin,SysAdmin")]
+    [Authorize(Roles = "Approver,TenantAdmin")]
     public async Task<IActionResult> GetPendingApprovals(CancellationToken cancellationToken) =>
         Ok(await mediator.Send(new GetPendingApprovalsQueryRequest(), cancellationToken));
 
     [HttpPost("{id:guid}/approve")]
-    [Authorize(Roles = "Approver,TenantAdmin,SysAdmin")]
+    [Authorize(Roles = "Approver,TenantAdmin")]
     public async Task<IActionResult> ApproveBooking(Guid id, ApproveBookingRequest request, CancellationToken cancellationToken) =>
         Ok(await mediator.Send(new ApproveBookingCommandRequest(id, request.DecisionNote, request.ApproveRemainingSeries), cancellationToken));
 
     [HttpPost("{id:guid}/reject")]
-    [Authorize(Roles = "Approver,TenantAdmin,SysAdmin")]
+    [Authorize(Roles = "Approver,TenantAdmin")]
     public async Task<IActionResult> RejectBooking(Guid id, DecideBookingApprovalRequest request, CancellationToken cancellationToken) =>
         Ok(await mediator.Send(new RejectBookingCommandRequest(id, request.DecisionNote), cancellationToken));
 }

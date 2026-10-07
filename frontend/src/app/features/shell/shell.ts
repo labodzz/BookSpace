@@ -17,7 +17,13 @@ export class ShellComponent {
   private readonly approvalService = inject(ApprovalService);
   private readonly router = inject(Router);
 
-  protected readonly isApprover = this.authService.hasAnyRole('Approver', 'TenantAdmin', 'SysAdmin');
+  // Never SysAdmin: GET /bookings/pending-approval is TenantAdmin-only besides Approver itself (a global
+  // SysAdmin is not a tenant member and gets 403 there now - see ApprovalAuthorization).
+  protected readonly isApprover = this.authService.hasAnyRole('Approver', 'TenantAdmin');
+  // The global platform admin - sees tenant-lifecycle nav instead of any tenant-business nav (resources/
+  // bookings/calendar/approvals/users) below. See docs/tenant-onboarding.md, "SysAdmin and tenant
+  // business data".
+  protected readonly isSysAdmin = this.authService.hasAnyRole('SysAdmin');
   protected readonly pendingApprovalCount = signal(0);
 
   constructor() {

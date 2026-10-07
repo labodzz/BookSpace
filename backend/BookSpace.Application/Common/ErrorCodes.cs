@@ -7,6 +7,11 @@ namespace BookSpace.Application.Common;
 // still throw without an ErrorCode in places, which is fine since the field is optional.
 internal static class ErrorCodes
 {
+    // Shared by every handler whose action only makes sense for a tenant member (creating/listing
+    // bookings, etc.) - see TenantMembershipGuard. The global SysAdmin has no TenantId and must be
+    // rejected cleanly here rather than crash on a bare TenantId!.Value further down.
+    public const string TenantMembershipRequired = "Common.TenantMembershipRequired";
+
     public const string AuthInvalidCredentials = "Auth.InvalidCredentials";
     public const string AuthInvalidRefreshToken = "Auth.InvalidRefreshToken";
     public const string AuthRefreshReuseDetected = "Auth.RefreshReuseDetected";
@@ -61,4 +66,17 @@ internal static class ErrorCodes
     // Calendar subscription feed (WP-8). See docs/calendar-subscription-feed.md.
     public const string CalendarSubscriptionAlreadyExists = "CalendarSubscription.AlreadyExists";
     public const string CalendarSubscriptionNotFound = "CalendarSubscription.NotFound";
+    // The global SysAdmin has no TenantId and therefore no bookings to export - see
+    // CreateCalendarSubscriptionCommandHandler/RegenerateCalendarSubscriptionCommandHandler.
+    public const string CalendarSubscriptionRequiresTenantMembership = "CalendarSubscription.RequiresTenantMembership";
+
+    // Tenant onboarding (SysAdmin creates a tenant + first TenantAdmin). See docs/tenant-onboarding.md.
+    public const string TenantNameConflict = "Tenant.NameConflict";
+    public const string TenantNotFound = "Tenant.NotFound";
+    public const string TenantAdminInvitationNotPending = "Tenant.AdminInvitationNotPending";
+
+    // Tenant lifecycle (suspend/reactivate/soft-delete - SysAdmin only). See docs/tenant-onboarding.md,
+    // "Tenant lifecycle".
+    public const string TenantStatusConflict = "Tenant.StatusConflict";
+    public const string TenantDeleteConfirmationMismatch = "Tenant.DeleteConfirmationMismatch";
 }

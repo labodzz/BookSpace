@@ -129,15 +129,13 @@ public sealed class CheckInBookingCommandHandlerTests
         Assert.Equal(ErrorCodes.BookingNotFound, exception.ErrorCode);
     }
 
-    [Theory]
-    [InlineData("TenantAdmin")]
-    [InlineData("SysAdmin")]
-    public async Task Handle_TenantAdminOrSysAdmin_CanCheckInAnotherMembersBookingInTheirOwnTenant(string role)
+    [Fact]
+    public async Task Handle_TenantAdmin_CanCheckInAnotherMembersBookingInTheirOwnTenant()
     {
         var booking = CreateBooking();
         SetupBooking(booking);
         _currentUserContext.SetupGet(c => c.UserId).Returns(Guid.NewGuid());
-        _currentUserContext.SetupGet(c => c.Roles).Returns([role]);
+        _currentUserContext.SetupGet(c => c.Roles).Returns(["TenantAdmin"]);
         var sut = CreateSut();
 
         var result = await sut.Handle(new CheckInBookingCommandRequest(booking.Id), CancellationToken.None);
@@ -146,6 +144,24 @@ public sealed class CheckInBookingCommandHandlerTests
         // Never needed a resource-approver lookup for an admin - the bypass is unconditional.
         _resourceApproverRepository.Verify(
             r => r.FindByResourceAndUserAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // The global SysAdmin is deliberately NOT treated as privileged here any more (see
+    // ApprovalAuthorization.IsTenantAdmin) - it falls through to the same resource-approver check an
+    // unassigned Approver hits, and (having no such assignment) gets the identical NotFoundException.
+    [Fact]
+    public async Task Handle_AsSysAdmin_ThrowsNotFoundExceptionJustLikeAnUnassignedApprover()
+    {
+        var booking = CreateBooking();
+        SetupBooking(booking);
+        _currentUserContext.SetupGet(c => c.UserId).Returns(Guid.NewGuid());
+        _currentUserContext.SetupGet(c => c.Roles).Returns(["SysAdmin"]);
+        var sut = CreateSut();
+
+        var exception = await Assert.ThrowsAsync<NotFoundException>(() =>
+            sut.Handle(new CheckInBookingCommandRequest(booking.Id), CancellationToken.None));
+
+        Assert.Equal(ErrorCodes.BookingNotFound, exception.ErrorCode);
     }
 
     [Fact]

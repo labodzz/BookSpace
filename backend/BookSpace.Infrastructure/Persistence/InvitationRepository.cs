@@ -17,6 +17,29 @@ internal sealed class InvitationRepository(BookSpaceDbContext dbContext) : IInvi
             invitation => invitation.UserId == userId && invitation.AcceptedAtUtc == null && invitation.RevokedAtUtc == null,
             cancellationToken);
 
+    // See the interface doc comment - explicitly bypasses the tenant filter and re-applies tenantId itself
+    // for the one sanctioned cross-tenant caller (SysAdmin tenant onboarding).
+    public Task<Invitation?> FindActiveByUserIdForTenantAdministrationAsync(Guid tenantId, Guid userId, CancellationToken cancellationToken) =>
+        dbContext.Invitations.IgnoreQueryFilters().FirstOrDefaultAsync(
+            invitation => invitation.TenantId == tenantId && invitation.UserId == userId
+                && invitation.AcceptedAtUtc == null && invitation.RevokedAtUtc == null,
+            cancellationToken);
+
+    // See the interface doc comment - explicitly bypasses the tenant filter for the one sanctioned
+    // cross-tenant caller (SysAdmin tenant deletion).
+    public async Task RevokeAllActiveForTenantAsync(Guid tenantId, CancellationToken cancellationToken)
+    {
+        var activeInvitations = await dbContext.Invitations.IgnoreQueryFilters()
+            .Where(invitation => invitation.TenantId == tenantId && invitation.AcceptedAtUtc == null && invitation.RevokedAtUtc == null)
+            .ToListAsync(cancellationToken);
+
+        var now = DateTimeOffset.UtcNow;
+        foreach (var invitation in activeInvitations)
+        {
+            invitation.RevokedAtUtc = now;
+        }
+    }
+
     public Task SaveChangesAsync(CancellationToken cancellationToken) =>
         dbContext.SaveChangesHandlingConflictsAsync(cancellationToken);
 }

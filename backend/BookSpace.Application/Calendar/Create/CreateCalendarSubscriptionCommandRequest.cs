@@ -28,6 +28,16 @@ public sealed class CreateCalendarSubscriptionCommandHandler(
 {
     public async Task<CalendarSubscriptionTokenResponse> Handle(CreateCalendarSubscriptionCommandRequest request, CancellationToken cancellationToken)
     {
+        // The global SysAdmin has no TenantId and can never have bookings to export - a feed for it
+        // would always be empty, so this is rejected explicitly rather than left to crash on the
+        // TenantId!.Value below or silently succeed with a feed that can never show anything.
+        if (currentUserContext.TenantId is not { } tenantId)
+        {
+            throw new ConflictException(
+                "Calendar subscriptions are available to tenant members only.",
+                ErrorCodes.CalendarSubscriptionRequiresTenantMembership);
+        }
+
         var userId = currentUserContext.UserId!.Value;
         var existing = await calendarSubscriptionRepository.FindActiveByUserAsync(userId, cancellationToken);
         if (existing is not null)
@@ -41,7 +51,7 @@ public sealed class CreateCalendarSubscriptionCommandHandler(
         var subscription = new CalendarSubscription
         {
             Id = Guid.NewGuid(),
-            TenantId = currentUserContext.TenantId!.Value,
+            TenantId = tenantId,
             UserId = userId,
             TokenHash = SecureTokenGenerator.HashToken(rawToken),
             CreatedAtUtc = DateTimeOffset.UtcNow,

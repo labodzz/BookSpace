@@ -142,7 +142,7 @@ public sealed class CalendarFeedEndpointsTests : IClassFixture<CustomWebApplicat
     [Fact]
     public async Task GetFeed_ExcludesPendingCancelledAndNoShowBookings_IncludesOnlyConfirmed()
     {
-        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeSysAdminEmail);
+        using var client = await AuthenticatedClientAsync(TestDataSeeder.AcmeMemberEmail);
 
         var confirmed = await CreateConfirmedBookingAsync(client, TestDataSeeder.AcmeResourceId, hoursFromAnchor: 320);
         var toCancel = await CreateConfirmedBookingAsync(client, TestDataSeeder.AcmeResourceId, hoursFromAnchor: 322);
@@ -161,7 +161,7 @@ public sealed class CalendarFeedEndpointsTests : IClassFixture<CustomWebApplicat
         {
             dbContext.Bookings.Add(new BookSpace.Domain.Entities.Booking
             {
-                Id = noShowId, TenantId = TestDataSeeder.AcmeTenantId, ResourceId = TestDataSeeder.AcmeResourceId, UserId = TestDataSeeder.AcmeSysAdminUserId,
+                Id = noShowId, TenantId = TestDataSeeder.AcmeTenantId, ResourceId = TestDataSeeder.AcmeResourceId, UserId = TestDataSeeder.AcmeMemberUserId,
                 StartUtc = TestDataSeeder.AvailabilityAnchorUtc.AddHours(326), EndUtc = TestDataSeeder.AvailabilityAnchorUtc.AddHours(327),
                 Quantity = 1, Status = BookingStatus.NoShow, CreatedAtUtc = DateTimeOffset.UtcNow,
             });

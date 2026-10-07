@@ -250,4 +250,65 @@ public sealed class BookingEmailTemplateRendererTests
         Assert.Throws<EmailTemplateException>(() =>
             _renderer.Render(BookingNotificationTypes.ApprovalExpired, "{not-valid-json", "Ana Anic"));
     }
+
+    // --- TenantAdminInvitation: an entirely different payload shape (TenantAdminInvitationNotificationPayload)
+    // with no BookingId/ResourceId at all, and the one notification type whose payload carries a
+    // sensitive, single-use link - see docs/tenant-onboarding.md. ---
+
+    private static readonly TenantAdminInvitationNotificationPayload SampleInvitationPayload = new(
+        TenantId: Guid.Parse("44444444-4444-4444-4444-444444444444"),
+        TenantName: "Acme Coworking",
+        RecipientFirstName: "Ana",
+        InvitationUrl: "https://bookspace.test/accept-invitation?token=raw-token-value",
+        ExpiresAtUtc: new DateTimeOffset(2026, 3, 4, 9, 0, 0, TimeSpan.Zero));
+
+    private static string InvitationPayloadJson() => JsonSerializer.Serialize(SampleInvitationPayload);
+
+    [Fact]
+    public void Render_ForTenantAdminInvitation_ProducesASubjectNamingTheTenant()
+    {
+        var content = _renderer.Render(TenantNotificationTypes.AdminInvitation, InvitationPayloadJson(), "Ana Anic");
+
+        Assert.Equal("You've been invited to administer Acme Coworking on BookSpace", content.Subject);
+    }
+
+    [Fact]
+    public void Render_ForTenantAdminInvitation_IncludesTheInvitationLinkAndExpiry()
+    {
+        var content = _renderer.Render(TenantNotificationTypes.AdminInvitation, InvitationPayloadJson(), "Ana Anic");
+
+        Assert.Contains(SampleInvitationPayload.InvitationUrl, content.PlainTextBody);
+        Assert.Contains(SampleInvitationPayload.InvitationUrl, content.HtmlBody);
+        Assert.Contains("2026-03-04 09:00 UTC", content.PlainTextBody);
+    }
+
+    [Fact]
+    public void Render_ForTenantAdminInvitation_HtmlEscapesTheTenantNameAndRecipientDisplayName()
+    {
+        const string maliciousName = "<script>alert('x')</script>";
+        var maliciousPayload = SampleInvitationPayload with { TenantName = "<b>Evil</b> Co" };
+
+        var content = _renderer.Render(TenantNotificationTypes.AdminInvitation, JsonSerializer.Serialize(maliciousPayload), maliciousName);
+
+        Assert.DoesNotContain("<script>", content.HtmlBody);
+        Assert.DoesNotContain("<b>Evil</b>", content.HtmlBody);
+        Assert.Contains("&lt;script&gt;", content.HtmlBody);
+        Assert.Contains("&lt;b&gt;Evil&lt;/b&gt;", content.HtmlBody);
+    }
+
+    [Fact]
+    public void Render_ForTenantAdminInvitation_IsDeterministic_SameInputsProduceIdenticalOutputOnEveryCall()
+    {
+        var first = _renderer.Render(TenantNotificationTypes.AdminInvitation, InvitationPayloadJson(), "Ana Anic");
+        var second = _renderer.Render(TenantNotificationTypes.AdminInvitation, InvitationPayloadJson(), "Ana Anic");
+
+        Assert.Equal(first, second);
+    }
+
+    [Fact]
+    public void Render_ForTenantAdminInvitation_WithMalformedPayloadJson_ThrowsEmailTemplateException()
+    {
+        Assert.Throws<EmailTemplateException>(() =>
+            _renderer.Render(TenantNotificationTypes.AdminInvitation, "{not-valid-json", "Ana Anic"));
+    }
 }

@@ -135,25 +135,28 @@ separate processes, exactly as documented in the main README.
   after either turning the flag off (apply migrations out-of-band before scaling) or adding real
   migration-coordination (out of scope here).
 
-## Production bootstrap (first tenant + first TenantAdmin)
+## Production bootstrap (first global SysAdmin)
 
-No existing mechanism creates a tenant or an admin user outside of `DevelopmentSeeder` (Development-only)
-and this new bootstrap path - `ITenantRepository` is deliberately read-only/narrow (see its own comment:
-"Full Tenant CRUD is out of scope"), and there is no `POST /tenants`-style endpoint anywhere in the API.
+No existing mechanism creates a login-capable user in an empty production database other than
+`DevelopmentSeeder` (Development-only) and this bootstrap path. `POST /api/tenants` (SysAdmin-only, see
+docs/tenant-onboarding.md) creates every tenant from here on - bootstrap's only remaining job is getting
+the very first SysAdmin into existence, since nothing can call that endpoint before one exists.
 
-`ProductionBootstrapper` (in `BookSpace.Infrastructure/Persistence`) is the production counterpart to
-`DevelopmentSeeder`: it creates exactly one `Tenant` and exactly one `User` holding the `TenantAdmin`
-role, using the same domain entities, the same `IPasswordHasher`, and the same tenant-isolation design
-(`IgnoreQueryFilters()` for the one pre-tenant-context lookup it needs, the same sanctioned exception
-`UserRepository.FindByEmailAsync` already uses). It is:
+`ProductionBootstrapper` (in `BookSpace.Infrastructure/Persistence`) creates exactly one `User` - the
+global SysAdmin, `TenantId = null`, holding the `SysAdmin` role - using the same domain entities, the
+same `IPasswordHasher`, and the same tenant-isolation design (`IgnoreQueryFilters()` for the one
+pre-tenant-context lookup it needs, the same sanctioned exception `UserRepository.FindByEmailAsync`
+already uses). **It deliberately creates no tenant** - a platform with zero tenants is the normal,
+expected state immediately after bootstrap; the SysAdmin creates the first real tenant afterward through
+the ordinary create-tenant API, the same path every later tenant goes through. It is:
 
 - **Off by default** - only runs when `Bootstrap__Enabled=true`.
-- **Idempotent** - if a user with the configured `Bootstrap__AdminEmail` already exists (anywhere - a
+- **Idempotent** - if a user with the configured `Bootstrap__SysAdminEmail` already exists (anywhere - a
   global, cross-tenant check, since email is globally unique), it logs that it's skipping and does
-  nothing further. A restart or redeploy with the same configuration never creates a second tenant/admin.
-- **Validated** - if enabled but any of `TenantName`, `DefaultTimeZoneId`, `AdminFirstName`,
-  `AdminLastName`, `AdminEmail`, `AdminPassword` is missing, it throws (failing startup loudly, logged
-  via `Log.Fatal` in `Program.cs`'s outer catch) rather than proceeding with a partial/guessed value.
+  nothing further. A restart or redeploy with the same configuration never creates a second SysAdmin.
+- **Validated** - if enabled but any of `SysAdminFirstName`, `SysAdminLastName`, `SysAdminEmail`,
+  `SysAdminPassword` is missing, it throws (failing startup loudly, logged via `Log.Fatal` in
+  `Program.cs`'s outer catch) rather than proceeding with a partial/guessed value.
 - **Sequenced after migrations** - `Program.cs` calls `BootstrapProductionAdminAsync()` only after the
   Development or production migration step above has already run.
 
@@ -161,18 +164,21 @@ Configuration (environment variables, `Bootstrap__` prefix):
 
 ```text
 Bootstrap__Enabled=true
-Bootstrap__TenantName=...
-Bootstrap__DefaultTimeZoneId=Europe/Sarajevo
-Bootstrap__AdminFirstName=...
-Bootstrap__AdminLastName=...
-Bootstrap__AdminEmail=...
-Bootstrap__AdminPassword=...
+Bootstrap__SysAdminFirstName=...
+Bootstrap__SysAdminLastName=...
+Bootstrap__SysAdminEmail=...
+Bootstrap__SysAdminPassword=...
 ```
 
-**After the first successful deployment**, set `Bootstrap__Enabled=false` and remove the
-`Bootstrap__AdminPassword` secret from Azure (see the secrets list below) - the idempotency check means
-leaving it `true` is not by itself dangerous, but there's no reason to keep a plaintext admin-password
-secret provisioned once it's no longer needed.
+**After the first successful deployment and first successful SysAdmin login**, set
+`Bootstrap__Enabled=false` and remove the `Bootstrap__SysAdminPassword` secret from Azure (see the
+secrets list below) - the idempotency check means leaving it `true` is not by itself dangerous, but
+there's no reason to keep a plaintext admin-password secret provisioned once it's no longer needed.
+
+This replaces an earlier version of `ProductionBootstrapper` that created a tenant plus a `TenantAdmin`
+(`Bootstrap__TenantName`/`DefaultTimeZoneId`/`AdminFirstName`/`AdminLastName`/`AdminEmail`/
+`AdminPassword`) - since this project has never been deployed to production, there was no deployed
+configuration depending on those keys, so they were renamed outright rather than kept around deprecated.
 
 ## Reverse proxy and Azure ingress
 
@@ -229,12 +235,11 @@ Auth__AccessTokenMinutes=15
 Auth__RefreshTokenDays=14
 Cors__AllowedOrigins__0=https://<your-container-app-fqdn>
 CalendarFeed__PublicBaseUrl=https://<your-container-app-fqdn>  # see docs/calendar-subscription-feed.md
-Bootstrap__Enabled=true                        # false after the first successful deploy
-Bootstrap__TenantName=...
-Bootstrap__DefaultTimeZoneId=...
-Bootstrap__AdminFirstName=...
-Bootstrap__AdminLastName=...
-Bootstrap__AdminEmail=...
+App__PublicBaseUrl=https://<your-container-app-fqdn>           # see docs/tenant-onboarding.md - identical to CalendarFeed__PublicBaseUrl in this single-origin deployment
+Bootstrap__Enabled=true                        # false after the first successful deploy + first SysAdmin login
+Bootstrap__SysAdminFirstName=...
+Bootstrap__SysAdminLastName=...
+Bootstrap__SysAdminEmail=...
 ```
 
 Must be Azure **secrets** (never plain environment variables, never committed anywhere):
@@ -242,7 +247,7 @@ Must be Azure **secrets** (never plain environment variables, never committed an
 ```text
 ConnectionStrings__BookSpace        # Azure SQL Database connection string
 Auth__SigningKey                    # JWT signing key
-Bootstrap__AdminPassword            # only while Bootstrap__Enabled=true; remove after first deploy
+Bootstrap__SysAdminPassword         # only while Bootstrap__Enabled=true; remove after first deploy + first login
 ```
 
 - `ASPNETCORE_ENVIRONMENT=Development` must never be used in Azure - it enables
