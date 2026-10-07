@@ -107,3 +107,172 @@ jobs:
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/bookspace:dev
             ${{ secrets.DOCKERHUB_USERNAME }}/bookspace:sha-${{ github.sha }}
+
+    deploy:
+    needs: docker-image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    concurrency:
+      group: bookspace-ec2-deploy
+      cancel-in-progress: false
+
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: eu-north-1
+      AWS_PAGER: ""
+      EC2_INSTANCE_ID: i-004245262063c9a0f
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+
+    steps:
+      - name: Prepare EC2 deployment commands
+        run: |
+          cat > remote-deploy.sh <<'SSM_SCRIPT'
+          sudo -iu ec2-user bash -s -- __IMAGE__ <<'REMOTE'
+          set -euo pipefail
+
+          cd /home/ec2-user/bookspace
+          export BOOKSPACE_IMAGE="$1"
+
+          DB_CONNECTION_STRING="$(python3 - <<'PY'
+          import json
+          import subprocess
+
+          result = subprocess.run(
+              [
+                  "aws", "secretsmanager", "get-secret-value",
+                  "--secret-id", "rds!db-c7554a9c-fce3-4608-a19f-87a7486911c1",
+                  "--region", "eu-north-1",
+                  "--query", "SecretString",
+                  "--output", "text"
+              ],
+              check=True,
+              capture_output=True,
+              text=True
+          )
+
+          secret = json.loads(result.stdout)
+
+          def quote(value):
+              return '"' + value.replace('"', '""') + '"'
+
+          print(
+              "Server=bookspace-prod-db.cfgi0s0w4oqs.eu-north-1.rds.amazonaws.com,1433;"
+              "Database=BookSpace;"
+              f"User Id={quote(secret['username'])};"
+              f"Password={quote(secret['password'])};"
+              "Encrypt=True;TrustServerCertificate=False"
+          )
+          PY
+          )"
+          export DB_CONNECTION_STRING
+
+          test -s certs/rds-ca-bundle.pem
+
+          docker compose -f compose.yaml pull bookspace-app
+
+          docker compose -f compose.yaml up \
+            -d --no-deps --no-build bookspace-app
+
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --max-time 5 \
+              http://127.0.0.1:8080/ > /dev/null; then
+              echo "BookSpace responds successfully on port 8080."
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "BookSpace did not respond successfully."
+          docker compose -f compose.yaml logs --tail=80 bookspace-app
+          exit 1
+          REMOTE
+          SSM_SCRIPT
+
+          python3 - <<'PY'
+          import json
+          import os
+          import shlex
+          from pathlib import Path
+
+          image = (
+              f"{os.environ['DOCKERHUB_USERNAME']}/bookspace:"
+              f"sha-{os.environ['GITHUB_SHA']}"
+          )
+
+          script = Path("remote-deploy.sh").read_text()
+          script = script.replace("__IMAGE__", shlex.quote(image))
+
+          Path("ssm-parameters.json").write_text(json.dumps({
+              "commands": [script],
+              "executionTimeout": ["900"]
+          }))
+          PY
+
+      - name: Deploy through SSM and check result
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          import time
+
+          instance = os.environ["EC2_INSTANCE_ID"]
+
+          sent = subprocess.run(
+              [
+                  "aws", "ssm", "send-command",
+                  "--instance-ids", instance,
+                  "--document-name", "AWS-RunShellScript",
+                  "--parameters", "file://ssm-parameters.json",
+                  "--timeout-seconds", "60",
+                  "--output", "json"
+              ],
+              check=True,
+              capture_output=True,
+              text=True
+          )
+
+          command_id = json.loads(sent.stdout)["Command"]["CommandId"]
+          print(f"SSM deployment command: {command_id}", flush=True)
+
+          deadline = time.monotonic() + 1020
+
+          while time.monotonic() < deadline:
+              result = subprocess.run(
+                  [
+                      "aws", "ssm", "get-command-invocation",
+                      "--command-id", command_id,
+                      "--instance-id", instance,
+                      "--output", "json"
+                  ],
+                  capture_output=True,
+                  text=True
+              )
+
+              if result.returncode != 0:
+                  if "InvocationDoesNotExist" in result.stderr:
+                      time.sleep(5)
+                      continue
+                  raise SystemExit(result.stderr)
+
+              invocation = json.loads(result.stdout)
+              status = invocation["Status"]
+
+              if status in ("Pending", "InProgress", "Delayed"):
+                  time.sleep(5)
+                  continue
+
+              print(invocation.get("StandardOutputContent", ""))
+              print(invocation.get("StandardErrorContent", ""))
+              print(f"Deployment status: {status}")
+
+              if status != "Success":
+                  raise SystemExit(1)
+
+              break
+          else:
+              raise SystemExit("Timed out waiting for deployment.")
+          PY

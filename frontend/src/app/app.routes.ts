@@ -15,11 +15,9 @@ export const routes: Routes = [
     loadComponent: () => import('./features/auth/login/login').then((m) => m.LoginComponent),
   },
   {
-    // Public, like /login and /welcome - reachable from an emailed link with no prior session. guestGuard
-    // (not authGuard) here too: an already-signed-in browser must never silently accept someone else's
-    // invitation under its own current session - see docs/tenant-onboarding.md ("Already logged in").
+    // Public token route, including for authenticated browsers. The component requires an explicit
+    // logout before showing the acceptance form; guestGuard would discard the invitation URL.
     path: 'accept-invitation',
-    canActivate: [guestGuard],
     loadComponent: () => import('./features/auth/accept-invitation/accept-invitation').then((m) => m.AcceptInvitationComponent),
   },
   {

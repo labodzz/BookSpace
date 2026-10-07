@@ -9,6 +9,14 @@
       </div>
       <a class="btn btn-primary accept-invitation-submit" routerLink="/login">Go to login</a>
     </div>
+  } @else if (authService.isAuthenticated()) {
+    <div class="accept-invitation-card">
+      <div class="accept-invitation-card__header">
+        <h2>Sign out to accept your invitation</h2>
+        <p>You are currently signed in as {{ authService.currentUser()?.email }}. You must sign out before accepting an invitation for another account.</p>
+      </div>
+      <button type="button" class="btn btn-primary accept-invitation-submit" (click)="logoutAndContinue()">Sign out and continue</button>
+    </div>
   } @else if (accepted()) {
     <div class="accept-invitation-card">
       <div class="accept-invitation-card__header">

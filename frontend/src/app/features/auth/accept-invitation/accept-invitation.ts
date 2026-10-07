@@ -1,7 +1,7 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { Component, inject, signal } from '@angular/core';
 import { AbstractControl, FormBuilder, ReactiveFormsModule, ValidationErrors, Validators } from '@angular/forms';
-import { ActivatedRoute, RouterLink } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { ApiError, toApiError } from '../../../core/http/api-error';
 import { AuthService } from '../../../core/auth/auth.service';
 import { ThemeToggleComponent } from '../../../core/theme/theme-toggle/theme-toggle';
@@ -14,14 +14,8 @@ function passwordsMatchValidator(control: AbstractControl): ValidationErrors | n
   return password && confirmPassword && password !== confirmPassword ? { passwordMismatch: true } : null;
 }
 
-// Public (guestGuard-gated, same as /login - see app.routes.ts): reachable without any prior session, and
-// an already-signed-in browser is redirected away BEFORE this page ever reads the token, so accepting an
-// invitation can never silently swap an existing session's identity or tenant context (see
-// docs/tenant-onboarding.md, "Already logged in"). Reuses AuthenticationService.AcceptInvitationAsync's
-// existing, single generic failure message for every invalid/expired/revoked/already-used token - this
-// page never tries to distinguish them itself, nor does it introduce any new auth pattern: on success it
-// shows a confirmation and links to the existing /login page, exactly as docs/user-administration.md's
-// "no auto-login" behavior already establishes for every other invitation acceptance.
+// Public token route. A current session must be explicitly ended before accepting an invitation.
+// Invalid/expired/used tokens retain the backend's generic error; acceptance never signs the user in.
 @Component({
   selector: 'app-accept-invitation',
   imports: [ReactiveFormsModule, RouterLink, ThemeToggleComponent],
@@ -30,7 +24,8 @@ function passwordsMatchValidator(control: AbstractControl): ValidationErrors | n
 })
 export class AcceptInvitationComponent {
   private readonly formBuilder = inject(FormBuilder);
-  private readonly authService = inject(AuthService);
+  protected readonly authService = inject(AuthService);
+  private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
 
   protected readonly token = this.route.snapshot.queryParamMap.get('token');
@@ -48,8 +43,14 @@ export class AcceptInvitationComponent {
   protected readonly accepted = signal(false);
   protected readonly showPassword = signal(false);
 
+  logoutAndContinue(): void {
+    // logout clears local state synchronously and does not navigate. Keep this URL and its token
+    // intact, even if backend revocation fails; no token storage or second navigation is needed.
+    this.authService.logout();
+  }
+
   submit(): void {
-    if (!this.token || this.form.invalid || this.isSubmitting()) {
+    if (this.authService.isAuthenticated() || !this.token || this.form.invalid || this.isSubmitting()) {
       this.form.markAllAsTouched();
       return;
     }
@@ -62,6 +63,7 @@ export class AcceptInvitationComponent {
       next: () => {
         this.isSubmitting.set(false);
         this.accepted.set(true);
+        this.router.navigate(['/login'], { queryParams: { invitationAccepted: true } });
       },
       error: (error: unknown) => {
         this.isSubmitting.set(false);

@@ -267,29 +267,32 @@ A **new, deliberately separate** setting from the existing `CalendarFeed:PublicB
 `AcceptInvitationComponent` (`frontend/src/app/features/auth/accept-invitation/`), route `/accept-invitation`
 - public, reachable from an emailed link with no prior session:
 
-- `canActivate: [guestGuard]` (the same guard already protecting `/login`) - an already-authenticated
-  browser is redirected to `/` **before** this page ever reads the token, so accepting an invitation can
-  never silently swap an existing session's identity or mix tenant context.
+- A public token route outside the authenticated shell, without `guestGuard`. An authenticated browser
+  stays on the invitation URL, but the component hides the form and blocks submission until logout.
 - No token in the URL -> an "invalid link" message, no form rendered, no API call attempted.
 - Password + confirm-password fields, a form-level cross-field validator for the match, `minlength(8)` for
   immediate UX feedback (the real enforcement is still server-side, in the existing
   `AcceptInvitationCommandRequestValidator`).
 - Calls the existing `AuthService.acceptInvitation(token, password)` (new method - thin wrapper over `POST
   /api/auth/accept-invitation`, unlike `login()` it never touches `tokens`/localStorage, matching the
-  backend's 204-no-tokens response). On success: a confirmation message and a link to `/login` - **no new
-  auth pattern**, no auto-login, the exact same "accept, then log in separately" behavior
+  backend's 204-no-tokens response). On success: navigation to `/login?invitationAccepted=true` with a
+  confirmation message, no auto-login, the same "accept, then log in separately" behavior
   `docs/user-administration.md` already documents for every other invitation.
 - Every failure (unknown/expired/revoked/already-accepted token) surfaces the backend's own single, generic
   message ("This invitation link is no longer valid.") verbatim - the page never tries to distinguish the
   cases itself.
+- The auth interceptor excludes this token-based endpoint from session headers and refresh retries,
+  just like login, so an invitation's 401 remains an invitation error.
 
 ### Already logged in
 
-If the browser already holds a valid session when the invitation link is opened, `guestGuard` redirects to
-`/` before `AcceptInvitationComponent` ever constructs or reads the `token` query parameter - the component
-never runs, the backend is never called, and nothing about the existing session (its tokens, its tenant
-context) is touched. This is the same guard, with the same behavior, `/login` already relies on; no new
-mechanism was introduced specifically for this page.
+If the browser already holds a valid session, the page displays the current email and a "Sign out and
+continue" button. It does not log out automatically or show the password form. The button calls the
+existing `AuthService.logout()`, which clears both local and session storage immediately, cancels pending
+refreshes, broadcasts logout and attempts backend revocation. Backend failure does not restore the session.
+Logout does not navigate in this tab, so the same invitation token remains in the URL and the form becomes
+available. A logout broadcast from another tab also preserves an open invitation URL. The token is never
+persisted to storage or included in diagnostics. `/login` and `/welcome` retain their existing `guestGuard`.
 
 ## Tenant lifecycle management (this task)
 

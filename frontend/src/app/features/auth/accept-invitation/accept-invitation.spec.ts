@@ -1,6 +1,6 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { ActivatedRoute, provideRouter } from '@angular/router';
+import { ActivatedRoute, Router, provideRouter } from '@angular/router';
 import { Subject, of, throwError } from 'rxjs';
 import { AuthService } from '../../../core/auth/auth.service';
 import { AcceptInvitationComponent } from './accept-invitation';
@@ -16,10 +16,11 @@ describe('AcceptInvitationComponent', () => {
       providers: [
         provideRouter([]),
         { provide: ActivatedRoute, useValue: { snapshot: { queryParamMap: { get: () => token } } } },
-        { provide: AuthService, useValue: { acceptInvitation } },
+        { provide: AuthService, useValue: { acceptInvitation, isAuthenticated: () => false, currentUser: () => null } },
       ],
     });
     fixture = TestBed.createComponent(AcceptInvitationComponent);
+    vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
     fixture.detectChanges();
   }
 
@@ -63,6 +64,18 @@ describe('AcceptInvitationComponent', () => {
     expect(acceptInvitation).not.toHaveBeenCalled();
   });
 
+  it('blocks even a valid prepared form if a session becomes active before submission', () => {
+    configure('a-raw-token');
+    setPasswords('Correct-Horse-9!', 'Correct-Horse-9!');
+    vi.spyOn(TestBed.inject(AuthService), 'isAuthenticated').mockReturnValue(true);
+
+    fixture.componentInstance.submit();
+
+    expect(acceptInvitation).not.toHaveBeenCalled();
+    fixture.detectChanges();
+    expect(root().querySelector('form')).toBeNull();
+  });
+
   it('blocks submission client-side when the two passwords do not match', () => {
     configure('a-raw-token');
     setPasswords('Correct-Horse-9!', 'Different-9!');
@@ -103,6 +116,7 @@ describe('AcceptInvitationComponent', () => {
 
     expect(root().textContent).toContain('Your password is set');
     expect(root().querySelector('a[href="/login"]')).not.toBeNull();
+    expect(TestBed.inject(Router).navigate).toHaveBeenCalledWith(['/login'], { queryParams: { invitationAccepted: true } });
   });
 
   it('shows the backend\'s generic failure message and re-enables the button on an invalid/expired/revoked/used token', () => {
