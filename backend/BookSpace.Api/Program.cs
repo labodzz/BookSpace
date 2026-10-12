@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.IdentityModel.Tokens.Jwt;
 using System.Text;
 using System.Threading.RateLimiting;
 using BookSpace.Api.BackgroundJobs;
@@ -6,6 +7,7 @@ using BookSpace.Api.ErrorHandling;
 using BookSpace.Api.Logging;
 using BookSpace.Api.Security;
 using BookSpace.Application;
+using BookSpace.Application.AiBooking;
 using BookSpace.Application.BackgroundJobs;
 using BookSpace.Application.Calendar;
 using BookSpace.Application.Common;
@@ -37,6 +39,7 @@ const string ConsoleOutputTemplate =
 
 const string CorsPolicyName = "Frontend";
 const string LoginRateLimiterPolicyName = "login";
+const string AiBookingRateLimiterPolicyName = "ai-booking";
 
 // Two-stage setup (the pattern Serilog itself recommends): a minimal bootstrap logger captures
 // anything that goes wrong before configuration/DI are even up, then builder.Host.UseSerilog below
@@ -132,9 +135,30 @@ try
                 QueueLimit = 0,
             }));
 
+        // Per-caller (not per-IP, unlike login above): this endpoint is already behind [Authorize], so a
+        // real signed-in user id is always available to partition by - a shared office NAT/VPN egress IP
+        // must not throttle every colleague together the way it would for the anonymous login endpoint.
+        // 6/minute is generous for a request plus one or two clarification round-trips, while still
+        // bounding how fast one account can spend calls against a paid external API - see
+        // docs/ai-assisted-booking.md ("Rate limiting"). Same Testing-environment bypass reasoning as
+        // login's own policy (TestServer collapses every caller into the same partition key otherwise).
+        options.AddPolicy(AiBookingRateLimiterPolicyName, httpContext => RateLimitPartition.GetFixedWindowLimiter(
+            // The JWT's own "sub" claim, the same one CurrentUserContext.UserId reads - never
+            // Identity.Name, which this app's JwtBearer setup (MapInboundClaims = false, no NameClaimType
+            // override) never actually populates.
+            partitionKey: httpContext.User.FindFirst(JwtRegisteredClaimNames.Sub)?.Value
+                ?? httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = isTestingEnvironment ? int.MaxValue : 6,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+            }));
+
         // Matches the ProblemDetails+correlationId shape every other error response uses (see
-        // NotFoundExceptionHandler etc.) - a 429 from /auth/login shouldn't look different from any
-        // other error the API returns.
+        // NotFoundExceptionHandler etc.) - a 429 shouldn't look different from any other error the API
+        // returns. Shared across every named policy above, so the message stays policy-neutral rather than
+        // naming "login" specifically.
         options.OnRejected = async (context, cancellationToken) =>
         {
             context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
@@ -143,7 +167,7 @@ try
             {
                 Status = StatusCodes.Status429TooManyRequests,
                 Title = "Too many requests.",
-                Detail = "Too many login attempts. Please wait a moment and try again.",
+                Detail = "Too many requests. Please wait a moment and try again.",
             };
 
             var correlationIdContext = context.HttpContext.RequestServices.GetRequiredService<ICorrelationIdContext>();
@@ -204,6 +228,13 @@ try
     // ValidateOnStart convention as every other options class above.
     builder.Services.AddOptions<AppOptions>()
         .Bind(builder.Configuration.GetSection("App"))
+        .ValidateOnStart();
+
+    // AI-assisted booking (WP-9) - see docs/ai-assisted-booking.md. Same ValidateOnStart convention as
+    // every other options class above; AiBookingOptionsValidator only requires an API key/model/etc. when
+    // AiBooking:Enabled is true, so this never fails startup for an unconfigured deployment.
+    builder.Services.AddOptions<AiBookingOptions>()
+        .Bind(builder.Configuration.GetSection("AiBooking"))
         .ValidateOnStart();
 
     builder.Services.AddHttpContextAccessor();

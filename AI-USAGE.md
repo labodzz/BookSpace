@@ -19,6 +19,190 @@ session). Fill in as you go — don't backfill from memory at the end.
 
 <!-- Add entries below, most recent first. -->
 
+## 2026-10-09 — WP-9 follow-up: check day-wide availability before asking for a start time
+
+**Tool:** Claude Code
+**What I asked for:** If a matched resource is closed on the ENTIRE requested date (no `AvailabilityRule`
+covers that day of week at all), say so immediately as `NoSuitableResource` instead of first asking "what
+time would you like to start?" - no time could ever make a closed day bookable, so the question is wasted.
+Explicitly left as an "if it's possible" request, with permission to leave the behavior unchanged otherwise.
+**What the AI produced:** Reordered `ProposeBookingCommandHandler.Handle()`'s resolution pipeline: resource
+resolution (and a single fetch of its `AvailabilityRule`s/`BlackoutPeriod`s) now happens right after the
+date and quantity are known, BEFORE start/end time are parsed, rather than after. When the start time is
+missing, `AvailabilityCalculator.ComputeOpenPeriodsUtc` (the exact function `BookingEligibilityChecker`
+itself already uses) checks whether the resource has any open period at all on that date; if none, returns
+`NoSuitableResource` with a new "this resource isn't open that day" message in both languages, skipping the
+clarification question entirely. If the resource IS open at some point that day, behavior is unchanged -
+still asks for a start time. 3 new tests, plus 3 existing tests updated to configure availability mocks
+they previously didn't need (the reordering means resource resolution now always runs once a date is
+known, even when time is still missing) - `BookSpace.Application.Tests` 829 -> 832, all green; `BookSpace.
+Api.Tests` unaffected (342, unchanged). Also fixed an unrelated, separately-reported frontend bug in the
+same session: the floating assistant wasn't reliably auto-scrolling to the user's own newly-sent message in
+a real browser - added an explicit, synchronous + next-animation-frame scroll-to-bottom call on send/retry,
+rather than relying solely on the existing reactive effect (which can lag one tick behind real layout).
+**What I changed or rejected:** Deliberately scoped the day-wide check to `AvailabilityRule`s only, not
+`BlackoutPeriod`s - a full-day blackout is "temporarily unavailable," not "outside working hours," and a
+user might still reasonably ask about a specific time on a blacked-out day (e.g. to probe a non-blacked-out
+part of it), so that case still falls through to asking for a time, unchanged. **Caught and fixed a real bug
+from the user's own manual testing right after shipping this**: the first version gated the check on
+"StartTime is still null," which never fires once a multi-round conversation happens to answer the time
+question in an EARLIER round than the one that finally resolves the resource - the exact ordering the user
+hit, where it asked for resource and time and only then said the day didn't work. Fixed by checking day-wide
+availability unconditionally, immediately once date+resource are both known, regardless of whether a time
+was already given.
+**What I understand and could explain without notes:** Why resource resolution had to move earlier in the
+pipeline for this to work at all (the day-check needs to know WHICH resource's rules to check), why this
+is safe (the condition for returning `NoSuitableResource` vs. `NeedsClarification` for cross-zone ambiguity
+is unchanged in substance, only its position in the method moved, and it doesn't depend on start/end time
+being known), and exactly which 3 pre-existing tests broke from the reorder and why (they exercised a
+date-known/time-missing/duration-missing/ordering-invalid path without ever configuring resource-repository
+mocks, which the reorder now always touches once a date is valid).
+
+## 2026-10-09 — WP-9 follow-up: redesign AI-assisted booking as a floating chat assistant
+
+**Tool:** Claude Code
+**What I asked for:** Redesign the existing AI booking UI (a single-shot form that replaced its contents
+after each request) as a floating, persistent chat assistant reachable from every authenticated tenant
+page, with proper conversation continuity, structured booking-proposal cards inline in the chat, and the
+full set of chat-UX requirements (keyboard handling, IME composition, focus management, accessibility,
+responsive/mobile layout, scroll behavior) - reusing the existing backend contract unchanged.
+**What the AI produced:** `frontend/src/app/features/ai-assistant/` - `AiAssistantService` (`providedIn:
+'root'`, owns the whole conversation: a flat chronological `ChatMessage[]`, request-sequence-based
+stale-response guarding, an `effect()` clearing everything on logout/identity change, and
+`buildContextTurns()` reducing the chat transcript to a sliding-window `ConversationTurn[]` bounded at the
+backend's own `MaxPriorTurns`), `AiAssistantWidgetComponent` (the launcher button + chat panel together,
+rendered once by `ShellComponent` so it persists across navigation and is hidden for the global SysAdmin),
+and `AiProposalCardComponent` (the structured proposal card with its own
+pending/confirming/confirmed/pendingApproval/failed/discarded/superseded lifecycle). Retired the old
+`ai-booking-form/` page entirely; `/bookings/ask-ai` is now a one-line redirect (`AskAiComponent`) that
+opens the shared widget, so existing links keep working without a second implementation. 33 new frontend
+tests (`ai-assistant.service.spec.ts`, `ai-assistant-widget.spec.ts`, `ask-ai.spec.ts`, plus two new
+`shell.spec.ts` cases) plus the full pre-existing suite - 584 across 50 files, all passing - and a clean
+production build (one pre-existing dashboard.scss budget warning, one new warning on the widget's own SCSS
+for the same non-blocking 4-8kB per-component budget, not an error). No backend changes were needed - the
+existing `/api/ai-bookings/propose`/`POST /api/bookings` contracts already supported everything required.
+**What I changed or rejected:** Chose to make "Discard" dismiss only that one proposal (not the whole
+conversation, which the old form's equivalent action did) and added a separate, explicit "New conversation"
+action - a deliberate behavior change matching the task's own distinction between the two. Replaced the
+previous session's "stop and tell the user to start over" fix for the `MaxPriorTurns` limit with a sliding-
+context-window trim instead (see `docs/ai-assisted-booking.md`, "Clarification and conversation state") -
+a hard stop fit a single-shot form; a real chat should keep flowing, and trimming the oldest turns makes
+the backend's 400 structurally unreachable rather than merely front-run. Decided the panel is explicitly
+NOT a modal (no backdrop, no focus trap, no `aria-modal`) since it does not block page interaction - only
+`role="dialog"` + an accessible name, per the task's own "only if the panel actually behaves as a modal."
+**What I understand and could explain without notes:** Why conversation state lives in a root-injected
+service rather than the panel component (an in-flight confirm must survive the panel being closed - tying
+HTTP subscriptions to the panel's own `DestroyRef` would cancel it); why `effect()` works for the identity-
+change reset even though `AiAssistantService` is a plain injectable, not a component (it's still
+constructed within an injection context, and `providedIn: 'root'` makes that context live for the whole
+app session); and that browser/visual verification (real layout, the virtual keyboard, actual screen-reader
+behavior) was NOT performed - no browser automation tool was available, so only jsdom-level DOM/attribute/
+focus/keyboard-event assertions back the frontend tests, explicitly flagged in `docs/ai-assisted-booking.md`
+("What was verified vs. what was NOT") rather than left implicit.
+
+## 2026-10-08 — WP-9 follow-up: migrate AI-assisted booking from OpenAI to Gemini
+
+**Tool:** Claude Code
+**What I asked for:** Replace the OpenAI integration behind WP-9 (AI-assisted booking) with Google Gemini,
+because the OpenAI key for this project could not be billed and a separate Gemini key was being created
+instead - without requiring that key to be available yet, without making any paid API call, on the same
+feature branch, preserving every existing WP-9 behavior/contract (Bosnian/English, the structured intent
+schema, tenant isolation, authoritative backend date/timezone validation, explicit confirmation via the
+real `POST /api/bookings`).
+**What the AI produced:** Replaced `BookSpace.Infrastructure/AiBooking/OpenAiBookingIntentInterpreter.cs`
+with `GeminiBookingIntentInterpreter.cs` - native REST calls to Gemini's `generateContent` endpoint
+(`x-goog-api-key` header, never a URL-embedded key), structured JSON output adapted to Gemini's own
+OpenAPI-3.0-derived schema subset (`nullable` instead of OpenAI's `["string","null"]` type arrays, a
+trimmed `required` list, a `propertyOrdering` hint), explicit handling for a blocked prompt
+(`promptFeedback.blockReason`), every non-`STOP` `finishReason` (`MAX_TOKENS`/`SAFETY`/`RECITATION`/
+`OTHER`), missing candidates/empty text, and HTTP error status codes surfaced only via Gemini's safe
+`status` classifier (never the `message` text). Updated `AiBookingOptions`' `Model`/`BaseUrl` defaults
+(`gemini-3.5-flash-lite` / `https://generativelanguage.googleapis.com/v1beta/`), the DI registration, both
+`compose.local.yaml`/`compose.production-local.yaml` env-var defaults, both `.env*.example` files (without
+touching the real, untracked `.env`/`.env.production-local`), and rewrote the Gemini-specific parts of
+`docs/ai-assisted-booking.md`. Added a new `BookSpace.Infrastructure.Tests/AiBooking/` test project folder
+with a hand-rolled fake `HttpMessageHandler` and 23 new tests covering the auth header, the request path,
+the structured-output schema shape, role mapping (`assistant` -> Gemini's `model` role), successful
+mapping, every failure mode listed above, and cancellation - none make a real network call.
+**What I changed or rejected:** Chose `gemini-3.5-flash-lite` as the default model only after
+cross-checking Google's own current (2026-10-08) models/pricing documentation across multiple independent
+fetches, specifically because one earlier fetch of Gemini's structured-output docs page produced an
+internally-inconsistent, almost certainly hallucinated result (a nonexistent "Interactions API" with
+`response_format`/`input` fields) - that result was discarded rather than acted on, the same discipline
+applied to the OpenAI Responses API fetch during the original WP-9 session. Documented the model choice,
+and Free Tier rate limits, as account/tier-dependent and subject to change rather than guaranteed fixed
+values, since Google's own rate-limits page does not publish fixed free-tier numbers. Re-ran the full
+backend and frontend regression suites after the migration (not just the new tests) and re-confirmed,
+rather than assumed from memory, that the one pre-existing `ProductionBootstrapperTests` failure from the
+original WP-9 session still reproduces identically with zero diff on its own file - plus found one
+additional, genuinely flaky (passes 3/3 in isolation, fails only under full-suite load)
+`TenantOnboardingEndToEndTests` concurrency test, unrelated to any file this work touched.
+**What I understand and could explain without notes:** Why Gemini's `nullable` keyword replaces OpenAI's
+`["string","null"]` type-array convention, and why only `language`/`status` are listed in `"required"` here
+instead of every field; why the interpreter checks `finishReason` before ever attempting to parse the
+response text (a truncated/blocked candidate must never be parsed as if it were complete); why the error
+classifier reads only Gemini's `status` enum field, never `message`; and exactly which files could NOT be
+Gemini-specific at all (`IBookingIntentInterpreter`, `ProposeBookingCommandRequest`, the frontend, and every
+existing AiBooking test file bar the two doc-comment references to the old class name) because the
+provider-agnostic abstraction was the entire point of WP-9's original design.
+
+## 2026-10-08 — WP-9: AI-Assisted Booking (natural-language, Bosnian/English)
+
+**Tool:** Claude Code
+**What I asked for:** Natural-language booking - type a request in Bosnian or English (e.g. "Treba mi
+laboratorija za 3 osobe sljedeći utorak od 14 do 16." / "Book a lab for 3 people next Tuesday from 2 to
+4 PM"), have the backend call an LLM to interpret it, resolve a real candidate against the existing
+booking engine, and require explicit review/confirmation before anything is actually booked - with the
+existing booking engine remaining the sole authority over validation, availability, approval, and
+concurrency; AI proposes, it never creates or approves a booking itself.
+**What the AI produced:** `BookSpace.Application/AiBooking/` (`ProposeBookingCommandRequest`/Handler,
+`IBookingIntentInterpreter` abstraction, `AiBookingOptions`/Validator, `TextNormalization`/
+`BookingLanguageHeuristic`), `BookSpace.Infrastructure/AiBooking/OpenAiBookingIntentInterpreter.cs`
+(OpenAI Chat Completions + Structured Outputs, `HttpClient`-based), `AiBookingsController`
+(`POST /api/ai-bookings/propose`, its own rate-limiter policy), and `AiBookingFormComponent`
+(`/bookings/ask-ai`) on the frontend. The proposal handler reuses the existing `BookingEligibilityChecker`
+read-only and has no dependency capable of writing a `Booking`/`ApprovalRequest` at all - confirmation is
+simply the frontend calling the pre-existing `POST /api/bookings` with the candidate's own fields, never a
+separate "confirm" endpoint. Relative dates ("next Tuesday"/"sutra") are resolved by the model against a
+backend-computed reference point (`Tenant.DefaultTimeZoneId` + `TimeProvider`), but the actual UTC
+conversion, past-date check, ordering, and DST handling are all done by the backend via the SAME
+`AvailabilityCalculator.ConvertLocalToUtc` every other booking path already uses - the model never performs
+timezone conversion itself. "For 3 people" deliberately does not become `Quantity=3` - it narrows which
+resource qualifies by `Capacity`, documented as an explicit judgment call since this codebase's schema
+doesn't settle that distinction on its own. 57 Application unit tests (mocked repos + a fake interpreter,
+including a deterministic `Europe/Sarajevo` DST case and Bosnian-without-diacritics matching), 10 real-HTTP
+integration tests (two seeded tenants, proving cross-tenant resources can never resolve, a slot filling up
+between proposal and confirmation gets rejected by the real capacity check, and a `RequiresApproval`
+resource's confirmed booking still lands `Pending`), and Angular component tests (explicit confirmation,
+stale-response handling, double-submit prevention) - all against a fake provider; nothing in CI calls a
+real paid LLM API. Disabled by default (`AiBooking:Enabled=false`), validated the same
+`AddOptions().Bind().ValidateOnStart()`/gated-validator way as `EmailOptions`.
+**What I changed or rejected:** Chose OpenAI's Chat Completions API (not the newer Responses API) after
+checking OpenAI's current documentation specifically for this decision - Chat Completions' Structured
+Outputs contract is the long-stable one; fetching the newer Responses API's exact docs page produced
+inconsistent/apparently-hallucinated details from the fetch tool's own summarizer, which was treated as
+unreliable rather than acted on. No real OpenAI API key was available in this environment -
+`OpenAiBookingIntentInterpreter` was built from documentation, not exercised against the real endpoint;
+explicitly documented as unverified (`docs/ai-assisted-booking.md`, "What was NOT verified") rather than
+claimed as proven by the mocked-provider tests. Found and fixed a real bug of my own mid-session: the
+frontend's Confirm button sat inside an `@case ('reviewing')` block with no `'confirming'` case, so the
+whole candidate review (including the soon-to-be-disabled button) vanished from the DOM the instant it was
+clicked, instead of staying visible-but-disabled - caught by a test asserting the button's `disabled`
+state, not by inspection. Also hit, investigated, and explicitly did NOT paper over: a pre-existing,
+zero-diff-confirmed failure in `ProductionBootstrapperTests.SeedAsync_OnAnEmptyDatabase_...`
+(`SingleAsync` throwing "more than one element" against a LocalDB database a preceding `ToListAsync` in
+the very same method had just seen hold exactly one row) - reproducible in isolation, confirmed unrelated
+to this task's changes via `git diff` on the exercised files, root cause not conclusively identified within
+this session's scope and reported as such rather than dismissed as "flaky" without that proof.
+**What I understand and could explain without notes:** Why the proposal step is structurally - not just
+behaviorally - incapable of creating a booking (its constructor has no repository/lock dependency that
+could ever write one, independent of what its own logic happens to check), and why that is a stronger
+guarantee than "the code currently chooses not to"; why OpenAI's strict JSON Schema mode requires every
+property to appear in `"required"` even when most are nullable, with optionality expressed purely through
+the type being `["string", "null"]`; and why `TextNormalization`'s Unicode NFD-based diacritic fold needs
+an explicit `đ/Đ -> d/D` map on top of the general decomposition, since `đ` has no accent-letter
+composition to decompose in the first place.
+
 ## 2026-09-04 — Git history reorganization and architecture documentation
 
 **Tool:** Claude Code

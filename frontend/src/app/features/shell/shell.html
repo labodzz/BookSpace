@@ -62,4 +62,8 @@
   <main class="shell-content">
     <router-outlet />
   </main>
+
+  @if (!isSysAdmin) {
+    <app-ai-assistant-widget />
+  }
 </div>

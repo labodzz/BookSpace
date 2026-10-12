@@ -94,6 +94,25 @@ describe('ShellComponent', () => {
     expect(linkTexts).not.toContain('Calendar');
   });
 
+  // Follows the actual booking permission model (TenantMembershipGuard rejects the global SysAdmin server-
+  // side) rather than assuming every authenticated role can book - see ai-assistant-widget's own doc
+  // comment and shell.ts's isSysAdmin.
+  it('shows the floating AI assistant launcher for a plain tenant member', () => {
+    configure({ hasAnyRole: (...roles) => !roles.includes('SysAdmin') });
+    flushPendingApprovals();
+    fixture.detectChanges();
+
+    expect(root().querySelector('app-ai-assistant-widget')).not.toBeNull();
+    expect(root().querySelector('.ai-assistant-launcher')).not.toBeNull();
+  });
+
+  it('never shows the floating AI assistant launcher for the global SysAdmin', () => {
+    configure({ hasAnyRole: (...roles) => roles.includes('SysAdmin') });
+    fixture.detectChanges();
+
+    expect(root().querySelector('app-ai-assistant-widget')).toBeNull();
+  });
+
   it('does not show the "Resource types" nav link for a plain Member', () => {
     // hasAnyRole() => false also means isApprover is false, so shell.ts never issues the
     // pending-approvals request at all here - nothing to flush, unlike the TenantAdmin case above.

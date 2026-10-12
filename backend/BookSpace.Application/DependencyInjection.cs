@@ -1,4 +1,5 @@
 using System.Reflection;
+using BookSpace.Application.AiBooking;
 using BookSpace.Application.Auth;
 using BookSpace.Application.BackgroundJobs;
 using BookSpace.Application.Calendar;
@@ -42,6 +43,9 @@ public static class DependencyInjection
 
         // App-wide public base URL (tenant onboarding's invitation link) - see docs/tenant-onboarding.md.
         services.AddSingleton<IValidateOptions<AppOptions>, AppOptionsValidator>();
+
+        // AI-assisted booking (WP-9) - see docs/ai-assisted-booking.md.
+        services.AddSingleton<IValidateOptions<AiBookingOptions>, AiBookingOptionsValidator>();
 
         // Singleton: one stable OwnerId, and one lease coordinator holding only IServiceScopeFactory, for
         // this instance's entire lifetime - see docs/background-jobs.md ("Job lease lock"). Neither ever

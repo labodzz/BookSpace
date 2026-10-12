@@ -1,0 +1,123 @@
+<button
+  #launcher
+  type="button"
+  class="ai-assistant-launcher"
+  [class.ai-assistant-launcher--open]="service.isOpen()"
+  (click)="toggle()"
+  aria-haspopup="dialog"
+  [attr.aria-expanded]="service.isOpen()"
+  aria-controls="ai-assistant-panel"
+  aria-label="AI booking assistant"
+>
+  @if (!service.isOpen()) {
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-4.5 4v-4H6.5A2.5 2.5 0 0 1 4 13.5z"
+        fill="currentColor"
+      />
+    </svg>
+  } @else {
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+    </svg>
+  }
+</button>
+
+@if (service.isOpen()) {
+  <div id="ai-assistant-panel" class="ai-assistant-panel" role="dialog" aria-label="AI booking assistant" (keydown.escape)="close()">
+    <header class="ai-assistant-panel__header">
+      <div class="ai-assistant-panel__identity">
+        <svg class="ai-assistant-panel__icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path
+            d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-4.5 4v-4H6.5A2.5 2.5 0 0 1 4 13.5z"
+            fill="currentColor"
+          />
+        </svg>
+        <span class="ai-assistant-panel__title">Booking Assistant</span>
+      </div>
+      <button type="button" class="ai-assistant-panel__close" (click)="close()" aria-label="Close assistant">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+        </svg>
+      </button>
+    </header>
+
+    <div class="ai-assistant-panel__body" #messageList (scroll)="onScroll()">
+      @if (service.messages().length === 0) {
+        <div class="ai-assistant-panel__welcome">
+          <p>Hi! I can help you book a resource - just tell me what you need, in Bosnian or English.</p>
+          <div class="ai-assistant-panel__suggestions">
+            @for (suggestion of suggestions; track suggestion) {
+              <button type="button" class="ai-assistant-panel__chip" (click)="useSuggestion(suggestion)">{{ suggestion }}</button>
+            }
+          </div>
+        </div>
+      }
+
+      @for (message of service.messages(); track message.id) {
+        @switch (message.kind) {
+          @case ('user') {
+            <div class="ai-assistant-panel__bubble ai-assistant-panel__bubble--user">{{ message.text }}</div>
+          }
+          @case ('assistant-text') {
+            <div
+              class="ai-assistant-panel__bubble ai-assistant-panel__bubble--assistant"
+              [class.ai-assistant-panel__bubble--error]="message.tone === 'error'"
+            >
+              <p>{{ message.text }}</p>
+              @if (message.retryable) {
+                <button type="button" class="btn btn-secondary ai-assistant-panel__retry" (click)="retry()">Retry</button>
+              }
+            </div>
+          }
+          @case ('proposal') {
+            <app-ai-proposal-card
+              class="ai-assistant-panel__bubble ai-assistant-panel__bubble--assistant ai-assistant-panel__bubble--proposal"
+              [message]="message"
+              [isActive]="service.activeProposalId() === message.id"
+              (confirmRequested)="confirm(message.id)"
+              (discardRequested)="discard(message.id)"
+            />
+          }
+        }
+      }
+
+      @if (service.isSending()) {
+        <div class="ai-assistant-panel__bubble ai-assistant-panel__bubble--assistant ai-assistant-panel__typing" aria-hidden="true">
+          <span class="ai-assistant-panel__typing-dot"></span>
+          <span class="ai-assistant-panel__typing-dot"></span>
+          <span class="ai-assistant-panel__typing-dot"></span>
+        </div>
+      }
+    </div>
+
+    <div class="visually-hidden" aria-live="polite">{{ liveAnnouncement() }}</div>
+
+    @if (showNewMessagesIndicator()) {
+      <button type="button" class="ai-assistant-panel__new-messages" (click)="scrollToBottomNow()">New messages ↓</button>
+    }
+
+    <footer class="ai-assistant-panel__footer">
+      <button type="button" class="ai-assistant-panel__new-conversation" (click)="newConversation()">New conversation</button>
+      <form class="ai-assistant-panel__composer" (ngSubmit)="send()">
+        <textarea
+          #composer
+          rows="1"
+          [attr.maxlength]="maxTextLength"
+          [value]="draftText()"
+          (input)="onComposerInput($event)"
+          (keydown)="onComposerKeydown($event)"
+          (compositionstart)="isComposing = true"
+          (compositionend)="isComposing = false"
+          placeholder="Describe what you need…"
+          aria-label="Message to the booking assistant"
+        ></textarea>
+        <button type="submit" class="ai-assistant-panel__send" [disabled]="!draftText().trim() || service.isSending()" aria-label="Send message">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M3 11.5 20.5 4 13 21.5l-2.5-7.5z" fill="currentColor" />
+          </svg>
+        </button>
+      </form>
+    </footer>
+  </div>
+}

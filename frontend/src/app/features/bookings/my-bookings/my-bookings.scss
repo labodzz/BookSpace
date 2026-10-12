@@ -17,6 +17,12 @@
   margin-top: var(--space-1);
 }
 
+.my-bookings__header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
 .my-bookings__list {
   display: flex;
   flex-direction: column;

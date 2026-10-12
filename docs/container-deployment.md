@@ -248,7 +248,17 @@ Must be Azure **secrets** (never plain environment variables, never committed an
 ConnectionStrings__BookSpace        # Azure SQL Database connection string
 Auth__SigningKey                    # JWT signing key
 Bootstrap__SysAdminPassword         # only while Bootstrap__Enabled=true; remove after first deploy + first login
+AiBooking__ApiKey                   # only while AiBooking__Enabled=true - see docs/ai-assisted-booking.md
 ```
+
+**Note on the actual current deployment target**: as of WP-9, `.github/workflows/docker-image.yml`'s
+`deploy` job no longer targets Azure Container Apps - it deploys the built image to an AWS EC2 instance
+over SSM, running a `compose.yaml` that lives only on that host (`/home/ec2-user/bookspace/compose.yaml`,
+outside this repository). The environment-variable/secret *shape* above (which keys exist, which must be
+secret) still applies; the *mechanism* for getting them onto that host does not go through this document's
+Azure-specific steps - see `docs/ai-assisted-booking.md` ("Configuration" - "Where the API key is stored
+and how it reaches the backend") for exactly what the current deploy workflow does and does not already
+automate, and what enabling `AiBooking` for real on that deployment would additionally require.
 
 - `ASPNETCORE_ENVIRONMENT=Development` must never be used in Azure - it enables
   `MigrateAndSeedDevelopmentDatabaseAsync()`, which would seed the well-known `Passw0rd!` test accounts
