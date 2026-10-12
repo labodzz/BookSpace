@@ -94,6 +94,13 @@ export const routes: Routes = [
         loadComponent: () => import('./features/bookings/booking-form/booking-form').then((m) => m.BookingFormComponent),
       },
       {
+        // AI-assisted booking (WP-9) - now the floating assistant widget (ShellComponent), not a page of
+        // its own - see docs/ai-assisted-booking.md ("Floating assistant"). This route is kept only so
+        // existing links/bookmarks to it still work; visiting it opens the shared widget instead.
+        path: 'bookings/ask-ai',
+        loadComponent: () => import('./features/bookings/ask-ai/ask-ai').then((m) => m.AskAiComponent),
+      },
+      {
         path: 'bookings/new-recurring',
         loadComponent: () =>
           import('./features/bookings/recurring-booking-form/recurring-booking-form').then((m) => m.RecurringBookingFormComponent),

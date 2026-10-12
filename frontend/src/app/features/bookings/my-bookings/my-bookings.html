@@ -4,7 +4,10 @@
       <h1>My bookings</h1>
       <p class="my-bookings__subtitle">Everything you've booked, across every resource.</p>
     </div>
-    <a class="btn btn-primary" routerLink="/resources">Book a resource</a>
+    <div class="my-bookings__header-actions">
+      <a class="btn btn-secondary" routerLink="/bookings/ask-ai">Ask AI to book</a>
+      <a class="btn btn-primary" routerLink="/resources">Book a resource</a>
+    </div>
   </header>
 
   <app-calendar-subscription-panel />

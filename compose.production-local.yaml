@@ -52,8 +52,14 @@ services:
             start_period: 30s
 
     bookspace-app:
-       
-        image: docker.io/lbojic1/bookspace:dev
+        # Builds from THIS checkout's own source (the repo root Dockerfile) - not a pre-built Docker Hub
+        # image, which would be whatever `dev` looked like at the time that image was pushed and could
+        # silently be missing anything not yet merged there (e.g. a feature branch's own in-progress work).
+        # `up --build` (see the Start command above) re-runs this build every time, so local source changes
+        # are always reflected without a separate manual `podman build` step.
+        build:
+            context: .
+            dockerfile: Dockerfile
         environment:
             ASPNETCORE_ENVIRONMENT: Production
             # bookspace-db is the other container's *service name* on the shared network below, resolved by
@@ -126,6 +132,14 @@ services:
             Email__Smtp__Username: ${Email__Smtp__Username:-}
             Email__Smtp__Password: ${Email__Smtp__Password:-}
             BackgroundJobs__Enabled: "true"
+            # AI-assisted booking (WP-9) - see docs/ai-assisted-booking.md. Same safe-default shape as
+            # Email above (AiBooking__Enabled defaults to "false"), so an .env.production-local with none
+            # of these set still starts the app with the feature off and no API key required at all.
+            AiBooking__Enabled: ${AiBooking__Enabled:-false}
+            AiBooking__ApiKey: ${AiBooking__ApiKey:-}
+            AiBooking__Model: ${AiBooking__Model:-gemini-3.5-flash-lite}
+            BackgroundJobs__Enabled: "true"
+            BackgroundJobs__Reminder__Enabled: "true"
         ports:
             - "8081:8080"
         depends_on:

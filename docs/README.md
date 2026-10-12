@@ -34,6 +34,9 @@ assumptions and not merely from audit findings. Start here, then follow links in
   secrets needed to deploy.
 - **[background-jobs.md](background-jobs.md)** - the WP-8 hosted-service foundation (periodic loop,
   per-cycle DI scope, cancellation/shutdown, configuration) - not the real WP-8 jobs themselves yet.
+- **[ai-assisted-booking.md](ai-assisted-booking.md)** - the WP-9 natural-language booking flow (Bosnian/
+  English), why a proposal can never create a booking itself, the LLM provider/configuration/secrets, and
+  what was (and was not) verified against a real provider.
 
 See [AI-USAGE.md](../AI-USAGE.md) for the transparency log of how AI assistance was used while building
 this project, and the top-level [README.md](../README.md) for setup/running instructions.

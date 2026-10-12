@@ -1,3 +1,4 @@
+using BookSpace.Application.AiBooking;
 using BookSpace.Application.Auth;
 using BookSpace.Application.BackgroundJobs;
 using BookSpace.Application.Bookings;
@@ -6,6 +7,7 @@ using BookSpace.Application.Notifications;
 using BookSpace.Application.ResourceTypes;
 using BookSpace.Application.Resources;
 using BookSpace.Application.Security;
+using BookSpace.Infrastructure.AiBooking;
 using BookSpace.Infrastructure.Email;
 using BookSpace.Infrastructure.Persistence;
 using BookSpace.Infrastructure.Security;
@@ -88,6 +90,24 @@ public static class DependencyInjection
         services.AddScoped<IEmailRecipientResolver, EmailRecipientResolver>();
         services.AddSingleton<ISmtpTransportFactory, MailKitSmtpTransportFactory>();
         services.AddScoped<INotificationSender, SmtpNotificationSender>();
+
+        // AI-assisted booking (WP-9) - see docs/ai-assisted-booking.md. Registered unconditionally,
+        // exactly like INotificationSender above: AiBookingOptions.Enabled gates whether
+        // ProposeBookingCommandHandler ever actually calls this, not whether it exists in the container -
+        // registering a typed HttpClient costs nothing at startup and makes no network call until invoked,
+        // so AiBooking:Enabled=false (the default) never requires an API key or any other configuration
+        // here. Scoped to match the per-request lifetime every other scoped dependency in this chain uses;
+        // AddHttpClient's own handler pooling means this is never the "a new HttpClient per request" anti-
+        // pattern despite the Scoped registration.
+        services.AddHttpClient<IBookingIntentInterpreter, GeminiBookingIntentInterpreter>((serviceProvider, client) =>
+        {
+            var aiBookingOptions = serviceProvider.GetRequiredService<IOptions<AiBookingOptions>>().Value;
+            client.BaseAddress = new Uri(aiBookingOptions.BaseUrl);
+            // A few seconds of slack over ProposeBookingCommandHandler's own CancellationTokenSource
+            // timeout, which is the real, authoritative bound (see AiBookingOptions.RequestTimeoutSeconds)
+            // - this is only a backstop against HttpClient itself hanging past that for some other reason.
+            client.Timeout = TimeSpan.FromSeconds(aiBookingOptions.RequestTimeoutSeconds + 5);
+        });
 
         return services;
     }

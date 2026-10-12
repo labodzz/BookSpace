@@ -78,6 +78,12 @@ services:
             Email__Smtp__Username: ${Email__Smtp__Username:-}
             Email__Smtp__Password: ${Email__Smtp__Password:-}
             BackgroundJobs__Enabled: "true"
+            # AI-assisted booking (WP-9) - see docs/ai-assisted-booking.md. Same safe-default shape as
+            # Email above (AiBooking__Enabled defaults to "false"), so an .env with none of these set still
+            # starts the container with the feature off and no API key required at all.
+            AiBooking__Enabled: ${AiBooking__Enabled:-false}
+            AiBooking__ApiKey: ${AiBooking__ApiKey:-}
+            AiBooking__Model: ${AiBooking__Model:-gemini-3.5-flash-lite}
         ports:
             - "8080:8080"
         depends_on:

@@ -1,0 +1,39 @@
+<div class="proposal-card" role="group" [attr.aria-label]="'Proposed booking for ' + message().candidate.resourceName">
+  @if (message().status === 'pending' || message().status === 'confirming') {
+    <p class="proposal-card__title">This is a proposal - nothing is booked yet. Review it, then confirm.</p>
+  } @else if (message().status === 'confirmed') {
+    <p class="proposal-card__title proposal-card__title--success">Booking confirmed.</p>
+  } @else if (message().status === 'pendingApproval') {
+    <p class="proposal-card__title proposal-card__title--pending">Submitted - awaiting approval.</p>
+  } @else if (message().status === 'failed') {
+    <p class="proposal-card__title proposal-card__title--error">{{ message().failureMessage }}</p>
+  } @else if (message().status === 'discarded') {
+    <p class="proposal-card__title proposal-card__title--muted">Discarded.</p>
+  } @else if (message().status === 'superseded') {
+    <p class="proposal-card__title proposal-card__title--muted">No longer active - a newer request replaced this one.</p>
+  }
+
+  <dl class="proposal-card__fields">
+    <div><dt>Resource</dt><dd>{{ message().candidate.resourceName }}</dd></div>
+    <div><dt>Start</dt><dd>{{ message().candidate.startUtc | date: 'medium' }} ({{ message().candidate.timeZoneId }})</dd></div>
+    <div><dt>End</dt><dd>{{ message().candidate.endUtc | date: 'medium' }} ({{ message().candidate.timeZoneId }})</dd></div>
+    <div><dt>Quantity</dt><dd>{{ message().candidate.quantity }} of {{ message().candidate.resourceCapacity }} capacity</dd></div>
+    <div><dt>Approval</dt><dd>{{ message().candidate.requiresApproval ? 'Requires approval before it is confirmed' : 'Confirmed instantly' }}</dd></div>
+  </dl>
+  <p class="field-hint">{{ message().candidate.summary }}</p>
+
+  @if (isActive() && (message().status === 'pending' || message().status === 'confirming')) {
+    <div class="proposal-card__actions">
+      <button type="button" class="btn btn-secondary" [disabled]="message().status === 'confirming'" (click)="discardRequested.emit()">
+        Discard
+      </button>
+      <button type="button" class="btn btn-primary" [disabled]="message().status === 'confirming'" (click)="confirmRequested.emit()">
+        {{ message().status === 'confirming' ? 'Booking…' : 'Confirm booking' }}
+      </button>
+    </div>
+  } @else if (message().status === 'confirmed' || message().status === 'pendingApproval') {
+    <div class="proposal-card__actions">
+      <a class="btn btn-secondary" routerLink="/bookings">View in My Bookings</a>
+    </div>
+  }
+</div>
